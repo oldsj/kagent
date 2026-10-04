@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	kagentv1alpha3 "github.com/kagent-dev/kagent/go/api/v1alpha3"
+	"github.com/kagent-dev/kagent/go/core/internal/controller/chatgptrefresh"
 	v2translator "github.com/kagent-dev/kagent/go/core/internal/translator"
 	"istio.io/istio/pkg/kube/krt"
 	corev1 "k8s.io/api/core/v1"
@@ -44,6 +45,14 @@ func newModelConfigReconciliations(
 				}
 				secret := krt.FetchOne(ctx, secrets, krt.FilterObjectName(reference.NamespacedName))
 				if secret != nil {
+					if modelConfig.Spec.Provider == kagentv1alpha3.ModelProviderOpenAI && modelConfig.Spec.OpenAI != nil &&
+						modelConfig.Spec.OpenAI.AuthMethod == kagentv1alpha3.OpenAIAuthMethod_ChatGPT && chatgptrefresh.RequiresReauthentication(*secret) {
+						resolvedRefsFailure = &ReconciliationFailure{Condition: kagentv1alpha3.ModelConfigConditionTypeResolvedRefs,
+							Reason: chatgptrefresh.ReauthenticationRequired, Message: "ChatGPT credential refresh stopped; re-authenticate with a dedicated login and replace the Secret credential pair"}
+						translation.ReferenceFailures = append(translation.ReferenceFailures, v2translator.ModelConfigFailure{
+							Reason: resolvedRefsFailure.Reason, Message: resolvedRefsFailure.Message,
+						})
+					}
 					values = append(values, hashValue{key: reference.NamespacedName.String(), data: (*secret).Data})
 					seenSecrets[reference.NamespacedName.String()] = struct{}{}
 				}
