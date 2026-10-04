@@ -121,17 +121,18 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 }
 
 type nativeConfig struct {
-	Model          string                         `toml:"model"`
-	ModelProvider  string                         `toml:"model_provider"`
-	ApprovalPolicy nativeApprovalPolicy           `toml:"approval_policy"`
-	SandboxMode    string                         `toml:"sandbox_mode"`
-	WebSearch      string                         `toml:"web_search"`
-	Features       nativeFeatures                 `toml:"features"`
-	Analytics      nativeAnalytics                `toml:"analytics"`
-	Otel           *nativeOtel                    `toml:"otel,omitempty"`
-	ModelProviders map[string]nativeModelProvider `toml:"model_providers,omitempty"`
-	Agents         map[string]nativeAgent         `toml:"agents,omitempty"`
-	MCPServers     map[string]nativeMCPServer     `toml:"mcp_servers,omitempty"`
+	Model            string                         `toml:"model"`
+	ModelProvider    string                         `toml:"model_provider"`
+	AutoCompactLimit int64                          `toml:"model_auto_compact_token_limit,omitempty"`
+	ApprovalPolicy   nativeApprovalPolicy           `toml:"approval_policy"`
+	SandboxMode      string                         `toml:"sandbox_mode"`
+	WebSearch        string                         `toml:"web_search"`
+	Features         nativeFeatures                 `toml:"features"`
+	Analytics        nativeAnalytics                `toml:"analytics"`
+	Otel             *nativeOtel                    `toml:"otel,omitempty"`
+	ModelProviders   map[string]nativeModelProvider `toml:"model_providers,omitempty"`
+	Agents           map[string]nativeAgent         `toml:"agents,omitempty"`
+	MCPServers       map[string]nativeMCPServer     `toml:"mcp_servers,omitempty"`
 }
 
 type nativeApprovalPolicy struct {
@@ -213,8 +214,9 @@ type nativeAgentConfig struct {
 func renderConfig(cfg config.Config, codexHome string, disableRetries bool) ([]byte, error) {
 	native := nativeConfig{
 		Model: cfg.Model, ModelProvider: nativeProviderName(cfg.Provider),
-		ApprovalPolicy: nativeApprovalPolicy{Granular: nativeGranularApprovalPolicy{MCPElicitations: true}},
-		SandboxMode:    "danger-full-access", WebSearch: "cached",
+		AutoCompactLimit: cfg.AutoCompactTokenLimit,
+		ApprovalPolicy:   nativeApprovalPolicy{Granular: nativeGranularApprovalPolicy{MCPElicitations: true}},
+		SandboxMode:      "danger-full-access", WebSearch: "cached",
 		// DNS denials look like connection failures. Keep retries bounded even
 		// after the temporary zero provider retry budgets are removed.
 		Features:   nativeFeatures{DefaultModeRequestUserInput: true, UnboundedConnectionRetries: false},

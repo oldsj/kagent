@@ -27,19 +27,22 @@ var nativeNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 // Config is compiler-owned input to the native adapter. Real model credentials
 // stay at the egress gateway; the Actor receives only placeholders.
 type Config struct {
-	MaxContentLength     *int64                 `json:"max_content_length,omitempty"`
-	ControlPlaneURL      string                 `json:"control_plane_url"`
-	LogLevel             string                 `json:"log_level,omitempty"`
-	Version              int                    `json:"version"`
-	CodexExecutable      string                 `json:"codex_executable"`
-	ExpectedCodexVersion string                 `json:"expected_codex_version"`
-	StrictVersion        bool                   `json:"strict_version"`
-	Model                string                 `json:"model"`
-	Provider             Provider               `json:"provider"`
-	DeveloperInstruction string                 `json:"developer_instruction,omitempty"`
-	Agents               map[string]Agent       `json:"agents,omitempty"`
-	SkillResources       *agentplugin.Resources `json:"skill_resources,omitempty"`
-	MCPServers           map[string]MCPServer   `json:"mcp_servers,omitempty"`
+	MaxContentLength     *int64 `json:"max_content_length,omitempty"`
+	ControlPlaneURL      string `json:"control_plane_url"`
+	LogLevel             string `json:"log_level,omitempty"`
+	Version              int    `json:"version"`
+	CodexExecutable      string `json:"codex_executable"`
+	ExpectedCodexVersion string `json:"expected_codex_version"`
+	StrictVersion        bool   `json:"strict_version"`
+	Model                string `json:"model"`
+	// AutoCompactTokenLimit becomes model_auto_compact_token_limit. Zero leaves
+	// Codex's default in place.
+	AutoCompactTokenLimit int64                  `json:"model_auto_compact_token_limit,omitempty"`
+	Provider              Provider               `json:"provider"`
+	DeveloperInstruction  string                 `json:"developer_instruction,omitempty"`
+	Agents                map[string]Agent       `json:"agents,omitempty"`
+	SkillResources        *agentplugin.Resources `json:"skill_resources,omitempty"`
+	MCPServers            map[string]MCPServer   `json:"mcp_servers,omitempty"`
 	// Git is the repository policy for Session workspaces. Absent means Sessions
 	// cannot request a workspace.
 	Git       *workspace.Git `json:"git,omitempty"`
@@ -131,6 +134,9 @@ func (c Config) Validate() error {
 	}
 	if c.StrictVersion && strings.TrimSpace(c.ExpectedCodexVersion) == "" {
 		return fmt.Errorf("expected_codex_version is required when strict_version is enabled")
+	}
+	if c.AutoCompactTokenLimit < 0 {
+		return fmt.Errorf("model_auto_compact_token_limit must not be negative")
 	}
 	if c.MaxFrameBytes <= 0 || c.MaxStderrBytes <= 0 || c.InterruptGraceMillis <= 0 {
 		return fmt.Errorf("frame, stderr, and interrupt grace limits must be positive")

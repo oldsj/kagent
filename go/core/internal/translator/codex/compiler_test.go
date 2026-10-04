@@ -380,3 +380,46 @@ func TestCompileMCPRejectsTokenPassthrough(t *testing.T) {
 		t.Fatalf("expected %q, got %v", want, err)
 	}
 }
+
+func TestCompileAutoCompactTokenLimit(t *testing.T) {
+	responses := v1alpha3.OpenAIAPIFormatResponses
+	model := v1alpha3.ModelConfigSpec{
+		Provider: v1alpha3.ModelProviderOpenAI, Model: "gpt-5.2-codex",
+		APIKeySecret: "model-auth", APIKeySecretKey: "api-key",
+		OpenAI: &v1alpha3.OpenAIConfig{APIFormat: &responses},
+	}
+	input, reader := testInput(t, model, map[string][]byte{"api-key": []byte("secret")})
+	compile := func() (*translator.CompileResult, codexconfig.Config) {
+		t.Helper()
+		revision, err := NewCompiler(krt.TestingDummyContext{}, reader, testRuntimeDefaults()).Compile(context.Background(), input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		config, err := codexconfig.Parse(revision.ConfigJSON)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return revision, config
+	}
+	unsetRevision, unset := compile()
+	if unset.AutoCompactTokenLimit != 0 || strings.Contains(string(unsetRevision.ConfigJSON), "auto_compact") {
+		t.Fatalf("unset limit leaked into config: %s", unsetRevision.ConfigJSON)
+	}
+	unsetID, err := unsetRevision.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	input.Harness.Spec.Codex.AutoCompactTokenLimit = new(int64(120000))
+	revision, config := compile()
+	if config.AutoCompactTokenLimit != 120000 {
+		t.Fatalf("auto compact limit = %d, want 120000", config.AutoCompactTokenLimit)
+	}
+	id, err := revision.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id == unsetID {
+		t.Fatal("changing the compaction limit must create a new runtime revision")
+	}
+}
