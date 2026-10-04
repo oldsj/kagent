@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/kagent-dev/kagent/go/adk/pkg/controllerclient"
+	apiv1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1"
 	runtimev1 "github.com/kagent-dev/kagent/go/api/gen/kagent/runtime/v1"
 	"github.com/kagent-dev/kagent/go/pkg/logging"
 )
@@ -272,4 +273,23 @@ func sdkError(err error) error {
 	default:
 		return err
 	}
+}
+
+// GetWorkspace returns the repository checkout this runtime's Session asked for,
+// or nil when it asked for none.
+func (s *Store) GetWorkspace(ctx context.Context) (*apiv1.Workspace, error) {
+	id, err := s.sessionID()
+	if err != nil {
+		return nil, err
+	}
+	var response *runtimev1.TaskStoreServiceGetWorkspaceResponse
+	err = s.retry(ctx, func(ctx context.Context) error {
+		var err error
+		response, err = s.client.TaskStoreService().GetWorkspace(ctx, &runtimev1.TaskStoreServiceGetWorkspaceRequest{SessionId: id})
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return response.GetWorkspace(), nil
 }

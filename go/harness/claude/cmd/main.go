@@ -16,8 +16,10 @@ import (
 
 	"github.com/kagent-dev/kagent/go/adk/pkg/app"
 	"github.com/kagent-dev/kagent/go/adk/pkg/bootstrap"
+	"github.com/kagent-dev/kagent/go/adk/pkg/controllerclient"
 	"github.com/kagent-dev/kagent/go/harness/claude/config"
 	"github.com/kagent-dev/kagent/go/harness/claude/executor"
+	"github.com/kagent-dev/kagent/go/harness/runtime/workspace"
 	"github.com/kagent-dev/kagent/go/pkg/logging"
 	"github.com/kagent-dev/kagent/go/pkg/telemetry"
 )
@@ -84,7 +86,19 @@ func run(ctx context.Context, check bool, getenv func(string) string, environmen
 		}
 	}()
 
-	execCfg := executor.Config{ConfigJSON: configJSON, DataDir: dataDir, Environment: environment}
+	var controller *controllerclient.Client
+	var source workspace.Source
+	if cfg.Git != nil {
+		if check {
+			source = workspace.Unavailable()
+		} else {
+			if controller, source, err = workspace.OpenController(cfg.ControlPlaneURL, card.Name); err != nil {
+				return err
+			}
+			defer controller.Close()
+		}
+	}
+	execCfg := executor.Config{ConfigJSON: configJSON, DataDir: dataDir, Environment: environment, Workspace: source}
 	if !check {
 		execCfg.ClientAddr = executor.ClientAddr
 		execCfg.Activity = loggedActivity{ctx: ctx}
@@ -98,7 +112,7 @@ func run(ctx context.Context, check bool, getenv func(string) string, environmen
 		return nil
 	}
 	application, err := app.New(app.AppConfig{
-		AgentCard: card, Port: privatePort, AppName: card.Name, ControlPlaneURL: cfg.ControlPlaneURL, MaxContentLength: cfg.MaxContentLength,
+		AgentCard: card, Port: privatePort, AppName: card.Name, ControllerClient: controller, ControlPlaneURL: cfg.ControlPlaneURL, MaxContentLength: cfg.MaxContentLength,
 		Logger: logging.FromContext(ctx), Telemetry: cfg.RuntimeTelemetry, Flush: providers.ForceFlush,
 		HandlerOpts: []a2asrv.RequestHandlerOption{a2asrv.WithExecutorContextInterceptor(startMetrics(providers.StartMetrics))},
 	}, exec)

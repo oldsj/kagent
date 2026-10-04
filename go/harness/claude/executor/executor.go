@@ -16,6 +16,7 @@ import (
 	"github.com/kagent-dev/kagent/go/harness/claude/internal/sdkrunner"
 	runtimea2a "github.com/kagent-dev/kagent/go/harness/runtime/a2a"
 	"github.com/kagent-dev/kagent/go/harness/runtime/continuation"
+	"github.com/kagent-dev/kagent/go/harness/runtime/workspace"
 )
 
 // Config is the input to New.
@@ -31,6 +32,9 @@ type Config struct {
 	ClientAddr string
 	// Activity receives the SDK runner's busy/idle changes. Nil reports none.
 	Activity sdkrunner.ActivityReporter
+	// Workspace reads the Session's workspace request. It is required when the
+	// configuration enables Git, and ignored otherwise.
+	Workspace workspace.Source
 }
 
 // New validates the configuration and Claude installation, then returns the
@@ -85,6 +89,21 @@ func New(ctx context.Context, cfg Config) (a2asrv.AgentExecutor, io.Closer, erro
 		}
 		// Stop the client port and the bridge before the driver they use.
 		turns, closer = sdk.driver(runner), closers{served, runner}
+	}
+	// The checkout wraps whichever driver serves turns, so both establish the
+	// workspace before the first one.
+	if parsed.Git != nil {
+		if cfg.Workspace == nil {
+			_ = closer.Close()
+			return nil, nil, fmt.Errorf("configuration enables git but no workspace source was provided")
+		}
+		turns, err = workspace.New(turns, workspace.Config{
+			Dir: cfg.DataDir + "/workspace", Policy: *parsed.Git, Source: cfg.Workspace, Environment: cfg.Environment,
+		})
+		if err != nil {
+			_ = closer.Close()
+			return nil, nil, err
+		}
 	}
 	executor, err := runtimea2a.New(turns, store, parsed.RuntimeTelemetry)
 	if err != nil {
