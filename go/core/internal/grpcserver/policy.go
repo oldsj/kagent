@@ -16,6 +16,7 @@ func DefaultMethodPolicies() MethodPolicies {
 		apiv1alpha1.TaskStoreService_GetTask_FullMethodName:                   auth.AccessRuntime,
 		apiv1alpha1.TaskStoreService_UpdateTask_FullMethodName:                auth.AccessRuntime,
 		apiv1alpha1.TaskStoreService_SettleTask_FullMethodName:                auth.AccessRuntime,
+		apiv1alpha1.TaskStoreService_GetWorkspace_FullMethodName:              auth.AccessRuntime,
 		apiv1alpha1.TaskStoreService_ListTasks_FullMethodName:                 auth.AccessRuntime,
 		apiv1alpha1.SystemService_GetVersion_FullMethodName:                   auth.AccessPublic,
 		apiv1alpha1.SystemService_GetCurrentUser_FullMethodName:               auth.AccessRead,

@@ -279,6 +279,52 @@ func TestConfigurationCRDValidation(t *testing.T) {
 			wantReject: "spec.codex.autoCompactTokenLimit",
 		},
 		{
+			name: "Claude accepts git origins with one credential",
+			object: validHarness(namespace, "claude-git", HarnessSpec{
+				Claude: &ClaudeHarness{},
+				Git:    &HarnessGit{Origins: []string{"github.com"}, CredentialSecretRef: &SecretKeyReference{Name: "git-auth", Key: "authorization"}},
+			}),
+		},
+		{
+			name: "Codex accepts anonymous git origins",
+			object: validHarness(namespace, "codex-git-anonymous", HarnessSpec{
+				Codex: &CodexHarness{},
+				Git:   &HarnessGit{Origins: []string{"github.com", "gitlab.com"}},
+			}),
+		},
+		{
+			name: "git rejects a credential with several origins",
+			object: validHarness(namespace, "git-credential-two-origins", HarnessSpec{
+				Claude: &ClaudeHarness{},
+				Git:    &HarnessGit{Origins: []string{"github.com", "gitlab.com"}, CredentialSecretRef: &SecretKeyReference{Name: "git-auth", Key: "authorization"}},
+			}),
+			wantReject: "credentialSecretRef requires exactly one origin",
+		},
+		{
+			name: "git rejects an empty origin list",
+			object: validHarness(namespace, "git-no-origins", HarnessSpec{
+				Claude: &ClaudeHarness{},
+				Git:    &HarnessGit{Origins: []string{}},
+			}),
+			wantReject: "spec.git.origins",
+		},
+		{
+			name: "git rejects an origin with a scheme",
+			object: validHarness(namespace, "git-origin-url", HarnessSpec{
+				Claude: &ClaudeHarness{},
+				Git:    &HarnessGit{Origins: []string{"https://github.com"}},
+			}),
+			wantReject: "spec.git.origins",
+		},
+		{
+			name: "git rejects the kagent harness",
+			object: validHarness(namespace, "kagent-git", HarnessSpec{
+				Kagent: &KagentHarness{},
+				Git:    &HarnessGit{Origins: []string{"github.com"}},
+			}),
+			wantReject: "git is supported only by the codex and claude harnesses",
+		},
+		{
 			name:   "SandboxTemplate allows empty literal environment values",
 			object: sandboxTemplateForValidation(namespace, "sandbox-empty-literal", func(spec *SandboxTemplateSpec) { spec.Env = []RuntimeEnvVar{{Name: "EMPTY", Value: ""}} }),
 		},

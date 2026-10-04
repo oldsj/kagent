@@ -997,3 +997,52 @@ func TestShareCreationRacesSessionDeletion(t *testing.T) {
 		require.NoError(t, err)
 	}
 }
+
+func TestSessionWorkspaceIsCheckedAgainstTheRevisionGitOrigins(t *testing.T) {
+	client := NewClient(setupTestDB(t))
+	ctx := t.Context()
+	record := func(revisionID, template string, origins []string) {
+		require.NoError(t, client.UpsertAgentDefinition(ctx, AgentDefinition{
+			Namespace: "team-a", AgentName: template, AgentUID: template + "-uid", DesiredRevision: revisionID,
+		}))
+		require.NoError(t, client.RecordRuntimeRevision(ctx, RuntimeRevision{
+			Revision: revisionID, Namespace: "team-a", AgentName: template, AgentUID: template + "-uid",
+			SourceSnapshot: []byte("{}"), AgentCard: &a2apb.AgentCard{}, EgressDestinations: []string{},
+			ActorTemplateAtespace: "team-a", ActorTemplateName: revisionID + "-actor-template", ActorTemplateUID: revisionID + "-actor-uid",
+			GitOrigins: origins,
+		}, true))
+	}
+	record("with-git", "git-agent", []string{"github.com"})
+	record("without-git", "plain-agent", nil)
+	workspace := func(repo string) *apiv1alpha1.Workspace {
+		return &apiv1alpha1.Workspace{Repo: repo, Ref: "main", Branch: "spike-b-test", Depth: 1}
+	}
+	request := func(template string, w *apiv1alpha1.Workspace) *apiv1alpha1.Session {
+		session := newSessionRequest(uuid.NewString(), template, "claude", "")
+		session.Workspace = w
+		return session
+	}
+
+	created, wasCreated, err := client.CreateSession(ctx, request("git-agent", workspace("https://github.com/oldsj/testrepo")), "allowed")
+	require.NoError(t, err)
+	require.True(t, wasCreated)
+	require.Equal(t, "https://github.com/oldsj/testrepo", created.GetWorkspace().GetRepo())
+	stored, err := client.GetSession(ctx, created.GetId(), "alice")
+	require.NoError(t, err)
+	require.Equal(t, "spike-b-test", stored.GetWorkspace().GetBranch(), "the workspace persists with the Session")
+
+	_, _, err = client.CreateSession(ctx, request("git-agent", workspace("https://gitlab.com/o/r")), "other-host")
+	require.ErrorIs(t, err, ErrWorkspaceNotAllowed)
+	_, _, err = client.CreateSession(ctx, request("plain-agent", workspace("https://github.com/o/r")), "no-origins")
+	require.ErrorIs(t, err, ErrWorkspaceNotAllowed, "an agent without Git origins accepts no workspace")
+	_, _, err = client.CreateSession(ctx, request("plain-agent", nil), "no-workspace")
+	require.NoError(t, err, "omitting the workspace behaves as before")
+	_, _, err = client.CreateSession(ctx, request("git-agent", nil), "git-no-workspace")
+	require.NoError(t, err)
+
+	_, wasCreated, err = client.CreateSession(ctx, request("git-agent", workspace("https://github.com/oldsj/testrepo")), "allowed")
+	require.NoError(t, err)
+	require.False(t, wasCreated, "the same request replays")
+	_, _, err = client.CreateSession(ctx, request("git-agent", workspace("https://github.com/oldsj/other")), "allowed")
+	require.ErrorIs(t, err, ErrIdempotencyConflict, "a different workspace is a different request")
+}

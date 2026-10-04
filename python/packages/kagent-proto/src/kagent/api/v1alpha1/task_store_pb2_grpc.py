@@ -42,6 +42,11 @@ class TaskStoreServiceStub:
                 request_serializer=kagent_dot_api_dot_v1alpha1_dot_task__store__pb2.TaskStoreServiceSettleTaskRequest.SerializeToString,
                 response_deserializer=kagent_dot_api_dot_v1alpha1_dot_task__store__pb2.TaskStoreServiceSettleTaskResponse.FromString,
                 _registered_method=True)
+        self.GetWorkspace = channel.unary_unary(
+                '/kagent.api.v1alpha1.TaskStoreService/GetWorkspace',
+                request_serializer=kagent_dot_api_dot_v1alpha1_dot_task__store__pb2.TaskStoreServiceGetWorkspaceRequest.SerializeToString,
+                response_deserializer=kagent_dot_api_dot_v1alpha1_dot_task__store__pb2.TaskStoreServiceGetWorkspaceResponse.FromString,
+                _registered_method=True)
 
 
 class TaskStoreServiceServicer:
@@ -85,6 +90,14 @@ class TaskStoreServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def GetWorkspace(self, request, context):
+        """GetWorkspace returns the Git checkout the Session asked for, or an empty
+        response when it asked for none. The runtime calls it before the first turn.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_TaskStoreServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -112,6 +125,11 @@ def add_TaskStoreServiceServicer_to_server(servicer, server):
                     servicer.SettleTask,
                     request_deserializer=kagent_dot_api_dot_v1alpha1_dot_task__store__pb2.TaskStoreServiceSettleTaskRequest.FromString,
                     response_serializer=kagent_dot_api_dot_v1alpha1_dot_task__store__pb2.TaskStoreServiceSettleTaskResponse.SerializeToString,
+            ),
+            'GetWorkspace': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetWorkspace,
+                    request_deserializer=kagent_dot_api_dot_v1alpha1_dot_task__store__pb2.TaskStoreServiceGetWorkspaceRequest.FromString,
+                    response_serializer=kagent_dot_api_dot_v1alpha1_dot_task__store__pb2.TaskStoreServiceGetWorkspaceResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -252,6 +270,33 @@ class TaskStoreService:
             '/kagent.api.v1alpha1.TaskStoreService/SettleTask',
             kagent_dot_api_dot_v1alpha1_dot_task__store__pb2.TaskStoreServiceSettleTaskRequest.SerializeToString,
             kagent_dot_api_dot_v1alpha1_dot_task__store__pb2.TaskStoreServiceSettleTaskResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetWorkspace(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kagent.api.v1alpha1.TaskStoreService/GetWorkspace',
+            kagent_dot_api_dot_v1alpha1_dot_task__store__pb2.TaskStoreServiceGetWorkspaceRequest.SerializeToString,
+            kagent_dot_api_dot_v1alpha1_dot_task__store__pb2.TaskStoreServiceGetWorkspaceResponse.FromString,
             options,
             channel_credentials,
             insecure,

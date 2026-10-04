@@ -103,6 +103,8 @@ func (c *Compiler) Compile(ctx context.Context, input *v2translator.HarnessInput
 		config.SkillResources = &skillResources
 	}
 	config.MCPServers = mcp.servers
+	gitPolicy, gitEgress := v2translator.CompileGit(harness.Spec.Git)
+	config.Git = gitPolicy
 	if err := config.Validate(); err != nil {
 		return nil, v2translator.NewValidationError("invalid compiled Claude configuration: %v", err)
 	}
@@ -125,6 +127,7 @@ func (c *Compiler) Compile(ctx context.Context, input *v2translator.HarnessInput
 
 	egress = append(egress, skillEgress...)
 	egress = append(egress, mcp.egress...)
+	egress = append(egress, gitEgress...)
 	egress = append(egress, telemetryConfig.Destinations()...)
 	egress = append(egress, "http://"+utils.GetControllerName()+"."+utils.GetResourceNamespace()+":8083")
 	slices.Sort(egress)
@@ -138,6 +141,7 @@ func (c *Compiler) Compile(ctx context.Context, input *v2translator.HarnessInput
 			SnapshotLocation:  harness.Spec.Substrate.SnapshotPolicy.Location,
 			SnapshotOnQuiesce: harness.Spec.Substrate.SnapshotPolicy.OnQuiesce,
 			Credentials:       credentials, Provenance: provenance, EgressDestinations: egress,
+			GitOrigins: v2translator.GitOrigins(gitPolicy),
 		},
 		Warnings: mcp.warnings,
 	}, nil

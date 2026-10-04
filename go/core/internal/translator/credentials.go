@@ -7,6 +7,7 @@ import (
 
 	"github.com/kagent-dev/kagent/go/adk/pkg/models"
 	"github.com/kagent-dev/kagent/go/api/v1alpha3"
+	"github.com/kagent-dev/kagent/go/api/workspace"
 	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"github.com/kagent-dev/kagent/go/core/pkg/env"
 	corev1 "k8s.io/api/core/v1"
@@ -57,6 +58,12 @@ func CompileCredentials(input *HarnessInput, extraModels []*ResolvedModelConfig,
 	}
 	if err := visit(input.Root); err != nil {
 		return nil, nil, err
+	}
+	if git := input.Harness.Spec.Git; git != nil && git.CredentialSecretRef != nil {
+		// The credential is the full Authorization header value, so it needs no prefix.
+		if err := bind("https://"+workspace.NormalizeHost(git.Origins[0]), "authorization", "", input.Harness.Namespace, git.CredentialSecretRef.Name, git.CredentialSecretRef.Key); err != nil {
+			return nil, nil, err
+		}
 	}
 	for _, resolved := range models {
 		model := resolved.Config

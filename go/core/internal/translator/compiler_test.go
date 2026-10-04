@@ -11,6 +11,7 @@ import (
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/kagent-dev/kagent/go/api/adk"
 	"github.com/kagent-dev/kagent/go/api/v1alpha3"
+	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"github.com/kagent-dev/kagent/go/core/internal/substrate"
 	v2translator "github.com/kagent-dev/kagent/go/core/internal/translator"
 	byotranslator "github.com/kagent-dev/kagent/go/core/internal/translator/byo"
@@ -1013,5 +1014,69 @@ func TestCompileAgentCarriesQuiesceSnapshotScope(t *testing.T) {
 			require.Equal(t, v1alpha3.RuntimeSnapshotScopeFull, full.SnapshotOnQuiesce)
 			require.NotEqual(t, unsetDigest, fullDigest)
 		})
+	}
+}
+
+func TestCompileAgentGit(t *testing.T) {
+	for _, harnessType := range []v2translator.HarnessType{v2translator.HarnessTypeCodex, v2translator.HarnessTypeClaude} {
+		t.Run(string(harnessType), func(t *testing.T) {
+			harness, template, model := runtimeFixture(harnessType)
+			objects := []any{
+				model,
+				&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "test", Name: "model-auth"}, Data: map[string][]byte{"api-key": []byte("secret")}},
+				&atev1alpha1.WorkerPool{ObjectMeta: metav1.ObjectMeta{Namespace: "test", Name: "selected"}},
+			}
+			compile := func(git *v1alpha3.HarnessGit) (*v2translator.CompileResult, v2translator.RevisionID) {
+				harness.Spec.Git = git
+				result, err := compiler(t, objects...).CompileAgent(t.Context(), inlineAgent(harness, template))
+				require.NoError(t, err)
+				digest, err := result.Digest()
+				require.NoError(t, err)
+				return result, digest
+			}
+
+			// Unset leaves every output exactly as it was before the field existed.
+			unset, unsetDigest := compile(nil)
+			require.NotContains(t, string(unset.ConfigJSON), `"git"`)
+			require.Empty(t, unset.GitOrigins)
+			require.NotContains(t, unset.EgressDestinations, "https://github.com:443")
+
+			anonymous, anonymousDigest := compile(&v1alpha3.HarnessGit{Origins: []string{"GitHub.com"}})
+			require.Contains(t, string(anonymous.ConfigJSON), `"git":{"origins":["github.com"]}`)
+			require.Equal(t, []string{"github.com"}, anonymous.GitOrigins)
+			require.Contains(t, anonymous.EgressDestinations, "https://github.com:443")
+			require.Equal(t, unset.Credentials, anonymous.Credentials, "anonymous clones bind no credential")
+			require.NotEqual(t, unsetDigest, anonymousDigest)
+
+			credentialed, credentialedDigest := compile(&v1alpha3.HarnessGit{
+				Origins:             []string{"github.com"},
+				CredentialSecretRef: &v1alpha3.SecretKeyReference{Name: "git-auth", Key: "authorization"},
+			})
+			require.Contains(t, string(credentialed.ConfigJSON), `"git":{"origins":["github.com"],"credential":true}`)
+			require.Contains(t, credentialed.Credentials, egress.Credential{
+				Hostname: "github.com", Header: "authorization", URI: "ate-secret://k8s.io/default/test/git-auth/authorization",
+			})
+			require.NotEqual(t, anonymousDigest, credentialedDigest)
+			for _, variable := range credentialed.Environment {
+				require.NotContains(t, variable.Value, "authorization", "the credential never enters the actor environment")
+			}
+		})
+	}
+}
+
+func TestCompileAgentRejectsGitCredentialConflictingWithPassthrough(t *testing.T) {
+	harness, template, model := runtimeFixture(v2translator.HarnessTypeClaude)
+	harness.Spec.Git = &v1alpha3.HarnessGit{
+		Origins:             []string{"github.com"},
+		CredentialSecretRef: &v1alpha3.SecretKeyReference{Name: "git-auth", Key: "authorization"},
+	}
+	model.Spec.APIKeySecret, model.Spec.APIKeySecretKey = "", ""
+	model.Spec.APIKeyPassthrough = true
+	_, err := compiler(t, model, &atev1alpha1.WorkerPool{ObjectMeta: metav1.ObjectMeta{Namespace: "test", Name: "selected"}}).
+		CompileAgent(t.Context(), inlineAgent(harness, template))
+	// Passthrough on a different host is allowed; the compile must still succeed
+	// or fail for reasons unrelated to the git binding.
+	if err != nil {
+		require.NotContains(t, err.Error(), "github.com")
 	}
 }

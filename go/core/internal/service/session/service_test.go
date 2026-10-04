@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -142,7 +143,7 @@ func TestServiceCreateUsesAuthenticatedOwnerAndGeneratedUUID(t *testing.T) {
 	store := &serviceTestStore{}
 	service := NewService(store, serviceTestAuthorizer{}, serviceTestWorkflow{})
 
-	session, err := service.Create(serviceTestContext("alice"), &apiv1alpha1.ResourceReference{Namespace: "team-a", Name: "assistant"}, "request-1", "")
+	session, err := service.Create(serviceTestContext("alice"), &apiv1alpha1.ResourceReference{Namespace: "team-a", Name: "assistant"}, "request-1", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +173,7 @@ func TestServiceCreateMapsStoreErrors(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			service := NewService(&serviceTestStore{createErr: test.err}, serviceTestAuthorizer{}, serviceTestWorkflow{})
-			_, err := service.Create(serviceTestContext("alice"), &apiv1alpha1.ResourceReference{Namespace: "team-a", Name: "assistant"}, "request-1", "")
+			_, err := service.Create(serviceTestContext("alice"), &apiv1alpha1.ResourceReference{Namespace: "team-a", Name: "assistant"}, "request-1", "", nil)
 			if !serviceerrors.IsCode(err, test.code) {
 				t.Fatalf("Create() error = %v, want code %s", err, test.code)
 			}
@@ -194,7 +195,7 @@ func TestServiceCreateRejectsInvalidOrUnauthorizedRequests(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			service := NewService(&serviceTestStore{}, test.authorizer, serviceTestWorkflow{})
-			_, err := service.Create(test.ctx, &apiv1alpha1.ResourceReference{Namespace: test.namespace, Name: "assistant"}, "request-1", "")
+			_, err := service.Create(test.ctx, &apiv1alpha1.ResourceReference{Namespace: test.namespace, Name: "assistant"}, "request-1", "", nil)
 			if !serviceerrors.IsCode(err, test.code) {
 				t.Fatalf("Create() error = %v, want code %s", err, test.code)
 			}
@@ -369,7 +370,7 @@ func TestServiceCreateCarriesTheNameAndLeavesAnOmittedOneEmpty(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			store := &serviceTestStore{}
 			service := NewService(store, serviceTestAuthorizer{}, serviceTestWorkflow{})
-			session, err := service.Create(serviceTestContext("alice"), &apiv1alpha1.ResourceReference{Namespace: "team-a", Name: "assistant"}, "request-1", test.given)
+			session, err := service.Create(serviceTestContext("alice"), &apiv1alpha1.ResourceReference{Namespace: "team-a", Name: "assistant"}, "request-1", test.given, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -631,7 +632,7 @@ func TestServiceShareCannotCreateSession(t *testing.T) {
 	for _, readOnly := range []bool{false, true} {
 		ctx := auth.ShareContextTo(serviceTestContext("alice"), &auth.ShareContext{SessionID: uuid.NewString(), UserID: "alice", ReadOnly: readOnly})
 		service := NewService(nil, serviceTestAuthorizer{}, nil)
-		_, err := service.Create(ctx, &apiv1alpha1.ResourceReference{Namespace: "team-a", Name: "assistant"}, "request-1", "")
+		_, err := service.Create(ctx, &apiv1alpha1.ResourceReference{Namespace: "team-a", Name: "assistant"}, "request-1", "", nil)
 		if !serviceerrors.IsCode(err, serviceerrors.CodePermissionDenied) {
 			t.Fatalf("Create(readOnly=%v) = %v, want permission denied", readOnly, err)
 		}
@@ -715,5 +716,51 @@ func TestServiceListAuthorizesBeforePagination(t *testing.T) {
 				t.Fatal("listing reread each Session instead of authorizing its stored record")
 			}
 		})
+	}
+}
+
+func TestServiceCreateCarriesAndValidatesTheWorkspace(t *testing.T) {
+	agent := &apiv1alpha1.ResourceReference{Namespace: "team-a", Name: "assistant"}
+	requested := &apiv1alpha1.Workspace{Repo: "https://github.com/oldsj/testrepo", Ref: "main", Branch: "spike-b-test", Depth: 1}
+
+	store := &serviceTestStore{}
+	service := NewService(store, serviceTestAuthorizer{}, serviceTestWorkflow{})
+	session, err := service.Create(serviceTestContext("alice"), agent, "request-1", "", requested)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.createInput.GetWorkspace().GetRepo() != requested.GetRepo() || session.GetWorkspace().GetBranch() != "spike-b-test" {
+		t.Fatalf("stored workspace = %v, returned workspace = %v", store.createInput.GetWorkspace(), session.GetWorkspace())
+	}
+
+	for _, test := range []struct {
+		name string
+		repo string
+	}{
+		{name: "ssh remote", repo: "git@github.com:oldsj/testrepo.git"},
+		{name: "embedded credentials", repo: "https://x-access-token:secret@github.com/oldsj/testrepo"},
+		{name: "plain http", repo: "http://github.com/oldsj/testrepo"},
+		{name: "address host", repo: "https://10.0.0.1/o/r"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := &serviceTestStore{}
+			service := NewService(store, serviceTestAuthorizer{}, serviceTestWorkflow{})
+			_, err := service.Create(serviceTestContext("alice"), agent, "request-1", "", &apiv1alpha1.Workspace{Repo: test.repo})
+			if !serviceerrors.IsCode(err, serviceerrors.CodeInvalidArgument) {
+				t.Fatalf("Create() error = %v, want InvalidArgument", err)
+			}
+			if store.createInput != nil {
+				t.Fatal("an invalid workspace must be rejected before anything is stored")
+			}
+			if strings.Contains(err.Error(), "secret") {
+				t.Fatalf("error %q echoes the credential", err)
+			}
+		})
+	}
+
+	_, err = NewService(&serviceTestStore{createErr: database.ErrWorkspaceNotAllowed}, serviceTestAuthorizer{}, serviceTestWorkflow{}).
+		Create(serviceTestContext("alice"), agent, "request-1", "", requested)
+	if !serviceerrors.IsCode(err, serviceerrors.CodeInvalidArgument) || !strings.Contains(err.Error(), "Git origins") {
+		t.Fatalf("Create() error = %v, want InvalidArgument naming the Agent's Git origins", err)
 	}
 }

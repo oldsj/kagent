@@ -19,11 +19,12 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	TaskStoreService_CreateTask_FullMethodName = "/kagent.api.v1alpha1.TaskStoreService/CreateTask"
-	TaskStoreService_GetTask_FullMethodName    = "/kagent.api.v1alpha1.TaskStoreService/GetTask"
-	TaskStoreService_UpdateTask_FullMethodName = "/kagent.api.v1alpha1.TaskStoreService/UpdateTask"
-	TaskStoreService_ListTasks_FullMethodName  = "/kagent.api.v1alpha1.TaskStoreService/ListTasks"
-	TaskStoreService_SettleTask_FullMethodName = "/kagent.api.v1alpha1.TaskStoreService/SettleTask"
+	TaskStoreService_CreateTask_FullMethodName   = "/kagent.api.v1alpha1.TaskStoreService/CreateTask"
+	TaskStoreService_GetTask_FullMethodName      = "/kagent.api.v1alpha1.TaskStoreService/GetTask"
+	TaskStoreService_UpdateTask_FullMethodName   = "/kagent.api.v1alpha1.TaskStoreService/UpdateTask"
+	TaskStoreService_ListTasks_FullMethodName    = "/kagent.api.v1alpha1.TaskStoreService/ListTasks"
+	TaskStoreService_SettleTask_FullMethodName   = "/kagent.api.v1alpha1.TaskStoreService/SettleTask"
+	TaskStoreService_GetWorkspace_FullMethodName = "/kagent.api.v1alpha1.TaskStoreService/GetWorkspace"
 )
 
 // TaskStoreServiceClient is the client API for TaskStoreService service.
@@ -44,6 +45,9 @@ type TaskStoreServiceClient interface {
 	// at this saved version and publishes its task state and history atomically.
 	// Runtime pause/suspend and checkpoint snapshot readiness are independent.
 	SettleTask(ctx context.Context, in *TaskStoreServiceSettleTaskRequest, opts ...grpc.CallOption) (*TaskStoreServiceSettleTaskResponse, error)
+	// GetWorkspace returns the Git checkout the Session asked for, or an empty
+	// response when it asked for none. The runtime calls it before the first turn.
+	GetWorkspace(ctx context.Context, in *TaskStoreServiceGetWorkspaceRequest, opts ...grpc.CallOption) (*TaskStoreServiceGetWorkspaceResponse, error)
 }
 
 type taskStoreServiceClient struct {
@@ -104,6 +108,16 @@ func (c *taskStoreServiceClient) SettleTask(ctx context.Context, in *TaskStoreSe
 	return out, nil
 }
 
+func (c *taskStoreServiceClient) GetWorkspace(ctx context.Context, in *TaskStoreServiceGetWorkspaceRequest, opts ...grpc.CallOption) (*TaskStoreServiceGetWorkspaceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TaskStoreServiceGetWorkspaceResponse)
+	err := c.cc.Invoke(ctx, TaskStoreService_GetWorkspace_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // TaskStoreServiceServer is the server API for TaskStoreService service.
 // All implementations must embed UnimplementedTaskStoreServiceServer
 // for forward compatibility.
@@ -122,6 +136,9 @@ type TaskStoreServiceServer interface {
 	// at this saved version and publishes its task state and history atomically.
 	// Runtime pause/suspend and checkpoint snapshot readiness are independent.
 	SettleTask(context.Context, *TaskStoreServiceSettleTaskRequest) (*TaskStoreServiceSettleTaskResponse, error)
+	// GetWorkspace returns the Git checkout the Session asked for, or an empty
+	// response when it asked for none. The runtime calls it before the first turn.
+	GetWorkspace(context.Context, *TaskStoreServiceGetWorkspaceRequest) (*TaskStoreServiceGetWorkspaceResponse, error)
 	mustEmbedUnimplementedTaskStoreServiceServer()
 }
 
@@ -146,6 +163,9 @@ func (UnimplementedTaskStoreServiceServer) ListTasks(context.Context, *TaskStore
 }
 func (UnimplementedTaskStoreServiceServer) SettleTask(context.Context, *TaskStoreServiceSettleTaskRequest) (*TaskStoreServiceSettleTaskResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SettleTask not implemented")
+}
+func (UnimplementedTaskStoreServiceServer) GetWorkspace(context.Context, *TaskStoreServiceGetWorkspaceRequest) (*TaskStoreServiceGetWorkspaceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetWorkspace not implemented")
 }
 func (UnimplementedTaskStoreServiceServer) mustEmbedUnimplementedTaskStoreServiceServer() {}
 func (UnimplementedTaskStoreServiceServer) testEmbeddedByValue()                          {}
@@ -258,6 +278,24 @@ func _TaskStoreService_SettleTask_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TaskStoreService_GetWorkspace_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TaskStoreServiceGetWorkspaceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskStoreServiceServer).GetWorkspace(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskStoreService_GetWorkspace_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskStoreServiceServer).GetWorkspace(ctx, req.(*TaskStoreServiceGetWorkspaceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // TaskStoreService_ServiceDesc is the grpc.ServiceDesc for TaskStoreService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -284,6 +322,10 @@ var TaskStoreService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SettleTask",
 			Handler:    _TaskStoreService_SettleTask_Handler,
+		},
+		{
+			MethodName: "GetWorkspace",
+			Handler:    _TaskStoreService_GetWorkspace_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
