@@ -130,6 +130,9 @@ func modelCredentialTarget(resolved *ResolvedModelConfig) (name, endpoint, heade
 		}
 	case v1alpha3.ModelProviderAnthropic:
 		name, endpoint, header = env.AnthropicAPIKey.Name(), "https://api.anthropic.com", "x-api-key"
+		if spec.Anthropic != nil && spec.Anthropic.AuthMethod == v1alpha3.AnthropicAuthMethodOAuthToken {
+			name, header, prefix = "CLAUDE_CODE_OAUTH_TOKEN", "authorization", "Bearer "
+		}
 		if spec.Anthropic != nil && spec.Anthropic.BaseURL != "" {
 			endpoint = spec.Anthropic.BaseURL
 		}

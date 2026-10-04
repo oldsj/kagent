@@ -33,6 +33,7 @@ const (
 	AWSSessionTokenEnvName              = "AWS_SESSION_TOKEN"
 	AWSBedrockTokenEnvName              = "AWS_BEARER_TOKEN_BEDROCK"
 	AnthropicAPIKeyEnvName              = "ANTHROPIC_API_KEY"
+	ClaudeCodeOAuthTokenEnvName         = "CLAUDE_CODE_OAUTH_TOKEN"
 	AnthropicBaseURLEnvName             = "ANTHROPIC_BASE_URL"
 	VertexProjectEnvName                = "ANTHROPIC_VERTEX_PROJECT_ID"
 	VertexRegionEnvName                 = "CLOUD_ML_REGION"
@@ -50,7 +51,7 @@ func OwnsEnvironment(name string) bool {
 	case ClaudeConfigDirEnvName, DisableUpdatesEnvName, GoogleApplicationCredentialsEnvName,
 		GoogleCredentialsJSONEnvName, UseBedrockEnvName, UseVertexEnvName, AWSRegionEnvName,
 		AWSAccessKeyEnvName, AWSSecretKeyEnvName, AWSSessionTokenEnvName, AWSBedrockTokenEnvName,
-		AnthropicAPIKeyEnvName, AnthropicBaseURLEnvName, VertexProjectEnvName, VertexRegionEnvName,
+		AnthropicAPIKeyEnvName, ClaudeCodeOAuthTokenEnvName, AnthropicBaseURLEnvName, VertexProjectEnvName, VertexRegionEnvName,
 		SandboxEnvName, "CLAUDE_CODE_ENABLE_TELEMETRY",
 		"CLAUDE_CODE_ENHANCED_TELEMETRY_BETA", "OTEL_TRACES_EXPORTER", "OTEL_METRICS_EXPORTER",
 		"OTEL_LOGS_EXPORTER", "OTEL_LOG_USER_PROMPTS", "OTEL_LOG_TOOL_DETAILS", "OTEL_LOG_TOOL_CONTENT",

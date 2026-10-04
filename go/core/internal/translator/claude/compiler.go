@@ -186,18 +186,29 @@ func (c *Compiler) provider(ctx context.Context, model *v1alpha3.ModelConfig) ([
 	switch model.Spec.Provider {
 	case v1alpha3.ModelProviderAnthropic:
 		var baseURL string
+		authMethod := v1alpha3.AnthropicAuthMethodAPIKey
 		if model.Spec.Anthropic != nil {
 			options := *model.Spec.Anthropic
 			baseURL = strings.TrimSpace(options.BaseURL)
-			options.BaseURL = ""
+			authMethod = options.AuthMethod
+			options.AuthMethod, options.BaseURL = "", ""
 			if !reflect.DeepEqual(options, v1alpha3.AnthropicConfig{}) {
-				return nil, nil, v2translator.NewValidationError("Claude does not support Anthropic provider options beyond baseUrl yet")
+				return nil, nil, v2translator.NewValidationError("Claude does not support Anthropic provider options beyond authMethod and baseUrl yet")
 			}
+		}
+		if authMethod == "" {
+			authMethod = v1alpha3.AnthropicAuthMethodAPIKey
+		}
+		credentialEnvironment := claudeconfig.AnthropicAPIKeyEnvName
+		if authMethod == v1alpha3.AnthropicAuthMethodOAuthToken {
+			credentialEnvironment = claudeconfig.ClaudeCodeOAuthTokenEnvName
+		} else if authMethod != v1alpha3.AnthropicAuthMethodAPIKey {
+			return nil, nil, v2translator.NewValidationError("Claude Anthropic authMethod %q is unsupported", authMethod)
 		}
 		if err := c.requireSecretKey(ctx, model, model.Spec.APIKeySecret, model.Spec.APIKeySecretKey, false); err != nil {
 			return nil, nil, err
 		}
-		environment := []corev1.EnvVar{secretEnvironment(claudeconfig.AnthropicAPIKeyEnvName, model.Spec.APIKeySecret, model.Spec.APIKeySecretKey)}
+		environment := []corev1.EnvVar{secretEnvironment(credentialEnvironment, model.Spec.APIKeySecret, model.Spec.APIKeySecretKey)}
 		egress := []string{"https://api.anthropic.com:443"}
 		if baseURL != "" {
 			hostname, err := anthropicBaseURLOrigin(baseURL)
