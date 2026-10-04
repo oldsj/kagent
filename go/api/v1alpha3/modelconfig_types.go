@@ -125,8 +125,24 @@ type MistralConfig struct {
 	Timeout *int `json:"timeout,omitempty"`
 }
 
+// AnthropicAuthMethod selects how an Anthropic model authenticates.
+// +kubebuilder:validation:Enum=apiKey;oauthToken
+type AnthropicAuthMethod string
+
+const (
+	AnthropicAuthMethodAPIKey     AnthropicAuthMethod = "apiKey"
+	AnthropicAuthMethodOAuthToken AnthropicAuthMethod = "oauthToken"
+)
+
 // AnthropicConfig contains Anthropic-specific configuration options
 type AnthropicConfig struct {
+	// AuthMethod selects API-key authentication (the default) or Claude Code's
+	// subscription OAuth token. In oauthToken mode, apiKeySecret and
+	// apiKeySecretKey identify the Secret containing the token.
+	// +kubebuilder:default=apiKey
+	// +optional
+	AuthMethod AnthropicAuthMethod `json:"authMethod,omitempty"`
+
 	// Base URL for the Anthropic API (overrides default)
 	// +optional
 	BaseURL string `json:"baseUrl,omitempty"`
@@ -204,11 +220,44 @@ type AnthropicConfig struct {
 //     GDCHServiceAccount *GDCHServiceAccountConfig `json:"gdchServiceAccount,omitempty"`
 // }
 
+// OpenAIAuthMethod selects API billing or Codex ChatGPT subscription login.
+// +kubebuilder:validation:Enum=apiKey;chatGPT
+type OpenAIAuthMethod string
+
+// CodexResponsesTransport selects Codex's subscription Responses transport.
+// +kubebuilder:validation:Enum=websocket;https
+type CodexResponsesTransport string
+
+const (
+	OpenAIAuthMethod_APIKey  OpenAIAuthMethod = "apiKey"
+	OpenAIAuthMethod_ChatGPT OpenAIAuthMethod = "chatGPT"
+)
+
 // OpenAIConfig contains OpenAI-specific configuration options
 //
 // +kubebuilder:validation:XValidation:message="maxTokens and maxCompletionTokens are mutually exclusive",rule="!(has(self.maxTokens) && has(self.maxCompletionTokens))"
+// +kubebuilder:validation:XValidation:message="chatGPT requires accountID",rule="!has(self.authMethod) || self.authMethod != 'chatGPT' || (has(self.accountID) && size(self.accountID) > 0)"
+// +kubebuilder:validation:XValidation:message="accountID requires chatGPT authMethod",rule="!has(self.accountID) || (has(self.authMethod) && self.authMethod == 'chatGPT')"
+// +kubebuilder:validation:XValidation:message="responsesTransport requires chatGPT authMethod",rule="!has(self.responsesTransport) || (has(self.authMethod) && self.authMethod == 'chatGPT')"
 type OpenAIConfig struct {
-	// Base URL for the OpenAI API (overrides default)
+	// AuthMethod selects Codex ChatGPT login or API-key authentication (default).
+	// In chatGPT mode, apiKeySecret and apiKeySecretKey reference only the current
+	// access token for gateway injection. Refresh is control-side.
+	// +optional
+	AuthMethod OpenAIAuthMethod `json:"authMethod,omitempty"`
+
+	// AccountID selects the ChatGPT account; it is not a bearer credential and
+	// is retained in the Actor's synthetic auth.json and revision provenance.
+	// +optional
+	AccountID string `json:"accountID,omitempty"`
+
+	// ResponsesTransport selects WebSocket (default, with native fallback) or
+	// HTTPS for the Codex ChatGPT subscription backend.
+	// +optional
+	ResponsesTransport CodexResponsesTransport `json:"responsesTransport,omitempty"`
+
+	// Base URL for the OpenAI API (overrides default). In chatGPT mode it
+	// replaces the Codex subscription backend, https://chatgpt.com/backend-api/codex.
 	// +optional
 	BaseURL string `json:"baseUrl,omitempty"`
 
