@@ -192,23 +192,38 @@ func (c *Compiler) provider(ctx context.Context, resolved *translator.ResolvedMo
 	switch model.Spec.Provider {
 	case v1alpha3.ModelProviderAnthropic:
 		var baseURL string
+		authMethod := v1alpha3.AnthropicAuthMethodAPIKey
 		if model.Spec.Anthropic != nil {
 			options := *model.Spec.Anthropic
 			baseURL = strings.TrimSpace(options.BaseURL)
-			options.BaseURL = ""
+			authMethod = options.AuthMethod
+			options.AuthMethod, options.BaseURL = "", ""
 			// "5m" is the CRD default and matches Claude Code's native cache TTL.
 			if options.CacheTTL == "5m" {
 				options.CacheTTL = ""
 			}
 			if !reflect.DeepEqual(options, v1alpha3.AnthropicConfig{}) {
-				return nil, nil, translator.NewValidationError("Claude does not support Anthropic provider options beyond baseUrl yet")
+				return nil, nil, translator.NewValidationError("Claude does not support Anthropic provider options beyond authMethod and baseUrl yet")
 			}
 		}
-		if model.Spec.ActorJWT == nil {
+		if authMethod == "" {
+			authMethod = v1alpha3.AnthropicAuthMethodAPIKey
+		}
+		credentialEnvironment := claudeconfig.AnthropicAPIKeyEnvName
+		if authMethod == v1alpha3.AnthropicAuthMethodOAuthToken {
+			credentialEnvironment = claudeconfig.ClaudeCodeOAuthTokenEnvName
+		} else if authMethod != v1alpha3.AnthropicAuthMethodAPIKey {
+			return nil, nil, translator.NewValidationError("Claude Anthropic authMethod %q is unsupported", authMethod)
+		}
+		if model.Spec.ActorJWT != nil {
+			if authMethod == v1alpha3.AnthropicAuthMethodOAuthToken {
+				return nil, nil, translator.NewValidationError("Claude Anthropic oauthToken authMethod cannot be combined with actorJwt")
+			}
+		} else {
 			if err := c.requireSecretKey(ctx, model, model.Spec.APIKeySecret, model.Spec.APIKeySecretKey, false); err != nil {
 				return nil, nil, err
 			}
-			credential = secretEnvironment(claudeconfig.AnthropicAPIKeyEnvName, model.Spec.APIKeySecret, model.Spec.APIKeySecretKey)
+			credential = secretEnvironment(credentialEnvironment, model.Spec.APIKeySecret, model.Spec.APIKeySecretKey)
 		}
 		environment := []corev1.EnvVar{credential}
 		egress := []string{"https://api.anthropic.com:443"}
