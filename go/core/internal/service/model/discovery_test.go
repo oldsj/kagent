@@ -72,6 +72,9 @@ func TestDiscoverySupportedProviderDefinitions(t *testing.T) {
 	}, providerNames(modelProviders))
 	assert.Empty(t, modelProviders[0].RequiredParams)
 	assert.Equal(t, []string{
+		"authMethod",
+		"accountID",
+		"responsesTransport",
 		"baseUrl",
 		"organization",
 		"temperature",
