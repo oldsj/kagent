@@ -41,6 +41,23 @@ func TestCompileProviderCredentials(t *testing.T) {
 			wantEgress: []string{"http://kagent-controller.kagent:8083", "https://api.anthropic.com:443"},
 		},
 		{
+			name: "Anthropic subscription OAuth token",
+			model: v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderAnthropic, Model: "claude-sonnet-4-5",
+				APIKeySecret: "model-auth", APIKeySecretKey: "oauth-token",
+				Anthropic: &v1alpha3.AnthropicConfig{AuthMethod: v1alpha3.AnthropicAuthMethodOAuthToken}},
+			secretData: map[string][]byte{"oauth-token": []byte(credentialValue)},
+			wantEnv:    map[string]string{claudeconfig.ClaudeCodeOAuthTokenEnvName: v2translator.CredentialPlaceholder},
+			wantEgress: []string{"http://kagent-controller.kagent:8083", "https://api.anthropic.com:443"},
+		},
+		{
+			name: "Anthropic rejects unknown auth method",
+			model: v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderAnthropic, Model: "claude-sonnet-4-5",
+				APIKeySecret: "model-auth", APIKeySecretKey: "api-key",
+				Anthropic: &v1alpha3.AnthropicConfig{AuthMethod: "unexpected"}},
+			secretData: map[string][]byte{"api-key": []byte(credentialValue)},
+			wantErr:    "authMethod \"unexpected\" is unsupported",
+		},
+		{
 			name: "Anthropic gateway",
 			model: v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderAnthropic, Model: "claude-sonnet-4-5",
 				APIKeySecret: "model-auth", APIKeySecretKey: "api-key",
@@ -108,6 +125,18 @@ func TestCompileProviderCredentials(t *testing.T) {
 					t.Errorf("environment[%s] = %q, want %q", name, gotEnvironment[name], value)
 				}
 			}
+			if tt.model.Anthropic != nil && tt.model.Anthropic.AuthMethod == v1alpha3.AnthropicAuthMethodOAuthToken {
+				if _, found := gotEnvironment[claudeconfig.AnthropicAPIKeyEnvName]; found {
+					t.Fatal("OAuth-token configuration also set ANTHROPIC_API_KEY")
+				}
+				if len(revision.Credentials) != 1 {
+					t.Fatalf("OAuth credential bindings = %#v, want one", revision.Credentials)
+				}
+				binding := revision.Credentials[0]
+				if binding.Hostname != "api.anthropic.com" || binding.Header != "authorization" || binding.Prefix != "Bearer " || binding.URI != "ate-secret://k8s.io/default/test/model-auth/oauth-token" {
+					t.Fatalf("OAuth credential binding = %#v", binding)
+				}
+			}
 			if gotEnvironment[claudeconfig.SandboxEnvName] != "1" {
 				t.Errorf("environment[%s] = %q, want %q", claudeconfig.SandboxEnvName, gotEnvironment[claudeconfig.SandboxEnvName], "1")
 			}
@@ -116,6 +145,11 @@ func TestCompileProviderCredentials(t *testing.T) {
 			}
 			if bytes.Contains(revision.ConfigJSON, []byte(credentialValue)) || bytes.Contains(revision.Provenance, []byte(credentialValue)) {
 				t.Fatal("compiled config or provenance contains credential material")
+			}
+			for _, variable := range revision.Environment {
+				if strings.Contains(variable.Value, credentialValue) {
+					t.Fatalf("runtime environment %q contains credential material", variable.Name)
+				}
 			}
 			if bytes.Contains(revision.Provenance, []byte(`"kind":"Secret"`)) {
 				t.Fatalf("provenance contains gateway-managed Secret: %s", revision.Provenance)
