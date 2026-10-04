@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -17,6 +18,108 @@ import (
 	"github.com/kagent-dev/kagent/go/pkg/tracing"
 	"github.com/pelletier/go-toml/v2"
 )
+
+func TestChatGPTMaterializesOnlySyntheticAuth(t *testing.T) {
+	durable := t.TempDir()
+	cfg := config.Production("gpt-6.1", "Reply briefly")
+	cfg.Provider = config.Provider{Name: "chatgpt", AccountID: "test-account"}
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = New(t.Context(), Input{ConfigJSON: raw, Workspace: filepath.Join(durable, "workspace"), DurableDir: durable})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(durable, "codex", "auth.json")
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var auth placeholderAuthFile
+	if err := json.Unmarshal(contents, &auth); err != nil {
+		t.Fatal(err)
+	}
+	if auth.AuthMode != "chatgpt" || auth.Tokens.AccountID != "test-account" || auth.Tokens.RefreshToken != "" || time.Since(auth.LastRefresh) > time.Minute {
+		t.Fatal("incorrect synthetic authentication metadata")
+	}
+	for _, token := range []string{auth.Tokens.IDToken, auth.Tokens.AccessToken} {
+		parts := strings.Split(token, ".")
+		if len(parts) != 3 {
+			t.Fatal("placeholder is not a JWT")
+		}
+		payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		var claims struct {
+			Expires int64 `json:"exp"`
+		}
+		if err := json.Unmarshal(payload, &claims); err != nil {
+			t.Fatal(err)
+		}
+		if claims.Expires < time.Now().Add(24*time.Hour).Unix() {
+			t.Fatal("placeholder expiry is not in the future")
+		}
+		if parts[2] != base64.RawURLEncoding.EncodeToString([]byte("inert-kagent-placeholder")) {
+			t.Fatal("unexpected placeholder signature")
+		}
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatal("auth file is not private")
+	}
+	contents, err = os.ReadFile(filepath.Join(durable, "codex", "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var native nativeConfig
+	if err := toml.Unmarshal(contents, &native); err != nil {
+		t.Fatal(err)
+	}
+	if native.ModelProvider != "openai" || len(native.ModelProviders) != 0 || bytes.Contains(contents, []byte("OPENAI_API_KEY")) {
+		t.Fatal("ChatGPT does not use the built-in provider")
+	}
+}
+
+func TestChatGPTHTTPSKeepsSubscriptionAuth(t *testing.T) {
+	cfg := config.Production("gpt-6.1-sol", "Reply briefly")
+	cfg.Provider = config.Provider{Name: "chatgpt", AccountID: "test-account", ResponsesTransport: "https"}
+	contents, err := renderConfig(cfg, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var native nativeConfig
+	if err := toml.Unmarshal(contents, &native); err != nil {
+		t.Fatal(err)
+	}
+	provider := native.ModelProviders[native.ModelProvider]
+	if native.ModelProvider != "kagent-chatgpt" || !provider.RequiresOpenAIAuth || provider.EnvKey != "" || provider.BaseURL != "https://chatgpt.com/backend-api/codex" || provider.SupportsWebSockets == nil || *provider.SupportsWebSockets {
+		t.Fatalf("HTTPS lost subscription authentication or enabled WebSockets: %#v", provider)
+	}
+}
+
+func TestChatGPTBaseURLOverridesBackend(t *testing.T) {
+	for _, test := range []struct {
+		transport  string
+		websockets bool
+	}{{"", true}, {"https", false}} {
+		cfg := config.Production("gpt-6.1", "Reply briefly")
+		cfg.Provider = config.Provider{Name: "chatgpt", AccountID: "test-account", BaseURL: "https://codex.example.com/backend-api/codex", ResponsesTransport: test.transport}
+		contents, err := renderConfig(cfg, t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var native nativeConfig
+		if err := toml.Unmarshal(contents, &native); err != nil {
+			t.Fatal(err)
+		}
+		provider := native.ModelProviders[native.ModelProvider]
+		if native.ModelProvider != "kagent-chatgpt" || !provider.RequiresOpenAIAuth || provider.EnvKey != "" || provider.BaseURL != cfg.Provider.BaseURL || provider.SupportsWebSockets == nil || *provider.SupportsWebSockets != test.websockets {
+			t.Fatalf("transport %q: incorrect ChatGPT provider: %#v", test.transport, provider)
+		}
+	}
+}
 
 func TestNewMaterializesCompilerOwnedConfiguration(t *testing.T) {
 	durable := filepath.Join(t.TempDir(), "data")

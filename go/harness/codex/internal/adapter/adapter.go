@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/kagent-dev/kagent/go/core/pkg/agentplugins"
 	"github.com/kagent-dev/kagent/go/harness/codex/config"
@@ -74,7 +75,21 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 	if err := utils.ReplacePrivateFile(filepath.Join(codexHome, "config.toml"), configTOML); err != nil {
 		return nil, fmt.Errorf("materialize Codex configuration: %w", err)
 	}
+	if cfg.Provider.Name == "chatgpt" {
+		authJSON, err := placeholderAuth(cfg.Provider.AccountID, time.Now().UTC())
+		if err != nil {
+			return nil, err
+		}
+		if err := utils.ReplacePrivateFile(filepath.Join(codexHome, "auth.json"), authJSON); err != nil {
+			return nil, fmt.Errorf("materialize synthetic Codex authentication: %w", err)
+		}
+	}
 	environment := nativeEnvironment(input.Environment, codexHome, cfg.RuntimeTelemetry)
+	if cfg.Provider.Name == "chatgpt" {
+		environment = slices.DeleteFunc(environment, func(item string) bool {
+			return strings.HasPrefix(item, "OPENAI_API_KEY=") || strings.HasPrefix(item, "CODEX_API_KEY=")
+		})
+	}
 	approvalServers := make(map[string]struct{})
 	for name, server := range cfg.MCPServers {
 		if server.RequireApproval {
@@ -83,7 +98,7 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 	}
 	return driver.NewProcessDriver(driver.ProcessConfig{
 		Executable: cfg.CodexExecutable, ExpectedVersion: cfg.ExpectedCodexVersion, StrictVersion: cfg.StrictVersion,
-		Workspace: input.Workspace, Model: cfg.Model, Provider: nativeProviderName(cfg.Provider.Name),
+		Workspace: input.Workspace, Model: cfg.Model, Provider: nativeProviderName(cfg.Provider),
 		DeveloperInstruction: cfg.DeveloperInstruction, Environment: environment,
 		MaxFrameBytes: cfg.MaxFrameBytes, MaxStderrBytes: cfg.MaxStderrBytes, InterruptGrace: cfg.InterruptGrace(),
 		ApprovalServers: approvalServers,
@@ -145,10 +160,12 @@ type nativeOTLPHTTP struct {
 }
 
 type nativeModelProvider struct {
-	Name    string `toml:"name"`
-	WireAPI string `toml:"wire_api"`
-	EnvKey  string `toml:"env_key"`
-	BaseURL string `toml:"base_url,omitempty"`
+	Name               string `toml:"name"`
+	WireAPI            string `toml:"wire_api"`
+	EnvKey             string `toml:"env_key,omitempty"`
+	BaseURL            string `toml:"base_url,omitempty"`
+	RequiresOpenAIAuth bool   `toml:"requires_openai_auth,omitempty"`
+	SupportsWebSockets *bool  `toml:"supports_websockets,omitempty"`
 }
 
 type nativeAgent struct {
@@ -173,7 +190,7 @@ type nativeAgentConfig struct {
 // Codex CLI's native TOML without copying credential values into durable state.
 func renderConfig(cfg config.Config, codexHome string) ([]byte, error) {
 	native := nativeConfig{
-		Model: cfg.Model, ModelProvider: nativeProviderName(cfg.Provider.Name),
+		Model: cfg.Model, ModelProvider: nativeProviderName(cfg.Provider),
 		ApprovalPolicy: nativeApprovalPolicy{Granular: nativeGranularApprovalPolicy{MCPElicitations: true}},
 		SandboxMode:    "danger-full-access", WebSearch: "cached",
 		Features:   nativeFeatures{DefaultModeRequestUserInput: true},
@@ -186,6 +203,16 @@ func renderConfig(cfg config.Config, codexHome string) ([]byte, error) {
 			"kagent-openai": {
 				Name: "OpenAI", WireAPI: "responses", EnvKey: "OPENAI_API_KEY", BaseURL: cfg.Provider.BaseURL,
 			},
+		}
+	}
+	if usesCustomChatGPTProvider(cfg.Provider) {
+		baseURL := cfg.Provider.BaseURL
+		if baseURL == "" {
+			baseURL = defaultChatGPTBaseURL
+		}
+		websockets := cfg.Provider.ResponsesTransport != "https"
+		native.ModelProviders = map[string]nativeModelProvider{
+			"kagent-chatgpt": {Name: "OpenAI", WireAPI: "responses", BaseURL: baseURL, RequiresOpenAIAuth: true, SupportsWebSockets: &websockets},
 		}
 	}
 	if cfg.Telemetry != nil {
@@ -240,11 +267,25 @@ func nativeExporter(exporterConfig *config.OTLPExporter) *nativeOtelExporter {
 	return exporter
 }
 
-func nativeProviderName(name string) string {
-	if name == "openai" {
+const defaultChatGPTBaseURL = "https://chatgpt.com/backend-api/codex"
+
+// usesCustomChatGPTProvider reports whether ChatGPT login needs a custom native
+// provider: the built-in provider cannot change its backend or disable WebSockets.
+func usesCustomChatGPTProvider(provider config.Provider) bool {
+	return provider.Name == "chatgpt" && (provider.BaseURL != "" || provider.ResponsesTransport == "https")
+}
+
+func nativeProviderName(provider config.Provider) string {
+	if usesCustomChatGPTProvider(provider) {
+		return "kagent-chatgpt"
+	}
+	if provider.Name == "chatgpt" {
+		return "openai"
+	}
+	if provider.Name == "openai" {
 		return "kagent-openai"
 	}
-	return name
+	return provider.Name
 }
 
 // materializeAgents writes the per-agent config files referenced by config.toml.
