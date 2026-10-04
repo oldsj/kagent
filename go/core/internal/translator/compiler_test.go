@@ -227,43 +227,50 @@ func mockCollections(t *testing.T, objects ...any) v2translator.Collections {
 	return collections
 }
 
+// runtimeFixture returns a minimal valid Harness, AgentTemplate and ModelConfig
+// for one runtime variant, using the WorkerPool named "selected".
+func runtimeFixture(harnessType v2translator.HarnessType) (*v1alpha3.Harness, *v1alpha3.AgentTemplate, *v1alpha3.ModelConfig) {
+	harness := &v1alpha3.Harness{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "test", Name: string(harnessType)},
+		Spec: v1alpha3.HarnessSpec{
+
+			Workload: v1alpha3.HarnessWorkload{Image: "example.com/agent@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			Substrate: v1alpha3.RuntimeSubstratePolicy{
+				WorkerPoolRef: corev1.LocalObjectReference{Name: "selected"}, SnapshotPolicy: v1alpha3.RuntimeSnapshotPolicy{Location: "snapshots"},
+			},
+		},
+	}
+	template := &v1alpha3.AgentTemplate{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "test", Name: "assistant"},
+		Spec:       v1alpha3.AgentTemplateSpec{ModelConfig: &corev1.LocalObjectReference{Name: "default-model"}, SystemPrompt: "help"},
+	}
+	model := modelConfig()
+	model.Spec.APIKeySecret, model.Spec.APIKeySecretKey = "model-auth", "api-key"
+	switch harnessType {
+	case v2translator.HarnessTypeKagent:
+		harness.Spec.Kagent = &v1alpha3.KagentHarness{}
+	case v2translator.HarnessTypeCodex:
+		harness.Spec.Codex = &v1alpha3.CodexHarness{}
+		model.Spec.OpenAI = &v1alpha3.OpenAIConfig{APIFormat: new(v1alpha3.OpenAIAPIFormatResponses)}
+		responses := v1alpha3.OpenAIAPIFormatResponses
+		model.Spec.OpenAI = &v1alpha3.OpenAIConfig{APIFormat: &responses}
+	case v2translator.HarnessTypeClaude:
+		harness.Spec.Claude = &v1alpha3.ClaudeHarness{}
+		model.Spec.Provider, model.Spec.Model = v1alpha3.ModelProviderAnthropic, "claude-sonnet-4-5"
+	case v2translator.HarnessTypeBYO:
+		harness.Spec.BYO = &v1alpha3.BYOHarness{}
+		harness.Spec.Workload.Command = []string{"/agent"}
+		template.Spec.ModelConfig = nil
+	}
+	return harness, template, model
+}
+
 func TestCompileAgentResolvesWorkerPoolSandboxClass(t *testing.T) {
 	for _, harnessType := range []v2translator.HarnessType{
 		v2translator.HarnessTypeKagent, v2translator.HarnessTypeCodex, v2translator.HarnessTypeClaude, v2translator.HarnessTypeBYO,
 	} {
 		t.Run(string(harnessType), func(t *testing.T) {
-			harness := &v1alpha3.Harness{
-				ObjectMeta: metav1.ObjectMeta{Namespace: "test", Name: string(harnessType)},
-				Spec: v1alpha3.HarnessSpec{
-
-					Workload: v1alpha3.HarnessWorkload{Image: "example.com/agent@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
-					Substrate: v1alpha3.RuntimeSubstratePolicy{
-						WorkerPoolRef: corev1.LocalObjectReference{Name: "selected"}, SnapshotPolicy: v1alpha3.RuntimeSnapshotPolicy{Location: "snapshots"},
-					},
-				},
-			}
-			template := &v1alpha3.AgentTemplate{
-				ObjectMeta: metav1.ObjectMeta{Namespace: "test", Name: "assistant"},
-				Spec:       v1alpha3.AgentTemplateSpec{ModelConfig: &corev1.LocalObjectReference{Name: "default-model"}, SystemPrompt: "help"},
-			}
-			model := modelConfig()
-			model.Spec.APIKeySecret, model.Spec.APIKeySecretKey = "model-auth", "api-key"
-			switch harnessType {
-			case v2translator.HarnessTypeKagent:
-				harness.Spec.Kagent = &v1alpha3.KagentHarness{}
-			case v2translator.HarnessTypeCodex:
-				harness.Spec.Codex = &v1alpha3.CodexHarness{}
-				model.Spec.OpenAI = &v1alpha3.OpenAIConfig{APIFormat: new(v1alpha3.OpenAIAPIFormatResponses)}
-				responses := v1alpha3.OpenAIAPIFormatResponses
-				model.Spec.OpenAI = &v1alpha3.OpenAIConfig{APIFormat: &responses}
-			case v2translator.HarnessTypeClaude:
-				harness.Spec.Claude = &v1alpha3.ClaudeHarness{}
-				model.Spec.Provider, model.Spec.Model = v1alpha3.ModelProviderAnthropic, "claude-sonnet-4-5"
-			case v2translator.HarnessTypeBYO:
-				harness.Spec.BYO = &v1alpha3.BYOHarness{}
-				harness.Spec.Workload.Command = []string{"/agent"}
-				template.Spec.ModelConfig = nil
-			}
+			harness, template, model := runtimeFixture(harnessType)
 			originalHarness, originalTemplate := harness.DeepCopy(), template.DeepCopy()
 			var baseline *v2translator.CompileResult
 			var defaultDigest v2translator.RevisionID
@@ -977,4 +984,34 @@ func TestResolveModelConfigMistral(t *testing.T) {
 
 	resolved = mockCollections(t, model).ResolvedModelConfigs.List()[0]
 	require.Equal(t, "APIKeySecretNotFound", resolved.Failure().Reason)
+}
+
+func TestCompileAgentCarriesQuiesceSnapshotScope(t *testing.T) {
+	for _, harnessType := range []v2translator.HarnessType{
+		v2translator.HarnessTypeKagent, v2translator.HarnessTypeCodex, v2translator.HarnessTypeClaude, v2translator.HarnessTypeBYO,
+	} {
+		t.Run(string(harnessType), func(t *testing.T) {
+			harness, template, model := runtimeFixture(harnessType)
+			objects := []any{
+				model,
+				&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "test", Name: "model-auth"}, Data: map[string][]byte{"api-key": []byte("secret")}},
+				&atev1alpha1.WorkerPool{ObjectMeta: metav1.ObjectMeta{Namespace: "test", Name: "selected"}},
+			}
+			compile := func(onQuiesce v1alpha3.RuntimeSnapshotScope) (*v2translator.CompileResult, v2translator.RevisionID) {
+				harness.Spec.Substrate.SnapshotPolicy.OnQuiesce = onQuiesce
+				result, err := compiler(t, objects...).CompileAgent(t.Context(), inlineAgent(harness, template))
+				require.NoError(t, err)
+				digest, err := result.Digest()
+				require.NoError(t, err)
+				return result, digest
+			}
+			unset, unsetDigest := compile("")
+			require.Empty(t, unset.SnapshotOnQuiesce)
+			data, _ := compile(v1alpha3.RuntimeSnapshotScopeData)
+			require.Equal(t, v1alpha3.RuntimeSnapshotScopeData, data.SnapshotOnQuiesce)
+			full, fullDigest := compile(v1alpha3.RuntimeSnapshotScopeFull)
+			require.Equal(t, v1alpha3.RuntimeSnapshotScopeFull, full.SnapshotOnQuiesce)
+			require.NotEqual(t, unsetDigest, fullDigest)
+		})
+	}
 }

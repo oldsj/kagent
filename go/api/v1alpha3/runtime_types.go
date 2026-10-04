@@ -19,12 +19,35 @@ type RuntimeEnvVar struct {
 	// CredentialRef *corev1.SecretKeySelector `json:"credentialRef,omitempty"`
 }
 
-// RuntimeSnapshotPolicy configures storage for Substrate snapshots.
+// RuntimeSnapshotScope selects how much Actor state a snapshot captures.
+//
+// +kubebuilder:validation:Enum=Data;Full
+type RuntimeSnapshotScope string
+
+const (
+	// RuntimeSnapshotScopeData captures only the durable /data directory. The
+	// Actor restarts from its golden image, so processes do not survive.
+	RuntimeSnapshotScopeData RuntimeSnapshotScope = "Data"
+	// RuntimeSnapshotScopeFull also captures guest memory and the root
+	// filesystem, so running processes survive the snapshot. Snapshots are
+	// larger and slower to take and restore.
+	RuntimeSnapshotScopeFull RuntimeSnapshotScope = "Full"
+)
+
+// RuntimeSnapshotPolicy configures storage and scope for Substrate snapshots.
 type RuntimeSnapshotPolicy struct {
 	// Location is the snapshot storage location used by Substrate.
 	// +kubebuilder:validation:Pattern=`^[^[:space:]]+$`
 	// +required
 	Location string `json:"location"`
+
+	// OnQuiesce selects the snapshot scope taken when an idle Actor suspends or
+	// a Session is explicitly suspended. It defaults to Data. Full keeps
+	// processes such as a dev server alive across suspension, at the cost of
+	// larger snapshots and slower suspend and wake. Snapshots taken while a
+	// task waits for input are always Full.
+	// +optional
+	OnQuiesce RuntimeSnapshotScope `json:"onQuiesce,omitempty"`
 }
 
 // RuntimeSubstratePolicy contains the Substrate policy shared by all runtime variants.

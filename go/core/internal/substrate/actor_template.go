@@ -86,6 +86,10 @@ func ActorTemplateForRevision(spec *translator.Revision, revisionID translator.R
 	if err != nil {
 		return nil, err
 	}
+	snapshotPolicy, err := snapshotConfig(spec.SnapshotLocation, spec.SnapshotOnQuiesce)
+	if err != nil {
+		return nil, err
+	}
 
 	template := &ateapipb.ActorTemplate{
 		Metadata:      &ateapipb.ResourceMetadata{Atespace: spec.Namespace, Name: name},
@@ -107,12 +111,7 @@ func ActorTemplateForRevision(spec *translator.Revision, revisionID translator.R
 			},
 		}},
 		WorkerSelector: workerSelectorForPool(workerKey),
-		SnapshotConfig: &ateapipb.SnapshotConfig{
-			StorageLocation: spec.SnapshotLocation,
-			OnPause:         ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-			OnCommit:        ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-			OnResume:        &ateapipb.OnResumeConfig{FromData: ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN},
-		},
+		SnapshotConfig: snapshotPolicy,
 		Volumes: []*ateapipb.Volume{
 			{Name: durableDataVolume, DurableDir: &ateapipb.DurableDirVolumeSource{}},
 			// Substrate regenerates this projection on Run and Restore. A fork
