@@ -229,3 +229,22 @@ func sdkError(err error) error {
 		return err
 	}
 }
+
+// GetWorkspace returns the repository checkout this runtime's Session asked for,
+// or nil when it asked for none.
+func (s *Store) GetWorkspace(ctx context.Context) (*apiv1alpha1.Workspace, error) {
+	id, err := s.sessionID()
+	if err != nil {
+		return nil, err
+	}
+	var response *apiv1alpha1.TaskStoreServiceGetWorkspaceResponse
+	err = s.retry(ctx, func(ctx context.Context) error {
+		var err error
+		response, err = s.client.TaskStoreService().GetWorkspace(ctx, &apiv1alpha1.TaskStoreServiceGetWorkspaceRequest{SessionId: id})
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return response.GetWorkspace(), nil
+}
