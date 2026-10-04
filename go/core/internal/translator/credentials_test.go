@@ -16,6 +16,8 @@ func TestCompileCredentialDestinations(t *testing.T) {
 		env, host, header, prefix string
 	}{
 		{"OpenAI", v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderOpenAI}, "OPENAI_API_KEY", "api.openai.com", "authorization", "Bearer "},
+		{"ChatGPT", v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderOpenAI, OpenAI: &v1alpha3.OpenAIConfig{AuthMethod: v1alpha3.OpenAIAuthMethod_ChatGPT}}, "OPENAI_API_KEY", "chatgpt.com", "authorization", "Bearer "},
+		{"ChatGPT override", v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderOpenAI, OpenAI: &v1alpha3.OpenAIConfig{AuthMethod: v1alpha3.OpenAIAuthMethod_ChatGPT, BaseURL: "https://codex.example.com/backend-api/codex"}}, "OPENAI_API_KEY", "codex.example.com", "authorization", "Bearer "},
 		{"OpenAI override", v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderOpenAI, OpenAI: &v1alpha3.OpenAIConfig{BaseURL: "https://models.example.com/v1"}}, "OPENAI_API_KEY", "models.example.com", "authorization", "Bearer "},
 		{"Anthropic", v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderAnthropic}, "ANTHROPIC_API_KEY", "api.anthropic.com", "x-api-key", ""},
 		{"Anthropic OAuth token", v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderAnthropic, Anthropic: &v1alpha3.AnthropicConfig{AuthMethod: v1alpha3.AnthropicAuthMethodOAuthToken}}, "CLAUDE_CODE_OAUTH_TOKEN", "api.anthropic.com", "authorization", "Bearer "},

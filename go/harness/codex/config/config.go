@@ -17,14 +17,14 @@ import (
 )
 
 const (
-	Version            = 3
+	Version            = 4
 	PinnedCodexVersion = "0.148.0"
 )
 
 var nativeNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
-// Config is compiler-owned input to the native adapter. Credential values are
-// supplied only through the process environment.
+// Config is compiler-owned input to the native adapter. Real model credentials
+// stay at the egress gateway; the Actor receives only placeholders.
 type Config struct {
 	Version              int                    `json:"version"`
 	CodexExecutable      string                 `json:"codex_executable"`
@@ -60,8 +60,10 @@ type OTLPExporter struct {
 }
 
 type Provider struct {
-	Name    string `json:"name"`
-	BaseURL string `json:"base_url,omitempty"`
+	Name               string `json:"name"`
+	BaseURL            string `json:"base_url,omitempty"`
+	AccountID          string `json:"account_id,omitempty"`
+	ResponsesTransport string `json:"responses_transport,omitempty"`
 }
 
 type Agent struct {
@@ -114,8 +116,18 @@ func (c Config) Validate() error {
 	if c.MaxFrameBytes <= 0 || c.MaxStderrBytes <= 0 || c.InterruptGraceMillis <= 0 {
 		return fmt.Errorf("frame, stderr, and interrupt grace limits must be positive")
 	}
-	if c.Provider.Name != "openai" && c.Provider.Name != "amazon-bedrock" {
+	if c.Provider.Name != "openai" && c.Provider.Name != "amazon-bedrock" && c.Provider.Name != "chatgpt" {
 		return fmt.Errorf("unsupported Codex provider %q", c.Provider.Name)
+	}
+	if c.Provider.Name == "chatgpt" {
+		if strings.TrimSpace(c.Provider.AccountID) == "" {
+			return fmt.Errorf("ChatGPT requires account_id")
+		}
+		if transport := c.Provider.ResponsesTransport; transport != "" && transport != "websocket" && transport != "https" {
+			return fmt.Errorf("unsupported ChatGPT Responses transport %q", transport)
+		}
+	} else if c.Provider.AccountID != "" || c.Provider.ResponsesTransport != "" {
+		return fmt.Errorf("account_id is supported only for ChatGPT")
 	}
 	if err := c.RuntimeTelemetry.Validate(); err != nil {
 		return err
@@ -135,8 +147,8 @@ func (c Config) Validate() error {
 		}
 	}
 	if c.Provider.BaseURL != "" {
-		if c.Provider.Name != "openai" {
-			return fmt.Errorf("base URL is supported only for the OpenAI provider")
+		if c.Provider.Name != "openai" && c.Provider.Name != "chatgpt" {
+			return fmt.Errorf("base URL is supported only for the OpenAI and ChatGPT providers")
 		}
 		if err := validateURL(c.Provider.BaseURL); err != nil {
 			return fmt.Errorf("invalid provider base URL: %w", err)
