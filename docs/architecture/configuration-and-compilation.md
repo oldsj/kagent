@@ -207,7 +207,10 @@ images, and compatible worker hardware.
   compaction policy, Shared native subagents, and the kagent HITL extension.
 - **Codex** emits native App Server configuration, OpenAI or Bedrock model setup,
   Streamable HTTP MCP servers, Shared agents, and skills. Approvals are currently
-  disabled by policy.
+  disabled by policy. The optional `spec.codex.autoCompactTokenLimit` is written to the
+  generated `config.toml` as `model_auto_compact_token_limit`; Codex keeps its
+  model-specific default when it is unset. The adapter owns `config.toml`, and a
+  workspace `.codex/config.toml` remains rejected.
 - **Claude** emits Anthropic, Bedrock, or Vertex model setup, HTTP/SSE MCP
   servers, Shared agents, and skills.
 - **BYO** runs a digest-pinned user image that implements private A2A gRPC and

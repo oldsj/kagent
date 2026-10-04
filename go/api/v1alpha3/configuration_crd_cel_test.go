@@ -266,6 +266,19 @@ func TestConfigurationCRDValidation(t *testing.T) {
 			object: sandboxTemplateForValidation(namespace, "sandbox-quiesce-full", func(spec *SandboxTemplateSpec) { spec.Substrate.SnapshotPolicy.OnQuiesce = RuntimeSnapshotScopeFull }),
 		},
 		{
+			name: "Codex accepts an auto compact token limit",
+			object: validHarness(namespace, "codex-auto-compact", HarnessSpec{
+				Codex: &CodexHarness{AutoCompactTokenLimit: new(int64(120000))},
+			}),
+		},
+		{
+			name: "Codex rejects a non-positive auto compact token limit",
+			object: validHarness(namespace, "codex-auto-compact-zero", HarnessSpec{
+				Codex: &CodexHarness{AutoCompactTokenLimit: new(int64(0))},
+			}),
+			wantReject: "spec.codex.autoCompactTokenLimit",
+		},
+		{
 			name:   "SandboxTemplate allows empty literal environment values",
 			object: sandboxTemplateForValidation(namespace, "sandbox-empty-literal", func(spec *SandboxTemplateSpec) { spec.Env = []RuntimeEnvVar{{Name: "EMPTY", Value: ""}} }),
 		},

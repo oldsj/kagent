@@ -107,6 +107,9 @@ func (c *Compiler) Compile(ctx context.Context, input *v2translator.HarnessInput
 	cfg := codexconfig.Production(model.Spec.Model, input.Root.Instruction)
 	cfg.Provider, cfg.Agents, cfg.MCPServers = provider, agents, mcp.servers
 	cfg.RuntimeTelemetry = runtimeTelemetry
+	if codex := harness.Spec.Codex; codex != nil && codex.AutoCompactTokenLimit != nil {
+		cfg.AutoCompactTokenLimit = *codex.AutoCompactTokenLimit
+	}
 	if traceConfig.Enabled || logConfig.Enabled {
 		cfg.Telemetry = &codexconfig.Telemetry{CaptureContent: telemetryConfig.CaptureSensitiveContent}
 		if traceConfig.Enabled {

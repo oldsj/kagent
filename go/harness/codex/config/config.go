@@ -26,17 +26,20 @@ var nativeNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 // Config is compiler-owned input to the native adapter. Real model credentials
 // stay at the egress gateway; the Actor receives only placeholders.
 type Config struct {
-	Version              int                    `json:"version"`
-	CodexExecutable      string                 `json:"codex_executable"`
-	ExpectedCodexVersion string                 `json:"expected_codex_version"`
-	StrictVersion        bool                   `json:"strict_version"`
-	Model                string                 `json:"model"`
-	Provider             Provider               `json:"provider"`
-	DeveloperInstruction string                 `json:"developer_instruction,omitempty"`
-	Agents               map[string]Agent       `json:"agents,omitempty"`
-	SkillResources       *agentplugin.Resources `json:"skill_resources,omitempty"`
-	MCPServers           map[string]MCPServer   `json:"mcp_servers,omitempty"`
-	Telemetry            *Telemetry             `json:"telemetry,omitempty"`
+	Version              int    `json:"version"`
+	CodexExecutable      string `json:"codex_executable"`
+	ExpectedCodexVersion string `json:"expected_codex_version"`
+	StrictVersion        bool   `json:"strict_version"`
+	Model                string `json:"model"`
+	// AutoCompactTokenLimit becomes model_auto_compact_token_limit. Zero leaves
+	// Codex's default in place.
+	AutoCompactTokenLimit int64                  `json:"model_auto_compact_token_limit,omitempty"`
+	Provider              Provider               `json:"provider"`
+	DeveloperInstruction  string                 `json:"developer_instruction,omitempty"`
+	Agents                map[string]Agent       `json:"agents,omitempty"`
+	SkillResources        *agentplugin.Resources `json:"skill_resources,omitempty"`
+	MCPServers            map[string]MCPServer   `json:"mcp_servers,omitempty"`
+	Telemetry             *Telemetry             `json:"telemetry,omitempty"`
 	// RuntimeTelemetry carries the compiler-owned span identity and content
 	// capture policy for the Go wrapper. Telemetry above configures the native
 	// Codex exporters, which are a separate producer.
@@ -112,6 +115,9 @@ func (c Config) Validate() error {
 	}
 	if c.StrictVersion && strings.TrimSpace(c.ExpectedCodexVersion) == "" {
 		return fmt.Errorf("expected_codex_version is required when strict_version is enabled")
+	}
+	if c.AutoCompactTokenLimit < 0 {
+		return fmt.Errorf("model_auto_compact_token_limit must not be negative")
 	}
 	if c.MaxFrameBytes <= 0 || c.MaxStderrBytes <= 0 || c.InterruptGraceMillis <= 0 {
 		return fmt.Errorf("frame, stderr, and interrupt grace limits must be positive")

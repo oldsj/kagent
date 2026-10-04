@@ -11,6 +11,7 @@ import (
 func TestProductionRoundTrip(t *testing.T) {
 	cfg := Production("gpt-5.2-codex", "work carefully")
 	cfg.Provider = Provider{Name: "openai", BaseURL: "https://gateway.example.com/v1"}
+	cfg.AutoCompactTokenLimit = 120000
 	cfg.Agents = map[string]Agent{"reviewer": {Description: "Reviews", Instruction: "Review", Model: "gpt-5.2-codex"}}
 	cfg.MCPServers = map[string]MCPServer{"tools": {URL: "https://mcp.example.com/mcp", EnabledTools: []string{"read"}}}
 	cfg.Telemetry = &Telemetry{
@@ -26,7 +27,7 @@ func TestProductionRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if parsed.ExpectedCodexVersion != PinnedCodexVersion || parsed.Provider.Name != "openai" || parsed.Telemetry == nil || parsed.Telemetry.Traces.Protocol != "grpc" || parsed.Telemetry.Logs.Protocol != "http/protobuf" {
+	if parsed.AutoCompactTokenLimit != 120000 || parsed.ExpectedCodexVersion != PinnedCodexVersion || parsed.Provider.Name != "openai" || parsed.Telemetry == nil || parsed.Telemetry.Traces.Protocol != "grpc" || parsed.Telemetry.Logs.Protocol != "http/protobuf" {
 		t.Fatalf("parsed config = %#v", parsed)
 	}
 }
@@ -41,6 +42,7 @@ func TestParseRejectsUnsafeConfiguration(t *testing.T) {
 	}{
 		{"version", func(c *Config) { c.Version++ }, "unsupported config version"},
 		{"provider", func(c *Config) { c.Provider.Name = "other" }, "unsupported Codex provider"},
+		{"negative auto compact limit", func(c *Config) { c.AutoCompactTokenLimit = -1 }, "must not be negative"},
 		{"ChatGPT account required", func(c *Config) { c.Provider = Provider{Name: "chatgpt"} }, "requires account_id"},
 		{"ChatGPT base URL", func(c *Config) {
 			c.Provider = Provider{Name: "chatgpt", AccountID: "test", BaseURL: "https://user:pass@example.com"}
