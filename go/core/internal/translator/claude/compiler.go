@@ -134,9 +134,10 @@ func (c *Compiler) Compile(ctx context.Context, input *v2translator.HarnessInput
 			Namespace: template.Namespace,
 			Image:     harness.Spec.Workload.Image, Environment: environment,
 			ConfigJSON: configJSON, AgentCard: card,
-			WorkerPoolName:   harness.Spec.Substrate.WorkerPoolRef.Name,
-			SnapshotLocation: harness.Spec.Substrate.SnapshotPolicy.Location,
-			Credentials:      credentials, Provenance: provenance, EgressDestinations: egress,
+			WorkerPoolName:    harness.Spec.Substrate.WorkerPoolRef.Name,
+			SnapshotLocation:  harness.Spec.Substrate.SnapshotPolicy.Location,
+			SnapshotOnQuiesce: harness.Spec.Substrate.SnapshotPolicy.OnQuiesce,
+			Credentials:       credentials, Provenance: provenance, EgressDestinations: egress,
 		},
 		Warnings: mcp.warnings,
 	}, nil

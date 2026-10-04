@@ -138,6 +138,16 @@ terminal work suspends it and records the exact external snapshot. Waiting tasks
 are not forkable. The Session stays logically READY, and Substrate ingress
 resumes it when another authorized interaction arrives.
 
+The snapshot scope for terminal work comes from `spec.substrate.snapshotPolicy.onQuiesce`
+on the Harness. `Data` (the default) snapshots only `/data`; the actor restarts from
+its golden image on the next request, so processes such as a dev server do not
+survive. `Full` also captures guest memory and the root filesystem, so those
+processes keep running across suspend and resume. Full snapshots are larger and
+slower to take and restore, and the choice is part of the runtime revision, so
+changing it creates a new ActorTemplate. Pausing for INPUT_REQUIRED/AUTH_REQUIRED
+is always Full, regardless of this field. Forking requires a Data checkpoint, so a
+checkpoint whose snapshot is Full cannot be forked.
+
 Unfinished native cleanup blocks new task writes and explicit lifecycle changes.
 After publication, a new turn may supersede idle work before it is claimed. Once
 claimed, idle work blocks new execution, explicit lifecycle changes, and checkpoint

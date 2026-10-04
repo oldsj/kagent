@@ -6,6 +6,7 @@ import (
 
 	a2apb "github.com/a2aproject/a2a-go/v2/a2apb/v1"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	"github.com/kagent-dev/kagent/go/api/v1alpha3"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
@@ -131,4 +132,15 @@ func TestRevisionDigestIncludesBinaryAgentCard(t *testing.T) {
 	revision.AgentCard.Name = string([]byte{0xff})
 	_, err = revision.Digest()
 	require.Error(t, err)
+}
+
+func TestRevisionDigestIncludesSnapshotOnQuiesce(t *testing.T) {
+	revision := &Revision{Namespace: "agents", AgentName: "helper"}
+	unset, err := revision.Digest()
+	require.NoError(t, err)
+
+	revision.SnapshotOnQuiesce = v1alpha3.RuntimeSnapshotScopeFull
+	full, err := revision.Digest()
+	require.NoError(t, err)
+	require.NotEqual(t, unset, full, "changing the quiesce scope must create a new immutable revision")
 }

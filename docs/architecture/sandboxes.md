@@ -18,7 +18,9 @@ The agent and sandbox APIs have separate configuration and lifecycle ownership:
 the standalone workload image, environment, WorkerPool reference, and snapshot
 policy. Both resources use `RuntimeEnvVar`, `RuntimeSubstratePolicy`, and
 `RuntimeSnapshotPolicy` from `go/api/v1alpha3/runtime_types.go` for their shared
-configuration. Neither resource references or inherits from the other.
+configuration. Neither resource references or inherits from the other. The snapshot policy's
+`onQuiesce` scope (`Data` by default, or `Full`) applies to both; see
+[Automatic quiescence](runtime-and-lifecycle.md#automatic-quiescence).
 
 Sessions do not run the sandbox guest. An agent can create an independent Sandbox
 through MCP, using the same service as a human caller. Its conversation and the

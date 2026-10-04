@@ -51,6 +51,10 @@ func SandboxActorTemplate(template *v1alpha3.SandboxTemplate, class atev1alpha1.
 	if err != nil {
 		return nil, "", nil, err
 	}
+	snapshotPolicy, err := snapshotConfig(template.Spec.Substrate.SnapshotPolicy.Location, template.Spec.Substrate.SnapshotPolicy.OnQuiesce)
+	if err != nil {
+		return nil, "", nil, err
+	}
 	if class == "" {
 		class = atev1alpha1.SandboxClassGvisor
 	}
@@ -93,11 +97,7 @@ func SandboxActorTemplate(template *v1alpha3.SandboxTemplate, class atev1alpha1.
 			{Name: "guest", Image: &ateapipb.ImageVolumeSource{Reference: policy.GuestImage}},
 			{Name: egressTrustVolume, SystemInfo: &ateapipb.SystemInfoVolumeSource{DataSources: []*ateapipb.SystemInfoDataSource{{TrustBundle: &ateapipb.TrustBundleDataSource{Names: []string{"egress-mitm.ate.dev"}, Path: "trust-bundle.pem"}}}}},
 		},
-		SnapshotConfig: &ateapipb.SnapshotConfig{
-			StorageLocation: template.Spec.Substrate.SnapshotPolicy.Location,
-			OnPause:         ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-			OnCommit:        ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-		},
+		SnapshotConfig: snapshotPolicy,
 	}
 	return result, revision, snapshot, nil
 }

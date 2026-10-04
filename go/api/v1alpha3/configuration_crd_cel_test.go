@@ -240,6 +240,32 @@ func TestConfigurationCRDValidation(t *testing.T) {
 			wantReject: "spec.substrate.snapshotPolicy.location",
 		},
 		{
+			name: "Harness accepts Full quiesce snapshot scope",
+			object: validHarness(namespace, "harness-quiesce-full", HarnessSpec{
+				Codex:     &CodexHarness{},
+				Substrate: RuntimeSubstratePolicy{SnapshotPolicy: RuntimeSnapshotPolicy{OnQuiesce: RuntimeSnapshotScopeFull}},
+			}),
+		},
+		{
+			name: "Harness accepts Data quiesce snapshot scope",
+			object: validHarness(namespace, "harness-quiesce-data", HarnessSpec{
+				Codex:     &CodexHarness{},
+				Substrate: RuntimeSubstratePolicy{SnapshotPolicy: RuntimeSnapshotPolicy{OnQuiesce: RuntimeSnapshotScopeData}},
+			}),
+		},
+		{
+			name: "Harness rejects an unknown quiesce snapshot scope",
+			object: validHarness(namespace, "harness-quiesce-unknown", HarnessSpec{
+				Codex:     &CodexHarness{},
+				Substrate: RuntimeSubstratePolicy{SnapshotPolicy: RuntimeSnapshotPolicy{OnQuiesce: "Memory"}},
+			}),
+			wantReject: "spec.substrate.snapshotPolicy.onQuiesce",
+		},
+		{
+			name:   "SandboxTemplate accepts Full quiesce snapshot scope",
+			object: sandboxTemplateForValidation(namespace, "sandbox-quiesce-full", func(spec *SandboxTemplateSpec) { spec.Substrate.SnapshotPolicy.OnQuiesce = RuntimeSnapshotScopeFull }),
+		},
+		{
 			name:   "SandboxTemplate allows empty literal environment values",
 			object: sandboxTemplateForValidation(namespace, "sandbox-empty-literal", func(spec *SandboxTemplateSpec) { spec.Env = []RuntimeEnvVar{{Name: "EMPTY", Value: ""}} }),
 		},

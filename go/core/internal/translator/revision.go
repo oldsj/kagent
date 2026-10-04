@@ -9,6 +9,7 @@ import (
 
 	a2apb "github.com/a2aproject/a2a-go/v2/a2apb/v1"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	"github.com/kagent-dev/kagent/go/api/v1alpha3"
 	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"google.golang.org/protobuf/proto"
 	corev1 "k8s.io/api/core/v1"
@@ -58,6 +59,9 @@ type Revision struct {
 	WorkerPoolName   string
 	SandboxClass     atev1alpha1.SandboxClass
 	SnapshotLocation string
+	// SnapshotOnQuiesce is the snapshot scope for idle suspension. Empty means
+	// Data.
+	SnapshotOnQuiesce v1alpha3.RuntimeSnapshotScope
 
 	// Provenance identifies non-secret Kubernetes inputs. Gateway-fetched
 	// credential values are deliberately excluded from revision identity.
@@ -90,24 +94,25 @@ func (r *Revision) Digest() (RevisionID, error) {
 		return RevisionID{}, fmt.Errorf("unsupported sandbox class %q", sandboxClass)
 	}
 	raw, err := json.Marshal(struct {
-		AgentName          string                   `json:"agentName"`
-		AgentUID           string                   `json:"agentUID"`
-		Namespace          string                   `json:"namespace"`
-		Image              string                   `json:"image"`
-		Command            []string                 `json:"command,omitempty"`
-		Args               []string                 `json:"args,omitempty"`
-		Environment        []corev1.EnvVar          `json:"environment"`
-		ConfigJSON         json.RawMessage          `json:"config"`
-		WorkerPoolName     string                   `json:"workerPoolName"`
-		SnapshotLocation   string                   `json:"snapshotLocation"`
-		Provenance         json.RawMessage          `json:"provenance"`
-		Credentials        []egress.Credential      `json:"credentials,omitempty"`
-		EgressDestinations []string                 `json:"egressDestinations"`
-		SandboxClass       atev1alpha1.SandboxClass `json:"sandboxClass"`
+		AgentName          string                        `json:"agentName"`
+		AgentUID           string                        `json:"agentUID"`
+		Namespace          string                        `json:"namespace"`
+		Image              string                        `json:"image"`
+		Command            []string                      `json:"command,omitempty"`
+		Args               []string                      `json:"args,omitempty"`
+		Environment        []corev1.EnvVar               `json:"environment"`
+		ConfigJSON         json.RawMessage               `json:"config"`
+		WorkerPoolName     string                        `json:"workerPoolName"`
+		SnapshotLocation   string                        `json:"snapshotLocation"`
+		SnapshotOnQuiesce  v1alpha3.RuntimeSnapshotScope `json:"snapshotOnQuiesce,omitempty"`
+		Provenance         json.RawMessage               `json:"provenance"`
+		Credentials        []egress.Credential           `json:"credentials,omitempty"`
+		EgressDestinations []string                      `json:"egressDestinations"`
+		SandboxClass       atev1alpha1.SandboxClass      `json:"sandboxClass"`
 	}{
 		AgentName: r.AgentName, AgentUID: r.AgentUID, Namespace: r.Namespace,
 		Image: r.Image, Command: r.Command, Args: r.Args, Environment: r.Environment, ConfigJSON: r.ConfigJSON,
-		WorkerPoolName: r.WorkerPoolName, SnapshotLocation: r.SnapshotLocation, Provenance: r.Provenance,
+		WorkerPoolName: r.WorkerPoolName, SnapshotLocation: r.SnapshotLocation, SnapshotOnQuiesce: r.SnapshotOnQuiesce, Provenance: r.Provenance,
 		Credentials: r.Credentials, EgressDestinations: r.EgressDestinations,
 		SandboxClass: sandboxClass,
 	})

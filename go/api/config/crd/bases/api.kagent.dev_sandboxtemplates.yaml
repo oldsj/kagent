@@ -87,6 +87,17 @@ spec:
                           by Substrate.
                         pattern: ^[^[:space:]]+$
                         type: string
+                      onQuiesce:
+                        description: |-
+                          OnQuiesce selects the snapshot scope taken when an idle Actor suspends or
+                          a Session is explicitly suspended. It defaults to Data. Full keeps
+                          processes such as a dev server alive across suspension, at the cost of
+                          larger snapshots and slower suspend and wake. Snapshots taken while a
+                          task waits for input are always Full.
+                        enum:
+                        - Data
+                        - Full
+                        type: string
                     required:
                     - location
                     type: object
