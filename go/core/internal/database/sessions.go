@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 	"github.com/kagent-dev/kagent/go/api/workspace"
+	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -47,10 +48,12 @@ func marshalSession(session *apiv1alpha1.Session) ([]byte, error) {
 	return data, nil
 }
 
-// sameSessionRequest reports whether two creation requests target the same Agent
-// and workspace. Names and other mutable fields do not affect retry identity.
+// sameSessionRequest reports whether two creation requests target the same Agent,
+// workspace, and credential references. Names and other mutable fields do not
+// affect retry identity.
 func sameSessionRequest(session, request *apiv1alpha1.Session) bool {
-	return proto.Equal(session.GetAgent(), request.GetAgent()) && proto.Equal(session.GetWorkspace(), request.GetWorkspace())
+	return proto.Equal(session.GetAgent(), request.GetAgent()) && proto.Equal(session.GetWorkspace(), request.GetWorkspace()) &&
+		proto.Equal(&apiv1alpha1.Session{Credentials: session.GetCredentials()}, &apiv1alpha1.Session{Credentials: request.GetCredentials()})
 }
 
 // CreateSession atomically reserves a session, its conversation history, and the
@@ -119,11 +122,15 @@ func insertSession(ctx context.Context, db pgx.Tx, request *apiv1alpha1.Session,
 	if err != nil {
 		return sessionRow{}, fmt.Errorf("get latest successful runtime revision: %w", notFoundOr(err))
 	}
-	if _, err := getAvailableRuntimeRevisionForUpdate(ctx, db, revision.Revision); err != nil {
+	pinned, err := getAvailableRuntimeRevisionForUpdate(ctx, db, revision.Revision)
+	if err != nil {
 		return sessionRow{}, err
 	}
 	if err := checkWorkspaceOrigin(ctx, db, revision.Revision, request.GetWorkspace()); err != nil {
 		return sessionRow{}, err
+	}
+	if _, err := egress.SessionCredentials(request.GetAgent().GetNamespace(), request.GetCredentials(), pinned.EgressDestinations, pinned.Credentials); err != nil {
+		return sessionRow{}, fmt.Errorf("%w: %v", ErrSessionCredentialNotAllowed, err)
 	}
 	session := proto.CloneOf(request)
 	historyID := uuid.New()

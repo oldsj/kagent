@@ -245,6 +245,14 @@ spec:
                         - message: modelConfigRef name must not be empty
                           rule: self.modelConfigRef.name.size() > 0
                     type: object
+                  sessionIdleTTL:
+                    description: |-
+                      SessionIdleTTL overrides the controller default for all Sessions of this
+                      Agent, including existing Sessions. Zero disables idle expiration.
+                    type: string
+                    x-kubernetes-validations:
+                    - message: sessionIdleTTL must be nonnegative
+                      rule: duration(self) >= duration('0s')
                   substrate:
                     description: RuntimeSubstratePolicy contains the Substrate policy
                       shared by all runtime variants.

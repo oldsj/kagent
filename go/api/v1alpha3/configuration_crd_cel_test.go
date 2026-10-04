@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -74,6 +75,16 @@ func TestConfigurationCRDValidation(t *testing.T) {
 		object     ctrlclient.Object
 		wantReject string
 	}{
+
+		{
+			name: "Harness zero TTL", object: validHarness(namespace, "harness-zero-ttl", HarnessSpec{Claude: &ClaudeHarness{}, SessionIdleTTL: &metav1.Duration{Duration: 0}}),
+		},
+		{
+			name: "Harness positive TTL", object: validHarness(namespace, "harness-positive-ttl", HarnessSpec{Claude: &ClaudeHarness{}, SessionIdleTTL: &metav1.Duration{Duration: 30 * time.Second}}),
+		},
+		{
+			name: "Harness negative TTL", object: validHarness(namespace, "harness-negative-ttl", HarnessSpec{Claude: &ClaudeHarness{}, SessionIdleTTL: &metav1.Duration{Duration: -time.Second}}), wantReject: "sessionIdleTTL must be nonnegative",
+		},
 		{
 			name:       "Harness requires one runtime",
 			object:     validHarness(namespace, "harness-no-runtime", HarnessSpec{}),

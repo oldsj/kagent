@@ -37,6 +37,7 @@ import (
 // status instead of disappearing from the graph.
 type AgentReconciliation struct {
 	Agent                 *kagentv1alpha3.Agent
+	SessionIdleTTL        *database.SessionIdleTTLPolicy
 	Target                *compiledTarget
 	Warnings              []string
 	CompilationFailure    *ReconciliationFailure
@@ -90,6 +91,20 @@ type ReconciliationFailure struct {
 	Retryable bool
 }
 
+// resolvedSessionIdleTTL represents an omitted override separately from an
+// unresolved Harness, rounding positive durations up to whole seconds.
+func resolvedSessionIdleTTL(override *metav1.Duration) *database.SessionIdleTTLPolicy {
+	policy := &database.SessionIdleTTLPolicy{}
+	if override != nil {
+		seconds := int64(override.Duration / time.Second)
+		if override.Duration%time.Second != 0 {
+			seconds++
+		}
+		policy.Seconds = &seconds
+	}
+	return policy
+}
+
 func newAgentReconciliations(
 	agents krt.Collection[*kagentv1alpha3.Agent],
 	collections v2translator.Collections,
@@ -98,6 +113,15 @@ func newAgentReconciliations(
 ) krt.Collection[AgentReconciliation] {
 	return krt.NewCollection(agents, func(ctx krt.HandlerContext, agent *kagentv1alpha3.Agent) *AgentReconciliation {
 		state := &AgentReconciliation{Agent: agent}
+		// Lifecycle policy still applies when unrelated runtime inputs fail compilation.
+		if agent.Spec.Harness != nil {
+			state.SessionIdleTTL = resolvedSessionIdleTTL(agent.Spec.Harness.SessionIdleTTL)
+		} else if agent.Spec.HarnessRef != nil {
+			harness := krt.FetchOne(ctx, collections.Harnesses, krt.FilterKey(agent.Namespace+"/"+agent.Spec.HarnessRef.Name))
+			if harness != nil {
+				state.SessionIdleTTL = resolvedSessionIdleTTL((*harness).Spec.SessionIdleTTL)
+			}
+		}
 		compilation, err := v2translator.NewCompiler(ctx, collections, map[v2translator.HarnessType]v2translator.HarnessCompiler{
 			v2translator.HarnessTypeKagent: kagenttranslator.NewCompiler(ctx, collections),
 			v2translator.HarnessTypeCodex:  codextranslator.NewCompiler(ctx, collections),
@@ -312,8 +336,8 @@ func (r *Reconciler) reconcileAgent(ctx context.Context, key string) error {
 	definition := database.AgentDefinition{
 		Namespace: state.Agent.Namespace, AgentName: state.Agent.Name,
 		AgentUID: string(state.Agent.UID), DesiredRevision: state.desiredRevision(),
+		SessionIdleTTL: state.SessionIdleTTL,
 	}
-
 	// Store the desired edge before creating compute so a concurrent collector
 	// cannot mistake the revision for abandoned state. Unresolved inputs clear
 	// the old desired edge without inventing a runtime revision;
