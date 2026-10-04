@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	apiv1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1"
 	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"github.com/kagent-dev/kagent/go/core/pkg/egresspolicy"
 )
@@ -65,6 +66,19 @@ func (c *Client) GetRuntimeEgressPolicy(ctx context.Context, revision string) (e
 }
 
 var _ egress.PolicyStore = (*Client)(nil)
+
+// GetSessionCredentials returns the Agent namespace and credential bindings a
+// Session was created with. A deleted or unknown Session is an error: its Actor
+// must not keep a policy computed without its bindings.
+func (c *Client) GetSessionCredentials(ctx context.Context, sessionID string) (string, []*apiv1.SessionCredential, error) {
+	session, err := c.GetSessionByID(ctx, sessionID)
+	if err != nil {
+		return "", nil, fmt.Errorf("get Session %s credentials: %w", sessionID, err)
+	}
+	return session.GetAgent().GetRef().GetNamespace(), session.GetCredentials(), nil
+}
+
+var _ egress.SessionCredentialStore = (*Client)(nil)
 
 // RuntimeEgressSourceKind identifies a Kubernetes owner of runtime instances.
 type RuntimeEgressSourceKind string

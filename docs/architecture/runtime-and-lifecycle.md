@@ -151,7 +151,7 @@ fenced, including after preparation failures.
 The worker uses the existing Actor deletion workflow and execution claims, so
 runtime I/O holds no database locks and overlapping attempts cannot issue the
 same generation concurrently. Failed expiration resumes on later sweeps or after
-leader replacement; changing a nonzero TTL does not cancel admitted deletion.
+leader replacement; changing or disabling a TTL does not cancel admitted deletion.
 
 After runtime deletion succeeds, the normal delete completion transaction removes
 the session, shares, runtime row, and creation receipt. GetSession returns NotFound;

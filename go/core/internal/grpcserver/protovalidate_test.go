@@ -181,3 +181,31 @@ func TestAgentRequestValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestSessionCredentialRequestValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name, origin, header, secret, key string
+		count                             int
+		valid                             bool
+	}{
+		{"HTTP", "http://mcp.test.svc.cluster.local", "Authorization", "tokens", "binding-id", 1, true},
+		{"HTTPS", "https://mcp.example.com:443", "authorization", "tokens", "binding-id", 1, true},
+		{"path", "http://mcp.example.com/mcp", "authorization", "tokens", "key", 1, false},
+		{"query", "http://mcp.example.com?x=1", "authorization", "tokens", "key", 1, false},
+		{"header", "http://mcp.example.com", "bad header", "tokens", "key", 1, false},
+		{"missing Secret name", "http://mcp.example.com", "authorization", "", "key", 1, false},
+		{"invalid key", "http://mcp.example.com", "authorization", "tokens", "../key", 1, false},
+		{"too many", "http://mcp.example.com", "authorization", "tokens", "key", 5, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			request := &apiv1.CreateSessionRequest{Agent: &apiv1.ResourceReference{Namespace: "team-a", Name: "assistant"}, RequestId: "credential-test"}
+			for range tc.count {
+				request.Credentials = append(request.Credentials, &apiv1.SessionCredential{Origin: tc.origin, Header: tc.header, SecretRef: &apiv1.SecretKeyReference{Name: tc.secret, Key: tc.key}})
+			}
+			err := protovalidate.Validate(request)
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%v, error=%v", tc.valid, err)
+			}
+		})
+	}
+}
