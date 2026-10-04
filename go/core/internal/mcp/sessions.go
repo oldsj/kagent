@@ -233,7 +233,7 @@ func (h *Handler) createSession(ctx context.Context, _ *mcp.CallToolRequest, inp
 	if err := protovalidate.Validate(create); err != nil {
 		return toolError(err), CreateSessionOutput{}, nil
 	}
-	session, err := h.sessions.Create(ctx, create.GetAgent(), create.GetRequestId(), create.GetName())
+	session, err := h.sessions.Create(ctx, create.GetAgent(), create.GetRequestId(), create.GetName(), nil)
 	if err != nil {
 		return sessionToolError(err), CreateSessionOutput{}, nil
 	}

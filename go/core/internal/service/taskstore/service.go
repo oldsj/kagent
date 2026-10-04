@@ -192,3 +192,14 @@ func storageError(err error) error {
 		return err
 	}
 }
+
+// GetWorkspace returns the repository checkout the Session asked for. An empty
+// response means none was requested. The Session row is authoritative: the runtime
+// never receives the workspace through its image, environment, or config.
+func (s *Service) GetWorkspace(ctx context.Context, input *runtimev1.TaskStoreServiceGetWorkspaceRequest) (*runtimev1.TaskStoreServiceGetWorkspaceResponse, error) {
+	session, err := s.session(ctx, input.SessionId)
+	if err != nil {
+		return nil, err
+	}
+	return &runtimev1.TaskStoreServiceGetWorkspaceResponse{Workspace: session.GetWorkspace()}, nil
+}

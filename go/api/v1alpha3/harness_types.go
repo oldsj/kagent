@@ -106,6 +106,29 @@ type CodexHarness struct{}
 // ClaudeHarness selects the Claude runtime adapter.
 type ClaudeHarness struct{}
 
+// HarnessGit lets sessions of a Harness bootstrap a Git workspace. Clone
+// traffic is limited to the listed origins. The egress gateway injects the
+// credential; the runtime never sees it.
+//
+// +kubebuilder:validation:XValidation:rule="!has(self.credentialSecretRef) || self.origins.size() == 1",message="credentialSecretRef requires exactly one origin because the gateway holds one credential per host and header"
+type HarnessGit struct {
+	// Origins lists the HTTPS Git hosts sessions may clone from, for example
+	// github.com. Each is an exact DNS name without scheme, port, or path.
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=16
+	// +kubebuilder:validation:items:MaxLength=253
+	// +kubebuilder:validation:items:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)+$`
+	// +listType=set
+	// +required
+	Origins []string `json:"origins"`
+
+	// CredentialSecretRef names a key in a same-namespace Secret holding the
+	// complete Authorization header value for the origin, for example
+	// "Basic <base64 of x-access-token:TOKEN>". Omitted clones anonymously.
+	// +optional
+	CredentialSecretRef *SecretKeyReference `json:"credentialSecretRef,omitempty"`
+}
+
 // BYOHarness selects an image that implements kagent's private A2A contract.
 type BYOHarness struct{}
 
@@ -143,6 +166,7 @@ type HarnessWorkload struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.byo) || (has(self.workload) && has(self.workload.command))",message="BYO harnesses must specify workload.command"
 // +kubebuilder:validation:XValidation:rule="!has(self.claude) || !has(self.workload) || (!has(self.workload.command) && !has(self.workload.args))",message="Claude harnesses do not support workload.command or workload.args"
 // +kubebuilder:validation:XValidation:rule="!has(self.codex) || !has(self.workload) || (!has(self.workload.command) && !has(self.workload.args))",message="Codex harnesses do not support workload.command or workload.args"
+// +kubebuilder:validation:XValidation:rule="!has(self.git) || has(self.codex) || has(self.claude)",message="git is supported only by the codex and claude harnesses"
 type HarnessSpec struct {
 	// +optional
 	Kagent *KagentHarness `json:"kagent,omitempty"`
@@ -155,6 +179,11 @@ type HarnessSpec struct {
 
 	// +optional
 	BYO *BYOHarness `json:"byo,omitempty"`
+
+	// Git lets sessions bootstrap a repository checkout into the workspace.
+	// Only the Codex and Claude adapters support it.
+	// +optional
+	Git *HarnessGit `json:"git,omitempty"`
 
 	// Workload overrides the built-in runtime image and its command. BYO requires it.
 	// +optional

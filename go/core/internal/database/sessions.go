@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/kagent-dev/kagent/go/api/workspace"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -47,9 +48,10 @@ func marshalSession(session *apiv1.Session) ([]byte, error) {
 	return data, nil
 }
 
-// sameSessionRequest reports whether two creation requests target the same Agent. Names and other mutable fields do not affect retry identity.
+// sameSessionRequest reports whether two creation requests target the same Agent
+// and workspace. Names and other mutable fields do not affect retry identity.
 func sameSessionRequest(session, request *apiv1.Session) bool {
-	return proto.Equal(session.GetAgent().GetRef(), request.GetAgent().GetRef())
+	return proto.Equal(session.GetAgent().GetRef(), request.GetAgent().GetRef()) && proto.Equal(session.GetWorkspace(), request.GetWorkspace())
 }
 
 // CreateSession atomically reserves a session, its conversation history, and the
@@ -142,6 +144,9 @@ func insertPinnedSession(ctx context.Context, db pgx.Tx, request *apiv1.Session,
 	}
 	now, err := queryOne(ctx, db, `SELECT statement_timestamp()::timestamptz`, pgx.RowTo[time.Time])
 	if err != nil {
+		return sessionRow{}, err
+	}
+	if err := checkWorkspaceOrigin(ctx, db, revisionID, request.GetWorkspace()); err != nil {
 		return sessionRow{}, err
 	}
 	session := proto.CloneOf(request)
@@ -345,4 +350,27 @@ func releaseAgentRuntimeReferences(ctx context.Context, tx pgx.Tx, id uuid.UUID)
 		return err
 	}
 	return execSQL(ctx, tx, `DELETE FROM session_share WHERE session_id = $1`, id)
+}
+
+// checkWorkspaceOrigin rejects a requested workspace whose repository host is not
+// among the pinned revision's Git origins. A Session without a workspace always
+// passes. The revision row is already locked, so its origins cannot change.
+func checkWorkspaceOrigin(ctx context.Context, db pgx.Tx, revision string, requested *apiv1.Workspace) error {
+	if requested == nil {
+		return nil
+	}
+	host, err := workspace.RepoHost(requested.GetRepo())
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrWorkspaceNotAllowed, err)
+	}
+	origins, err := queryOne(ctx, db, `
+		SELECT git_origins FROM runtime_revision WHERE revision = $1
+	`, pgx.RowTo[[]string], revision)
+	if err != nil {
+		return fmt.Errorf("get runtime revision %s Git origins: %w", revision, notFoundOr(err))
+	}
+	if !(workspace.Git{Origins: origins}).Allows(host) {
+		return fmt.Errorf("%w: %s", ErrWorkspaceNotAllowed, host)
+	}
+	return nil
 }

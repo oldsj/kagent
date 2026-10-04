@@ -14,6 +14,7 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	apiv1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1"
+	runtimev1 "github.com/kagent-dev/kagent/go/api/gen/kagent/runtime/v1"
 )
 
 func TestProtovalidateUnaryInterceptor(t *testing.T) {
@@ -70,6 +71,16 @@ func TestSessionRequestValidation(t *testing.T) {
 		{"share positive ttl", &apiv1.CreateSessionShareRequest{SessionId: "11111111-1111-4111-8111-111111111111", Ttl: durationpb.New(time.Hour)}, true},
 		{"share zero ttl", &apiv1.CreateSessionShareRequest{SessionId: "11111111-1111-4111-8111-111111111111", Ttl: durationpb.New(0)}, false},
 		{"share negative ttl", &apiv1.CreateSessionShareRequest{SessionId: "11111111-1111-4111-8111-111111111111", Ttl: durationpb.New(-time.Second)}, false},
+		{"workspace", &apiv1.CreateSessionRequest{Agent: &apiv1.ResourceReference{Namespace: "team-a", Name: "assistant"}, RequestId: "request-1", Workspace: &apiv1.Workspace{Repo: "https://github.com/oldsj/testrepo", Ref: "main", Branch: "spike-b-test", Depth: 1}}, true},
+		{"workspace without ref or depth", &apiv1.CreateSessionRequest{Agent: &apiv1.ResourceReference{Namespace: "team-a", Name: "assistant"}, RequestId: "request-1", Workspace: &apiv1.Workspace{Repo: "https://github.com/oldsj/testrepo"}}, true},
+		{"workspace without repo", &apiv1.CreateSessionRequest{Agent: &apiv1.ResourceReference{Namespace: "team-a", Name: "assistant"}, RequestId: "request-1", Workspace: &apiv1.Workspace{Ref: "main"}}, false},
+		{"workspace repo is not a URI", &apiv1.CreateSessionRequest{Agent: &apiv1.ResourceReference{Namespace: "team-a", Name: "assistant"}, RequestId: "request-1", Workspace: &apiv1.Workspace{Repo: "not a uri"}}, false},
+		{"workspace option-like ref", &apiv1.CreateSessionRequest{Agent: &apiv1.ResourceReference{Namespace: "team-a", Name: "assistant"}, RequestId: "request-1", Workspace: &apiv1.Workspace{Repo: "https://github.com/o/r", Ref: "--upload-pack=x"}}, false},
+		{"workspace branch with a space", &apiv1.CreateSessionRequest{Agent: &apiv1.ResourceReference{Namespace: "team-a", Name: "assistant"}, RequestId: "request-1", Workspace: &apiv1.Workspace{Repo: "https://github.com/o/r", Branch: "a b"}}, false},
+		{"workspace negative depth", &apiv1.CreateSessionRequest{Agent: &apiv1.ResourceReference{Namespace: "team-a", Name: "assistant"}, RequestId: "request-1", Workspace: &apiv1.Workspace{Repo: "https://github.com/o/r", Depth: -1}}, false},
+		{"workspace excessive depth", &apiv1.CreateSessionRequest{Agent: &apiv1.ResourceReference{Namespace: "team-a", Name: "assistant"}, RequestId: "request-1", Workspace: &apiv1.Workspace{Repo: "https://github.com/o/r", Depth: 1001}}, false},
+		{"runtime workspace read", &runtimev1.TaskStoreServiceGetWorkspaceRequest{SessionId: "11111111-1111-4111-8111-111111111111"}, true},
+		{"runtime workspace read bad id", &runtimev1.TaskStoreServiceGetWorkspaceRequest{SessionId: "nope"}, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			err := validator.Validate(test.request)

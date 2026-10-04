@@ -20,6 +20,7 @@ import (
 	runtimeconfig "github.com/kagent-dev/kagent/go/adk/pkg/config"
 	configv1 "github.com/kagent-dev/kagent/go/api/gen/kagent/config/v1"
 	"github.com/kagent-dev/kagent/go/api/v1alpha3"
+	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"github.com/kagent-dev/kagent/go/core/internal/substrate"
 	"github.com/kagent-dev/kagent/go/core/internal/translator"
 	byotranslator "github.com/kagent-dev/kagent/go/core/internal/translator/byo"
@@ -1145,4 +1146,79 @@ func TestRevisionDigestIncludesTokenPassthroughTargets(t *testing.T) {
 	revision.TokenPassthroughTargets[0].Header = "x-api-key"
 	require.NotEqual(t, without, bearer)
 	require.NotEqual(t, bearer, digest(), "the header is part of revision identity")
+}
+
+// gitRuntimeFixture is a Codex or Claude Harness with its template and model.
+func gitRuntimeFixture(harnessType translator.HarnessType) (*v1alpha3.Harness, *v1alpha3.AgentTemplate, *v1alpha3.ModelConfig) {
+	harness := &v1alpha3.Harness{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "test", Name: string(harnessType)},
+		Spec: v1alpha3.HarnessSpec{
+			Workload: v1alpha3.HarnessWorkload{Image: new("example.com/agent@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")},
+			Substrate: v1alpha3.RuntimeSubstratePolicy{
+				WorkerPoolRef: corev1.LocalObjectReference{Name: "selected"}, SnapshotPolicy: v1alpha3.RuntimeSnapshotPolicy{Location: "snapshots"},
+			},
+		},
+	}
+	template := &v1alpha3.AgentTemplate{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "test", Name: "assistant"},
+		Spec:       v1alpha3.AgentTemplateSpec{ModelConfig: &v1alpha3.ObjectReference{Name: "default-model"}, SystemPrompt: "help"},
+	}
+	model := modelConfig()
+	model.Spec.APIKeySecret, model.Spec.APIKeySecretKey = "model-auth", "api-key"
+	switch harnessType {
+	case translator.HarnessTypeCodex:
+		harness.Spec.Codex = &v1alpha3.CodexHarness{}
+		model.Spec.OpenAI = &v1alpha3.OpenAIConfig{APIFormat: new(v1alpha3.OpenAIAPIFormatResponses)}
+	case translator.HarnessTypeClaude:
+		harness.Spec.Claude = &v1alpha3.ClaudeHarness{}
+		model.Spec.Provider, model.Spec.Model = v1alpha3.ModelProviderAnthropic, "claude-sonnet-4-5"
+	}
+	return harness, template, model
+}
+
+func TestCompileAgentGit(t *testing.T) {
+	for _, harnessType := range []translator.HarnessType{translator.HarnessTypeCodex, translator.HarnessTypeClaude} {
+		t.Run(string(harnessType), func(t *testing.T) {
+			harness, template, model := gitRuntimeFixture(harnessType)
+			objects := []any{
+				model,
+				&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "test", Name: "model-auth"}, Data: map[string][]byte{"api-key": []byte("secret")}},
+				&atev1.WorkerPool{ObjectMeta: metav1.ObjectMeta{Namespace: "test", Name: "selected"}},
+			}
+			compile := func(git *v1alpha3.HarnessGit) (*translator.CompileResult, translator.RevisionID) {
+				harness.Spec.Git = git
+				result, err := compiler(t, append(slices.Clone(objects), harness.DeepCopy())...).CompileAgent(t.Context(), inlineAgent(harness, template))
+				require.NoError(t, err)
+				digest, err := result.Digest()
+				require.NoError(t, err)
+				return result, digest
+			}
+
+			// Unset leaves every output exactly as it was before the field existed.
+			unset, unsetDigest := compile(nil)
+			require.NotContains(t, string(unset.ConfigJSON), `"git"`)
+			require.Empty(t, unset.GitOrigins)
+			require.NotContains(t, unset.EgressDestinations, "https://github.com:443")
+
+			anonymous, anonymousDigest := compile(&v1alpha3.HarnessGit{Origins: []string{"GitHub.com"}})
+			require.Contains(t, string(anonymous.ConfigJSON), `"git":{"origins":["github.com"]}`)
+			require.Equal(t, []string{"github.com"}, anonymous.GitOrigins)
+			require.Contains(t, anonymous.EgressDestinations, "https://github.com:443")
+			require.Equal(t, unset.Credentials, anonymous.Credentials, "anonymous clones bind no credential")
+			require.NotEqual(t, unsetDigest, anonymousDigest)
+
+			credentialed, credentialedDigest := compile(&v1alpha3.HarnessGit{
+				Origins:             []string{"github.com"},
+				CredentialSecretRef: &v1alpha3.SecretKeyReference{Name: "git-auth", Key: "authorization"},
+			})
+			require.Contains(t, string(credentialed.ConfigJSON), `"git":{"origins":["github.com"],"credential":true}`)
+			require.Contains(t, credentialed.Credentials, egress.Credential{
+				Origin: "https://github.com:443", Header: "authorization", URI: "ate-secret://k8s.io/default/test/git-auth/authorization",
+			})
+			require.NotEqual(t, anonymousDigest, credentialedDigest)
+			for _, variable := range credentialed.Environment {
+				require.NotContains(t, variable.Value, "authorization", "the credential never enters the actor environment")
+			}
+		})
+	}
 }

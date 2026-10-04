@@ -403,6 +403,15 @@ load these skills; the Go ADK BYO fixture does so.
   Optional model, prompt, tool, skill, and plugin configuration is
   supplied in the ADK-shaped format when requested.
 
+`spec.git` on a Codex or Claude Harness lets Sessions bootstrap a repository checkout.
+It lists HTTPS `origins` (exact DNS names) and may name one `credentialSecretRef`, which
+requires exactly one origin. The compiler adds each origin to the egress allowlist, binds
+the credential to the `authorization` header of that origin, passes `{origins, credential}`
+to the adapter, and records the origins on the immutable runtime revision so Session
+creation can check a requested repository against them. All of this is omitted when
+`spec.git` is unset, so such a revision's configuration and digest are unchanged. The
+kagent and BYO harnesses reject the field.
+
 The kagent and BYO compilers serialize the same `ADKConfig` protobuf
 contract from `adk.proto` using ProtoJSON. Go and Python use generated messages;
 validation rules live in the schema. Model providers form a required `oneof`,

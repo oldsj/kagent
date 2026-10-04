@@ -14,6 +14,9 @@ var (
 	ErrConflict = errors.New("resource conflict")
 	// ErrFailedPrecondition reports an unmet requirement for an operation.
 	ErrFailedPrecondition = errors.New("precondition failed")
+	// ErrWorkspaceNotAllowed reports a Session workspace whose repository host is not
+	// among the pinned runtime revision's Git origins.
+	ErrWorkspaceNotAllowed = errors.New("workspace repository host is not an allowed Git origin")
 	// ErrIdempotencyConflict is distinct because clients must use a new request ID.
 	ErrIdempotencyConflict = errors.New("request id was already used with different parameters")
 )

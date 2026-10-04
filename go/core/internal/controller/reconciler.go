@@ -415,6 +415,7 @@ func (r *Reconciler) reconcileAgent(ctx context.Context, key string) error {
 		EgressDestinations:      target.Revision.EgressDestinations,
 		Credentials:             target.Revision.Credentials,
 		TokenPassthroughTargets: target.Revision.TokenPassthroughTargets,
+		GitOrigins:              target.Revision.GitOrigins,
 		ActorTemplateAtespace:   desiredRef.GetAtespace(), ActorTemplateName: desiredRef.GetName(),
 		ActorTemplateSpecDigest: digest,
 	}
