@@ -102,7 +102,14 @@ type KagentHarnessMemory struct {
 }
 
 // CodexHarness selects the Codex runtime adapter.
-type CodexHarness struct{}
+type CodexHarness struct {
+	// AutoCompactTokenLimit is the context size, in tokens, at which Codex
+	// compacts the conversation on its own. Codex applies its model-specific
+	// default when unset.
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	AutoCompactTokenLimit *int64 `json:"autoCompactTokenLimit,omitempty"`
+}
 
 // ClaudeHarness selects the Claude runtime adapter.
 type ClaudeHarness struct{}

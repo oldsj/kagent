@@ -58,6 +58,15 @@ spec:
                 type: object
               codex:
                 description: CodexHarness selects the Codex runtime adapter.
+                properties:
+                  autoCompactTokenLimit:
+                    description: |-
+                      AutoCompactTokenLimit is the context size, in tokens, at which Codex
+                      compacts the conversation on its own. Codex applies its model-specific
+                      default when unset.
+                    format: int64
+                    minimum: 1
+                    type: integer
                 type: object
               env:
                 items:
