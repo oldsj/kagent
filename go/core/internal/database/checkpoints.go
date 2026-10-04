@@ -78,6 +78,7 @@ func (c *Client) ForkSession(ctx context.Context, checkpointID, userID, requestI
 		}
 		historyID := uuid.New()
 		now := timestamppb.Now()
+		// Session credentials identify the source binding and must not be inherited.
 		session := &apiv1alpha1.Session{
 			Id: sessionID, Creator: userID, ContextId: sessionID,
 			Name:             source.GetName(),

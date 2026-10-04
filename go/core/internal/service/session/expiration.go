@@ -15,8 +15,8 @@ import (
 )
 
 type expirationStore interface {
-	ListIdleSessions(context.Context, time.Time, string, int) ([]string, error)
-	BeginIdleSessionDeletion(context.Context, string, time.Time) (*database.IdleSessionDeletion, error)
+	ListIdleSessions(context.Context, time.Time, time.Duration, string, int) ([]string, error)
+	BeginIdleSessionDeletion(context.Context, string, time.Time, time.Duration) (*database.IdleSessionDeletion, error)
 }
 
 // ExpirationWorker deletes idle sessions through their ordinary delete workflow.
@@ -51,18 +51,15 @@ func NewExpirationWorker(store expirationStore, workflow *ActorWorkflow, idleTTL
 func (*ExpirationWorker) NeedLeaderElection() bool { return true }
 
 // Start scans bounded pages, like sandbox expiration. Ordinary pending lifecycle
-// work is still client-driven. Zero disables both admission and expiration retries.
+// work is still client-driven. A zero default still scans for explicit Agent
+// overrides and admitted deletions.
 func (e *ExpirationWorker) Start(ctx context.Context) error {
-	if e.idleTTL == 0 {
-		<-ctx.Done()
-		return nil
-	}
 	ticker := time.NewTicker(e.pollInterval)
 	defer ticker.Stop()
 	var afterID string
 	for ctx.Err() == nil {
-		before := time.Now().Add(-e.idleTTL)
-		ids, err := e.store.ListIdleSessions(ctx, before, afterID, 100)
+		now := time.Now()
+		ids, err := e.store.ListIdleSessions(ctx, now, e.idleTTL, afterID, 100)
 		if err != nil {
 			logging.FromContext(ctx).ErrorContext(ctx, "list idle sessions", "error", err)
 		} else {
@@ -70,7 +67,7 @@ func (e *ExpirationWorker) Start(ctx context.Context) error {
 			group.SetLimit(4)
 			for _, id := range ids {
 				group.Go(func() error {
-					if err := e.expire(ctx, id, before); err != nil && !errors.Is(err, database.ErrConflict) && !errors.Is(err, database.ErrFailedPrecondition) && !errors.Is(err, database.ErrNotFound) && ctx.Err() == nil {
+					if err := e.expire(ctx, id, now); err != nil && !errors.Is(err, database.ErrConflict) && !errors.Is(err, database.ErrFailedPrecondition) && !errors.Is(err, database.ErrNotFound) && ctx.Err() == nil {
 						logging.FromContext(ctx).ErrorContext(ctx, "expire session", "session_id", id, "error", err)
 					}
 					return nil
@@ -93,10 +90,10 @@ func (e *ExpirationWorker) Start(ctx context.Context) error {
 	return nil
 }
 
-func (e *ExpirationWorker) expire(ctx context.Context, id string, before time.Time) error {
+func (e *ExpirationWorker) expire(ctx context.Context, id string, now time.Time) error {
 	ctx, cancel := context.WithTimeout(ctx, database.RuntimeOperationTimeout)
 	defer cancel()
-	deletion, err := e.store.BeginIdleSessionDeletion(ctx, id, before)
+	deletion, err := e.store.BeginIdleSessionDeletion(ctx, id, now, e.idleTTL)
 	if err != nil {
 		return err
 	}

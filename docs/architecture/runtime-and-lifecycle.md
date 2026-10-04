@@ -88,8 +88,13 @@ Substrate settlement and the complete multi-replica rollout remain acceptance wo
 Sessions expire after seven days without task activity by default, using the same
 bounded deletion workflow as Sandboxes. `controller.sessionIdleTTL` in Helm sets
 `KAGENT_SESSION_IDLE_TTL` on the controller. Values use Go durations (`168h` for seven days,
-`720h` for thirty); `0` disables the worker, including retries, and negative values
-are rejected. There is no per-agent override or maximum TTL.
+`720h` for thirty); zero disables default admission, and negative values are
+rejected. `Harness.spec.sessionIdleTTL` (including inline Agent harnesses) overrides
+the default: omitted inherits it, `0s` never expires, and positive durations replace
+it. Subsecond durations round up to the next second. The mutable TTL is stored on
+`agent_definition`, so edits affect existing Sessions without changing their pinned
+runtime revision. A positive override works even when the controller default is zero.
+There is no maximum TTL beyond the duration type's range.
 
 Idle time is measured from the later of session creation and the latest stored
 A2A event's database timestamp. Forks retain original event timestamps, so their
@@ -108,7 +113,7 @@ fenced, including after preparation failures.
 The worker uses the existing Actor deletion workflow and execution claims, so
 runtime I/O holds no database locks and overlapping attempts cannot issue the
 same generation concurrently. Failed expiration resumes on later sweeps or after
-leader replacement; changing a nonzero TTL does not cancel admitted deletion.
+leader replacement; changing or disabling a TTL does not cancel admitted deletion.
 
 After runtime deletion succeeds, the normal delete completion transaction removes
 the session, shares, runtime row, and creation receipt. GetSession returns NotFound;

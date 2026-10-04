@@ -42,8 +42,9 @@ func TestReconcilerPersistsPairInOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	state := AgentReconciliation{
-		Agent:  template,
-		Target: &compiledTarget{Revision: *revision, RevisionID: revisionID, ActorTemplate: desiredActor},
+		Agent:          template,
+		SessionIdleTTL: resolvedSessionIdleTTL(&metav1.Duration{Duration: 1500 * time.Millisecond}),
+		Target:         &compiledTarget{Revision: *revision, RevisionID: revisionID, ActorTemplate: desiredActor},
 	}
 	reconciliations := krt.NewStaticCollection(nil, []AgentReconciliation{state}, opts.WithName("Reconciliations")...)
 	status := kagentv1alpha3.AgentStatus{ObservedGeneration: 1, Conditions: []metav1.Condition{{Type: kagentv1alpha3.AgentConditionReady, Status: metav1.ConditionFalse}}}
@@ -70,6 +71,8 @@ func TestReconcilerPersistsPairInOrder(t *testing.T) {
 	if store.pair == nil {
 		t.Fatal("pair was not stored")
 	}
+	require.NotNil(t, store.pair.SessionIdleTTL.Seconds)
+	require.EqualValues(t, 2, *store.pair.SessionIdleTTL.Seconds)
 	created := templates.template
 	if created == nil {
 		t.Fatal("ActorTemplate was not created")
@@ -449,4 +452,110 @@ func TestReconciliationQueueRetriesWithBackoff(t *testing.T) {
 		cancel()
 		require.NoError(t, queue.WaitForClose(time.Second))
 	})
+}
+
+func TestReconcilerPreservesTTLWhileHarnessUnresolved(t *testing.T) {
+	for _, override := range []time.Duration{0, 30 * 24 * time.Hour} {
+		t.Run(override.String(), func(t *testing.T) {
+			ctx := t.Context()
+			dsn := dbtest.StartT(ctx, t)
+			dbtest.MigrateT(t, dsn, false)
+			pool, err := database.Connect(ctx, &database.PostgresConfig{URL: dsn})
+			require.NoError(t, err)
+			t.Cleanup(pool.Close)
+			store := database.NewClient(pool)
+			collections, harnesses := newPreparationTestCollections(t, "gvisor")
+			harness := harnesses.List()[0].DeepCopy()
+			harness.Spec.SessionIdleTTL = &metav1.Duration{Duration: override}
+			harnesses.UpdateObject(harness)
+			key := collections.Agents.List()[0].Namespace + "/" + collections.Agents.List()[0].Name
+			waitFor(t, func() bool {
+				state := collections.Reconciliations.GetKey(key)
+				return state.SessionIdleTTL != nil && state.SessionIdleTTL.Seconds != nil &&
+					*state.SessionIdleTTL.Seconds == int64(override/time.Second)
+			})
+			state := collections.Reconciliations.GetKey(key)
+			observed := proto.CloneOf(state.Target.ActorTemplate)
+			observed.Metadata.Uid = "ttl-actor-uid"
+			observed.Status = &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
+				GoldenTag: &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "golden"},
+			}}
+			r := &Reconciler{collections: collections, store: store, templates: &fakeActorTemplates{template: observed}}
+			require.NoError(t, r.reconcileAgent(ctx, key))
+			session, _, err := store.CreateSession(ctx, &apiv1alpha1.Session{
+				Id: uuid.NewString(), Creator: "alice",
+				Agent: &apiv1alpha1.ResourceReference{Namespace: state.Agent.Namespace, Name: state.Agent.Name},
+			}, "ttl-session")
+			require.NoError(t, err)
+			operation, err := store.BeginSessionOperation(ctx, session.Id, apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_CREATE)
+			require.NoError(t, err)
+			executor := uuid.New()
+			claimed, err := store.ClaimSessionOperation(ctx, session.Id, operation.ID, executor)
+			require.NoError(t, err)
+			require.True(t, claimed)
+			session, err = store.FinishSessionOperation(ctx, session.Id, operation.ID, executor, "runtime.example", "session-actor-uid", "")
+			require.NoError(t, err)
+			now := session.CreatedAt.AsTime().Add(8 * 24 * time.Hour)
+			defaultTTL := 7 * 24 * time.Hour
+			assertProtected := func(expectedTTL time.Duration) {
+				t.Helper()
+				ids, err := store.ListIdleSessions(ctx, now, defaultTTL, "", 100)
+				require.NoError(t, err)
+				// The scan intentionally includes empty-history candidates; admission
+				// rechecks creation time against the current positive TTL.
+				if expectedTTL == 0 {
+					require.NotContains(t, ids, session.Id)
+				}
+				_, err = store.BeginIdleSessionDeletion(ctx, session.Id, now, defaultTTL)
+				require.ErrorIs(t, err, database.ErrConflict)
+			}
+			assertProtected(override)
+
+			harnesses.DeleteObject(harness.Namespace + "/" + harness.Name)
+			waitFor(t, func() bool {
+				state := collections.Reconciliations.GetKey(key)
+				return state.CompilationFailure != nil && state.SessionIdleTTL == nil
+			})
+			require.NoError(t, r.reconcileAgent(ctx, key))
+			assertProtected(override)
+
+			harnesses.UpdateObject(harness)
+			waitFor(t, func() bool { return collections.Reconciliations.GetKey(key).CompilationFailure == nil })
+			require.NoError(t, r.reconcileAgent(ctx, key))
+			assertProtected(override)
+
+			// A resolved Harness still applies a new TTL while its WorkerPool is missing.
+			harness = harness.DeepCopy()
+			harness.Spec.Substrate.WorkerPoolRef.Name = "missing-pool"
+			harness.Spec.SessionIdleTTL = &metav1.Duration{Duration: 60 * 24 * time.Hour}
+			harnesses.UpdateObject(harness)
+			waitFor(t, func() bool {
+				state := collections.Reconciliations.GetKey(key)
+				return state.CompilationFailure != nil && state.SessionIdleTTL != nil &&
+					state.SessionIdleTTL.Seconds != nil && *state.SessionIdleTTL.Seconds == 60*24*60*60
+			})
+			require.NoError(t, r.reconcileAgent(ctx, key))
+			assertProtected(60 * 24 * time.Hour)
+			ids, err := store.ListIdleSessions(ctx, session.CreatedAt.AsTime().Add(61*24*time.Hour), defaultTTL, "", 100)
+			require.NoError(t, err)
+			require.Contains(t, ids, session.Id, "the resolved positive TTL replaced the prior override despite unrelated compilation failure")
+			_, err = store.BeginIdleSessionDeletion(ctx, session.Id, session.CreatedAt.AsTime().Add(45*24*time.Hour), defaultTTL)
+			require.ErrorIs(t, err, database.ErrConflict, "the new sixty-day override still applies when other inputs are unresolved")
+
+			// Omission is an explicit default policy even if other inputs remain unresolved.
+			harness = harness.DeepCopy()
+			harness.Spec.SessionIdleTTL = nil
+			harnesses.UpdateObject(harness)
+			waitFor(t, func() bool {
+				state := collections.Reconciliations.GetKey(key)
+				return state.SessionIdleTTL != nil && state.SessionIdleTTL.Seconds == nil
+			})
+			require.NoError(t, r.reconcileAgent(ctx, key))
+			ids, err = store.ListIdleSessions(ctx, now, defaultTTL, "", 100)
+			require.NoError(t, err)
+			require.Contains(t, ids, session.Id)
+			_, err = store.BeginIdleSessionDeletion(ctx, session.Id, now, defaultTTL)
+			require.NoError(t, err, "only a resolved omitted TTL restores default expiration admission")
+		})
+	}
 }

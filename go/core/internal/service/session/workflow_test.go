@@ -424,3 +424,39 @@ func TestServiceLifecycleRetriesUseCurrentStateAndRespectDeletion(t *testing.T) 
 	require.True(t, serviceerrors.IsCode(err, serviceerrors.CodeNotFound))
 	require.Equal(t, mutations, actors.mutations.Load(), "a tombstoned request must not create or touch compute")
 }
+
+func TestActorWorkflowSessionCredentialsAcrossRetryResumeAndFork(t *testing.T) {
+	store, _ := lifecycleFixture(t)
+	ctx := t.Context()
+	store.revision.Revision = "revision-session-credentials"
+	store.revision.ActorTemplateName = "session-credential-template"
+	store.revision.EgressDestinations = []string{"http://mcp.example.com:80", "https://api.example.com:443"}
+	store.revision.Credentials = []egress.Credential{{Hostname: "api.example.com", Header: "authorization", Prefix: "Bearer ", URI: "ate-secret://k8s.io/default/team-a/model/token"}}
+	require.NoError(t, store.UpsertAgentDefinition(ctx, database.AgentDefinition{Namespace: "team-a", AgentName: "assistant", AgentUID: "template-uid", DesiredRevision: store.revision.Revision}))
+	require.NoError(t, store.RecordRuntimeRevision(ctx, *store.revision, true))
+	request := &apiv1alpha1.Session{Id: uuid.NewString(), Creator: "alice", Agent: &apiv1alpha1.ResourceReference{Namespace: "team-a", Name: "assistant"}, Credentials: []*apiv1alpha1.SessionCredential{{Origin: "http://mcp.example.com", Header: "Authorization", SecretRef: &apiv1alpha1.SecretKeyReference{Name: "tokens", Key: "one"}}}}
+	session, _, err := store.CreateSession(ctx, request, "session-credentials")
+	require.NoError(t, err)
+	actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}, policyErr: context.DeadlineExceeded}
+	workflow := NewActorWorkflow(store, actors)
+	_, err = workflow.Create(ctx, session)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	policy := proto.CloneOf(actors.policy)
+	require.Len(t, policy.Rules, 2)
+	require.Equal(t, &ateapipb.CredentialHeader{Header: "authorization", CredentialUri: "ate-secret://k8s.io/default/team-a/tokens/one"}, policy.Rules[0].GetHttp().GetEffects().GetReplaceHeaders()[0])
+	actors.policyErr = nil
+	session, err = workflow.Create(ctx, session)
+	require.NoError(t, err)
+	require.True(t, proto.Equal(policy, actors.policy))
+	calls := actors.policyCalls
+	session, err = workflow.Suspend(ctx, session)
+	require.NoError(t, err)
+	session, err = workflow.Resume(ctx, session)
+	require.NoError(t, err)
+	require.Equal(t, calls, actors.policyCalls, "resume retains the existing credential policy")
+	fork, _ := lifecycleForkFixture(t, store, actors, session)
+	require.Empty(t, fork.GetCredentials(), "forks cannot act as the source binding")
+	_, err = workflow.Create(ctx, fork)
+	require.NoError(t, err)
+	require.Nil(t, actors.policy.Rules[0].GetHttp().GetEffects(), "fork has no source Session credential")
+}

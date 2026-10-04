@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"buf.build/go/protovalidate"
+
 	"github.com/google/uuid"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 	"github.com/kagent-dev/kagent/go/api/workspace"
@@ -93,9 +95,12 @@ func NewService(store store, authorizer auth.Authorizer, workflow sessionWorkflo
 // Create reserves a Session for the Agent. A non-nil requested workspace asks the runtime to
 // check out a repository before the first turn; its host must be one of the
 // Agent's Git origins.
-func (s *Service) Create(ctx context.Context, agent *apiv1alpha1.ResourceReference, requestID, name string, requested *apiv1alpha1.Workspace) (*apiv1alpha1.Session, error) {
+func (s *Service) Create(ctx context.Context, agent *apiv1alpha1.ResourceReference, requestID, name string, requested *apiv1alpha1.Workspace, credentials ...*apiv1alpha1.SessionCredential) (*apiv1alpha1.Session, error) {
 	if err := validateCreate(agent, requestID); err != nil {
 		return nil, err
+	}
+	if err := protovalidate.Validate(&apiv1alpha1.CreateSessionRequest{Agent: agent, RequestId: requestID, Credentials: credentials}); err != nil {
+		return nil, serviceerrors.NewInvalidArgument("Session credential references are invalid", err)
 	}
 	if err := validateWorkspace(requested); err != nil {
 		return nil, err
@@ -114,10 +119,13 @@ func (s *Service) Create(ctx context.Context, agent *apiv1alpha1.ResourceReferen
 	}
 	session, _, err := s.store.CreateSession(ctx, &apiv1alpha1.Session{
 		Id: id.String(), Creator: creator, Name: name,
-		Agent: agent, Workspace: requested,
+		Agent: agent, Workspace: requested, Credentials: credentials,
 	}, requestID)
 	if errors.Is(err, database.ErrIdempotencyConflict) {
 		return nil, serviceerrors.NewAlreadyExists("request_id was already used for a different Session", err)
+	}
+	if errors.Is(err, database.ErrSessionCredentialNotAllowed) {
+		return nil, serviceerrors.NewInvalidArgument("Session credential origin, header, or Secret reference is invalid or conflicts with the revision", err)
 	}
 	if errors.Is(err, database.ErrWorkspaceNotAllowed) {
 		return nil, serviceerrors.NewInvalidArgument("workspace repository host is not one of the Agent's Git origins", err)

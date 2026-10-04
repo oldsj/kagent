@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/kagent-dev/kagent/go/api/adk"
@@ -1078,5 +1080,37 @@ func TestCompileAgentRejectsGitCredentialConflictingWithPassthrough(t *testing.T
 	// or fail for reasons unrelated to the git binding.
 	if err != nil {
 		require.NotContains(t, err.Error(), "github.com")
+	}
+}
+
+func TestSessionIdleTTLDoesNotChangeRuntimeRevision(t *testing.T) {
+	for _, inline := range []bool{false, true} {
+		t.Run(fmt.Sprintf("inline=%v", inline), func(t *testing.T) {
+			harness, template, model := runtimeFixture(v2translator.HarnessTypeClaude)
+			harness.Generation = 1
+			pool := &atev1alpha1.WorkerPool{ObjectMeta: metav1.ObjectMeta{Namespace: "test", Name: "selected"}}
+			secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "test", Name: "model-auth"}, Data: map[string][]byte{"api-key": []byte("test-placeholder")}}
+			agent := inlineAgent(harness, template)
+			if !inline {
+				agent.Spec.Harness = nil
+				agent.Spec.HarnessRef = &corev1.LocalObjectReference{Name: harness.Name}
+			}
+			first, err := compiler(t, harness, model, pool, secret).CompileAgent(t.Context(), agent)
+			require.NoError(t, err)
+			firstID, err := first.Digest()
+			require.NoError(t, err)
+			harness.Spec.SessionIdleTTL = &metav1.Duration{Duration: 30 * time.Second}
+			harness.Generation++
+			if inline {
+				agent.Spec.Harness = harness.Spec.DeepCopy()
+			}
+			second, err := compiler(t, harness, model, pool, secret).CompileAgent(t.Context(), agent)
+			require.NoError(t, err)
+			secondID, err := second.Digest()
+			require.NoError(t, err)
+			require.Equal(t, firstID, secondID)
+			require.Equal(t, 30*time.Second, second.SessionIdleTTL.Duration)
+			require.NotNil(t, harness.Spec.SessionIdleTTL, "compilation must not mutate its source")
+		})
 	}
 }

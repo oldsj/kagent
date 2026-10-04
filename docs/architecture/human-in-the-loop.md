@@ -101,10 +101,11 @@ The kagent Go harness maps the contract to ADK confirmations. Remote A2A tools i
 the Go and Python ADKs can retain a child continuation when a subagent requests
 input.
 
-The current v2 MCP tool-binding API does not expose per-tool approval policy, so
-users cannot configure generic MCP approval gating through `AgentTemplate` today.
-The extension remains valid for runtimes and tools that actually produce a pause,
-including ask-user and nested A2A continuation.
+`AgentTemplate` MCP bindings expose `requireApproval` for the whole binding.
+Claude and Codex map approval pauses into this HITL contract. Separate bindings
+can group tools with different approval requirements; the field does not select
+individual tools within a binding. Ask-user and nested A2A continuations use the
+same extension.
 
 For the base extension mechanism, see the
 [A2A extension specification](https://a2a-protocol.org/latest/specification/#46-extensions).
