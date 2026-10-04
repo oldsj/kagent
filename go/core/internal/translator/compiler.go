@@ -121,17 +121,31 @@ func (c *Compiler) CompileAgent(ctx context.Context, agent *v1alpha3.Agent) (*Co
 		}
 		harness = harnessConfiguration(*found)
 	}
+	idleTTL := harness.Spec.SessionIdleTTL
+	if idleTTL != nil && idleTTL.Duration < 0 {
+		return nil, NewValidationError("sessionIdleTTL must be nonnegative")
+	}
+	// Lifecycle policy is stored on the Agent definition, outside immutable inputs.
+	harness.Spec.SessionIdleTTL = nil
+	if harness.Source != nil {
+		harness.Source.Generation = 0
+	}
 	result, err := c.compileConfiguration(ctx, agent.Name, harness, template)
 	if err != nil {
 		return nil, err
 	}
+	result.SessionIdleTTL = idleTTL
 	result.AgentUID = string(agent.UID)
+	runtimeSpec := agent.Spec.DeepCopy()
+	if runtimeSpec.Harness != nil {
+		runtimeSpec.Harness.SessionIdleTTL = nil
+	}
 	result.Provenance, err = json.Marshal(struct {
 		AgentName string             `json:"agentName"`
 		AgentUID  string             `json:"agentUID"`
 		Spec      v1alpha3.AgentSpec `json:"spec"`
 		Inputs    json.RawMessage    `json:"inputs"`
-	}{agent.Name, string(agent.UID), agent.Spec, result.Provenance})
+	}{agent.Name, string(agent.UID), *runtimeSpec, result.Provenance})
 	if err != nil {
 		return nil, fmt.Errorf("encode Agent provenance: %w", err)
 	}

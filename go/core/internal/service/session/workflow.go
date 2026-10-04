@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 	"github.com/kagent-dev/kagent/go/core/internal/database"
+	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"github.com/kagent-dev/kagent/go/core/internal/substrate"
 )
 
@@ -177,7 +178,11 @@ func (w *ActorWorkflow) execute(ctx context.Context, operation *database.Session
 		TemplateAtespace: revision.ActorTemplateAtespace, TemplateName: revision.ActorTemplateName}
 	var creation *substrate.ActorCreation
 	if kind == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_CREATE {
-		policy, err := substrate.ActorEgressPolicy(binding.Atespace, revision.EgressDestinations, revision.Credentials)
+		credentials, err := egress.SessionCredentials(session.GetAgent().GetNamespace(), session.GetCredentials(), revision.EgressDestinations, revision.Credentials)
+		if err != nil {
+			return w.failPreparation(ctx, operation, err)
+		}
+		policy, err := substrate.ActorEgressPolicy(binding.Atespace, revision.EgressDestinations, credentials)
 		if err != nil {
 			return w.failPreparation(ctx, operation, err)
 		}

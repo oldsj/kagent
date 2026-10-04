@@ -11,18 +11,22 @@ import (
 // ListIdleSessions returns candidates, including unfinished idle deletions.
 // Empty histories and old fork histories may be newer sessions; admission checks
 // creation time and rechecks activity under the task/lifecycle lock.
-func (c *Client) ListIdleSessions(ctx context.Context, before time.Time, afterID string, limit int) ([]string, error) {
+func (c *Client) ListIdleSessions(ctx context.Context, now time.Time, defaultTTL time.Duration, afterID string, limit int) ([]string, error) {
 	return queryMany(ctx, c.db, `
 		SELECT s.id::text FROM session s JOIN runtime_instance r USING (id)
+		LEFT JOIN agent_runtime_revision ar ON ar.revision = r.prepared_revision
+		LEFT JOIN agent_definition d ON d.namespace = ar.namespace AND d.agent_uid = ar.agent_uid
 		LEFT JOIN LATERAL (
 		    SELECT created_at FROM session_task_event WHERE history_id = s.history_id
 		    ORDER BY sequence DESC LIMIT 1
 		) latest ON TRUE
 		WHERE (s.deletion_reason = 'idle_timeout'
-		    OR ((latest.created_at IS NULL OR latest.created_at <= $1) AND r.state <> 'RUNTIME_STATE_DELETED'))
+		    OR (COALESCE(d.session_idle_ttl_seconds, $4::double precision) > 0
+		        AND (latest.created_at IS NULL OR latest.created_at <= $1::timestamptz - make_interval(secs => COALESCE(d.session_idle_ttl_seconds, $4::double precision)))
+		        AND r.state <> 'RUNTIME_STATE_DELETED'))
 		  AND ($2::text = '' OR s.id > $2::uuid)
 		ORDER BY s.id LIMIT $3
-	`, pgx.RowTo[string], before, afterID, limit)
+	`, pgx.RowTo[string], now, afterID, limit, defaultTTL.Seconds())
 }
 
 // IdleSessionDeletion combines admitted deletion with activity information for
@@ -34,7 +38,7 @@ type IdleSessionDeletion struct {
 
 // BeginIdleSessionDeletion admits ordinary deletion only after rechecking idle
 // eligibility. Once admitted, its reason survives retries and TTL changes.
-func (c *Client) BeginIdleSessionDeletion(ctx context.Context, id string, before time.Time) (*IdleSessionDeletion, error) {
+func (c *Client) BeginIdleSessionDeletion(ctx context.Context, id string, now time.Time, defaultTTL time.Duration) (*IdleSessionDeletion, error) {
 	var deletion *IdleSessionDeletion
 	err := c.withTx(ctx, func(tx pgx.Tx) error {
 		row, err := lockSession(ctx, tx, id)
@@ -44,13 +48,19 @@ func (c *Client) BeginIdleSessionDeletion(ctx context.Context, id string, before
 		type activity struct {
 			Reason      sessionDeletionReason
 			LastEventAt *time.Time
+			TTLSeconds  float64
 		}
 		latest, err := queryOne(ctx, tx, `
 			SELECT COALESCE(deletion_reason, '') AS reason,
+			    COALESCE(d.session_idle_ttl_seconds, $2::double precision) AS ttl_seconds,
 			    (SELECT created_at FROM session_task_event WHERE history_id = s.history_id
 			     ORDER BY sequence DESC LIMIT 1) AS last_event_at
-			FROM session s WHERE id = $1
-		`, pgx.RowToStructByName[activity], row.ID)
+			FROM session s
+			JOIN runtime_instance r USING (id)
+			LEFT JOIN agent_runtime_revision ar ON ar.revision = r.prepared_revision
+			LEFT JOIN agent_definition d ON d.namespace = ar.namespace AND d.agent_uid = ar.agent_uid
+			WHERE s.id = $1
+		`, pgx.RowToStructByName[activity], row.ID, defaultTTL.Seconds())
 		if err != nil {
 			return err
 		}
@@ -64,7 +74,10 @@ func (c *Client) BeginIdleSessionDeletion(ctx context.Context, id string, before
 			idleSince = *latest.LastEventAt
 		}
 		if latest.Reason != sessionDeletionIdleTimeout {
-			if err := requireIdleSession(ctx, tx, row, idleSince, before); err != nil {
+			if latest.TTLSeconds <= 0 || now.Sub(idleSince).Seconds() < latest.TTLSeconds {
+				return ErrConflict
+			}
+			if err := requireIdleSession(ctx, tx, row); err != nil {
 				return err
 			}
 		}
@@ -83,8 +96,8 @@ func (c *Client) BeginIdleSessionDeletion(ctx context.Context, id string, before
 
 // requireIdleSession runs under the session lock, before lifecycle admission
 // checks dispatch, native cleanup, quiescence, and checkpoint creation.
-func requireIdleSession(ctx context.Context, tx pgx.Tx, row sessionRow, idleSince, before time.Time) error {
-	if idleSince.After(before) || row.State == "RUNTIME_STATE_DELETED" || row.State == "RUNTIME_STATE_DELETING" || row.Operation != "RUNTIME_OPERATION_NONE" {
+func requireIdleSession(ctx context.Context, tx pgx.Tx, row sessionRow) error {
+	if row.State == "RUNTIME_STATE_DELETED" || row.State == "RUNTIME_STATE_DELETING" || row.Operation != "RUNTIME_OPERATION_NONE" {
 		return ErrConflict
 	}
 	busy, err := queryOne(ctx, tx, `

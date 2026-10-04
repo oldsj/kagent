@@ -193,3 +193,37 @@ authority and Kubernetes API, before or after service DNAT) and denies ingress. 
 NetworkPolicy cannot restrict egress by DNS name; installations requiring
 host-only egress must additionally configure their CNI's FQDN policy.
 NetworkPolicy requires an enforcing CNI. Actor egress rules remain unchanged.
+
+## Per-Session credentials
+
+`CreateSessionRequest.credentials` accepts at most four `SessionCredential`
+bindings, each containing `origin`, `header`, and `secret_ref { name, key }`.
+The Secret belongs to the Agent's namespace and contains the complete header
+value, including `Bearer ` for bearer authorization. Session bindings use no
+additional prefix. The controller never reads the Secret value, and the runtime
+receives only a placeholder header configured on its RemoteMCPServer.
+
+The HTTP(S) origin must already be in the Session's pinned revision egress list.
+Paths, user information, queries, and fragments are rejected. Injection is
+host-wide: scheme and port constrain egress admission, but credentials apply to
+all allowed origins on the same hostname. Use a dedicated MCP origin serving
+only its intended endpoints. Header names are case-insensitive. Duplicate
+host/header bindings and collisions with revision credentials are rejected.
+References persist in `Session.credentials`; retrying a request ID with changed
+references conflicts. Policy construction canonicalizes the merged list, so
+retries produce the same policy. Resume retains it; checkpoint forks inherit no
+Session credentials.
+
+Credential-bearing `CreateSession` is a trusted control-plane capability. A
+caller may reference any valid Secret key in the Agent namespace; same-namespace
+validation does not establish that the key belongs to that caller. Isolate these
+callers and authorize credential selection in the owning control plane before
+forwarding requests to kagent.
+
+Agentgateway supports cleartext HTTP injection when its HTTP route's
+`substrateEgress` policy has a credential provider. The binding's exact hostname
+and the Session egress policy limit where it applies; an unbound hostname keeps
+the placeholder. The provider must also grant the actor's atespace access to
+the Agent namespace. The Envoy dataplane skips cleartext credential injection
+in stock Substrate v0.3.0-alpha3. Restrict the destination listener with NetworkPolicy.
+Secret lookup failures surface at the gateway; creation does not read or verify keys.

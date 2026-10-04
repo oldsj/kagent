@@ -165,6 +165,7 @@ func TestServiceCreateMapsStoreErrors(t *testing.T) {
 		err  error
 		code serviceerrors.Code
 	}{
+		{name: "invalid credential", err: database.ErrSessionCredentialNotAllowed, code: serviceerrors.CodeInvalidArgument},
 		{name: "idempotency conflict", err: database.ErrIdempotencyConflict, code: serviceerrors.CodeAlreadyExists},
 		{name: "deleted request", err: database.ErrFailedPrecondition, code: serviceerrors.CodeFailedPrecondition},
 		{name: "missing revision", err: database.ErrNotFound, code: serviceerrors.CodeFailedPrecondition},

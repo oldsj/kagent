@@ -56,6 +56,14 @@ type AgentDefinition struct {
 	AgentUID  string
 	// DesiredRevision is a compiled runtime digest, or empty while inputs are unresolved.
 	DesiredRevision string
+	// Nil preserves the stored policy when the Harness cannot be resolved.
+	SessionIdleTTL *SessionIdleTTLPolicy
+}
+
+// SessionIdleTTLPolicy is a resolved Harness lifecycle policy. Nil Seconds uses
+// the controller default; zero disables expiration.
+type SessionIdleTTLPolicy struct {
+	Seconds *int64
 }
 
 type RuntimeRevision struct {

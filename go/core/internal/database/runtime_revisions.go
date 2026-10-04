@@ -16,24 +16,32 @@ import (
 // UpsertAgentDefinition records the desired runtime revision for a
 // Agent identity. Updating an existing definition revives it if retired and
 // preserves its latest successful revision. It atomically retires older identities
-// at the same names and rejects revisions whose deletion has started.
+// at the same names and rejects revisions whose deletion has started. An unresolved
+// lifecycle policy preserves the stored TTL; a resolved policy replaces it,
+// including NULL when the Harness omits the override.
 func (c *Client) UpsertAgentDefinition(ctx context.Context, definition AgentDefinition) error {
+	var ttlSeconds *int64
+	if definition.SessionIdleTTL != nil {
+		ttlSeconds = definition.SessionIdleTTL.Seconds
+	}
 	return c.withTx(ctx, func(tx pgx.Tx) error {
 		if err := retireAgentIdentities(ctx, tx, definition.Namespace, definition.AgentName, &definition); err != nil {
 			return fmt.Errorf("retire replaced Agent: %w", err)
 		}
 		if err := execSQL(ctx, tx, `
 			INSERT INTO agent_definition (
-			    namespace, agent_name, agent_uid, desired_revision, retired_at
-			) VALUES ($1, $2, $3, $4, NULL)
+			    namespace, agent_name, agent_uid, desired_revision, session_idle_ttl_seconds, retired_at
+			) VALUES ($1, $2, $3, $4, $5, NULL)
 			ON CONFLICT (namespace, agent_uid) DO UPDATE SET
 			    agent_name = EXCLUDED.agent_name,
 			    desired_revision = EXCLUDED.desired_revision,
+			    session_idle_ttl_seconds = CASE WHEN $6 THEN EXCLUDED.session_idle_ttl_seconds
+			        ELSE agent_definition.session_idle_ttl_seconds END,
 			    retired_at = NULL,
 			    updated_at = NOW()
 		`,
 			definition.Namespace, definition.AgentName, definition.AgentUID,
-			definition.DesiredRevision,
+			definition.DesiredRevision, ttlSeconds, definition.SessionIdleTTL != nil,
 		); err != nil {
 			return err
 		}

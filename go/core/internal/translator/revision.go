@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"reflect"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	a2apb "github.com/a2aproject/a2a-go/v2/a2apb/v1"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/kagent-dev/kagent/go/api/v1alpha3"
@@ -31,11 +33,13 @@ func (id RevisionID) Short() string { return hex.EncodeToString(id[:shortRevisio
 func (id RevisionID) IsZero() bool { return id == RevisionID{} }
 
 // CompileResult contains one immutable runtime revision and the non-blocking
-// diagnostics produced while compiling it. Diagnostics are deliberately kept
-// outside Revision because they do not describe runtime behavior.
+// diagnostics and mutable lifecycle policy produced while compiling it. These
+// stay outside Revision because they do not describe immutable runtime behavior.
 type CompileResult struct {
 	Revision
 	Warnings []string
+	// SessionIdleTTL is mutable lifecycle policy, excluded from revision identity.
+	SessionIdleTTL *metav1.Duration
 }
 
 // Revision is the resolved runtime configuration for one immutable revision.
