@@ -53,6 +53,16 @@ spec:
               anthropic:
                 description: Anthropic-specific configuration
                 properties:
+                  authMethod:
+                    default: apiKey
+                    description: |-
+                      AuthMethod selects API-key authentication (the default) or Claude Code's
+                      subscription OAuth token. In oauthToken mode, apiKeySecret and
+                      apiKeySecretKey identify the Secret containing the token.
+                    enum:
+                    - apiKey
+                    - oauthToken
+                    type: string
                   baseUrl:
                     description: Base URL for the Anthropic API (overrides default)
                     type: string
@@ -450,6 +460,11 @@ spec:
               openAI:
                 description: OpenAI-specific configuration
                 properties:
+                  accountID:
+                    description: |-
+                      AccountID selects the ChatGPT account; it is not a bearer credential and
+                      is retained in the Actor's synthetic auth.json and revision provenance.
+                    type: string
                   apiFormat:
                     default: chatCompletions
                     description: |-
@@ -461,8 +476,19 @@ spec:
                     - chatCompletions
                     - responses
                     type: string
+                  authMethod:
+                    description: |-
+                      AuthMethod selects Codex ChatGPT login or API-key authentication (default).
+                      In chatGPT mode, apiKeySecret and apiKeySecretKey reference only the current
+                      access token for gateway injection. Refresh is control-side.
+                    enum:
+                    - apiKey
+                    - chatGPT
+                    type: string
                   baseUrl:
-                    description: Base URL for the OpenAI API (overrides default)
+                    description: |-
+                      Base URL for the OpenAI API (overrides default). In chatGPT mode it
+                      replaces the Codex subscription backend, https://chatgpt.com/backend-api/codex.
                     type: string
                   frequencyPenalty:
                     description: Frequency penalty
@@ -503,6 +529,14 @@ spec:
                     - high
                     - xhigh
                     type: string
+                  responsesTransport:
+                    description: |-
+                      ResponsesTransport selects WebSocket (default, with native fallback) or
+                      HTTPS for the Codex ChatGPT subscription backend.
+                    enum:
+                    - websocket
+                    - https
+                    type: string
                   seed:
                     description: Seed value
                     type: integer
@@ -519,6 +553,15 @@ spec:
                 x-kubernetes-validations:
                 - message: maxTokens and maxCompletionTokens are mutually exclusive
                   rule: '!(has(self.maxTokens) && has(self.maxCompletionTokens))'
+                - message: chatGPT requires accountID
+                  rule: '!has(self.authMethod) || self.authMethod != ''chatGPT'' ||
+                    (has(self.accountID) && size(self.accountID) > 0)'
+                - message: accountID requires chatGPT authMethod
+                  rule: '!has(self.accountID) || (has(self.authMethod) && self.authMethod
+                    == ''chatGPT'')'
+                - message: responsesTransport requires chatGPT authMethod
+                  rule: '!has(self.responsesTransport) || (has(self.authMethod) &&
+                    self.authMethod == ''chatGPT'')'
               provider:
                 default: OpenAI
                 description: The provider of the model
