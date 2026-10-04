@@ -49,6 +49,7 @@ import (
 	kagentv1alpha3 "github.com/kagent-dev/kagent/go/api/v1alpha3"
 	"github.com/kagent-dev/kagent/go/core/internal/a2agateway"
 	"github.com/kagent-dev/kagent/go/core/internal/controller"
+	"github.com/kagent-dev/kagent/go/core/internal/controller/chatgptrefresh"
 	remotemcpcontroller "github.com/kagent-dev/kagent/go/core/internal/controller/remotemcpserver"
 	scheduledruncontroller "github.com/kagent-dev/kagent/go/core/internal/controller/scheduledrun"
 	"github.com/kagent-dev/kagent/go/core/internal/database"
@@ -331,6 +332,18 @@ func Run(ctx context.Context, input *configv1.ControllerConfig, opts Options) er
 	}
 	if err := manager.Add(runtimeGC); err != nil {
 		return fmt.Errorf("add runtime revision GC to controller manager: %w", err)
+	}
+	if image := cfg.GetCredentialRefresh().GetChatgptImage(); image != "" {
+		if !cfg.GetKubernetes().GetLeaderElection() {
+			return fmt.Errorf("ChatGPT credential Jobs require controller leader election")
+		}
+		credentialClient, err := client.New(kubeConfig, client.Options{Scheme: managerScheme})
+		if err != nil {
+			return fmt.Errorf("create credential rotation client: %w", err)
+		}
+		if err := manager.Add(chatgptrefresh.New(credentialClient, watchNamespaces, image)); err != nil {
+			return fmt.Errorf("add ChatGPT credential refresher: %w", err)
+		}
 	}
 	if opts.SetupWithManager != nil {
 		if err := opts.SetupWithManager(manager); err != nil {

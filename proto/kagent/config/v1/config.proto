@@ -127,6 +127,16 @@ message ControllerConfig {
   RuntimeDefaultsConfig runtime_defaults = 13;
   HarnessImagesConfig harness_images = 14;
   PushConfig push = 15;
+  CredentialRefreshConfig credential_refresh = 16;
+}
+
+// CredentialRefreshConfig controls control-side refresh of subscription
+// credentials referenced by ModelConfigs.
+message CredentialRefreshConfig {
+  // Codex Harness image that carries the pinned Codex CLI and
+  // kagent-credential-refresh, pinned by tag or digest. Empty disables scheduled
+  // ChatGPT credential Jobs. Refresh Jobs require kubernetes.leader_election.
+  string chatgpt_image = 1 [(buf.validate.field).string.pattern = "^$|^[^\\s@]+(:[^\\s/:@]+|@sha256:[a-f0-9]{64})$"];
 }
 
 // HarnessImagesConfig supplies release defaults for built-in Harnesses. Empty
