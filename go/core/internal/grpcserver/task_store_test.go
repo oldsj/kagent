@@ -154,6 +154,14 @@ func TestRuntimeTaskStoreThroughGRPC(t *testing.T) {
 	authenticated := metadata.NewOutgoingContext(t.Context(), metadata.Pairs(apia2a.InsecureRuntimeIdentityHeader, "team-a/session-"+id+"/actor-uid"))
 	_, err = private.GetTask(authenticated, &apiv1alpha1.TaskStoreServiceGetTaskRequest{SessionId: uuid.NewString(), TaskId: "absent"})
 	require.Equal(t, codes.PermissionDenied, status.Code(err))
+	workspace, err := private.GetWorkspace(authenticated, &apiv1alpha1.TaskStoreServiceGetWorkspaceRequest{SessionId: id})
+	require.NoError(t, err)
+	require.Equal(t, "https://github.com/oldsj/testrepo", workspace.GetWorkspace().GetRepo())
+	require.Equal(t, "spike-b-test", workspace.GetWorkspace().GetBranch())
+	_, err = private.GetWorkspace(authenticated, &apiv1alpha1.TaskStoreServiceGetWorkspaceRequest{SessionId: uuid.NewString()})
+	require.Equal(t, codes.PermissionDenied, status.Code(err), "a runtime reads only its own Session's workspace")
+	_, err = private.GetWorkspace(t.Context(), &apiv1alpha1.TaskStoreServiceGetWorkspaceRequest{SessionId: id})
+	require.Equal(t, codes.Unauthenticated, status.Code(err))
 	_, err = private.GetTask(metadata.AppendToOutgoingContext(authenticated, "x-share-token", "share"), read)
 	require.Equal(t, codes.PermissionDenied, status.Code(err))
 	for _, test := range []struct {
@@ -511,6 +519,7 @@ func createTaskStoreSession(t *testing.T, store *database.Client) *apiv1alpha1.S
 		SourceSnapshot: []byte("{}"),
 		AgentCard:      &a2apb.AgentCard{Name: "assistant"}, EgressDestinations: []string{},
 		ActorTemplateAtespace: "team-a", ActorTemplateName: "assistant-kagent-revision", ActorTemplateUID: "actor-template-uid",
+		GitOrigins: []string{"github.com"},
 	}
 	require.NoError(t, store.UpsertAgentDefinition(t.Context(), database.AgentDefinition{
 		Namespace: revision.Namespace, AgentName: revision.AgentName, AgentUID: revision.AgentUID,
@@ -520,7 +529,8 @@ func createTaskStoreSession(t *testing.T, store *database.Client) *apiv1alpha1.S
 	session, _, err := store.CreateSession(t.Context(), &apiv1alpha1.Session{
 		Id: uuid.NewString(), Creator: "alice",
 
-		Agent: &apiv1alpha1.ResourceReference{Namespace: "team-a", Name: "assistant"},
+		Agent:     &apiv1alpha1.ResourceReference{Namespace: "team-a", Name: "assistant"},
+		Workspace: &apiv1alpha1.Workspace{Repo: "https://github.com/oldsj/testrepo", Ref: "main", Branch: "spike-b-test", Depth: 1},
 	}, uuid.NewString())
 	require.NoError(t, err)
 	operation, err := store.BeginSessionOperation(t.Context(), session.Id, apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_CREATE)

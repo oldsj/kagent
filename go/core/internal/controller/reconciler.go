@@ -363,6 +363,7 @@ func (r *Reconciler) reconcileAgent(ctx context.Context, key string) error {
 		SourceSnapshot: target.Revision.Provenance, AgentCard: target.Revision.AgentCard,
 		EgressDestinations:    target.Revision.EgressDestinations,
 		Credentials:           target.Revision.Credentials,
+		GitOrigins:            target.Revision.GitOrigins,
 		ActorTemplateAtespace: observed.GetMetadata().GetAtespace(), ActorTemplateName: observed.GetMetadata().GetName(), ActorTemplateUID: observed.GetMetadata().GetUid(),
 	}
 	ready := observed.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag() != nil

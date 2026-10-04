@@ -62,6 +62,9 @@ message Session {
   // Output only. A2A conversation ID, equal to this session's ID.
   // Forks receive a new conversation ID and new task IDs.
   string context_id = 14;
+  // Git checkout the runtime establishes before the first turn. Unset means
+  // the Session starts with an empty workspace.
+  Workspace workspace = 16;
 }
 
 message CreateSessionRequest {
@@ -77,6 +80,9 @@ message CreateSessionRequest {
     max_len: 200
     pattern: "^(?:$|[^\\p{Z}\\p{Cc}](?:[^\\p{Cc}]*[^\\p{Z}\\p{Cc}])?)$"
   }];
+  // Optional Git checkout to establish before the first turn. Its host must be
+  // one of the Agent's Git origins.
+  Workspace workspace = 6;
 }
 
 message CreateSessionResponse {

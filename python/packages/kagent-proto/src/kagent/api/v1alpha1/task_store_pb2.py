@@ -24,9 +24,10 @@ _sym_db = _symbol_database.Default()
 
 import a2a_pb2 as a2a__pb2
 from buf.validate import validate_pb2 as buf_dot_validate_dot_validate__pb2
+from kagent.api.v1alpha1 import common_pb2 as kagent_dot_api_dot_v1alpha1_dot_common__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n$kagent/api/v1alpha1/task_store.proto\x12\x13kagent.api.v1alpha1\x1a\ta2a.proto\x1a\x1b\x62uf/validate/validate.proto\"K\n\nStoredTask\x12#\n\x04task\x18\x01 \x01(\x0b\x32\x0f.lf.a2a.v1.TaskR\x04task\x12\x18\n\x07version\x18\x02 \x01(\x03R\x07version\"\xb1\x02\n!TaskStoreServiceCreateTaskRequest\x12\'\n\nsession_id\x18\x01 \x01(\tB\x08\xbaH\x05r\x03\xb0\x01\x01R\tsessionId\x12+\n\x04task\x18\x02 \x01(\x0b\x32\x0f.lf.a2a.v1.TaskB\x06\xbaH\x03\xc8\x01\x01R\x04task\x12.\n\x0b\x64ispatch_id\x18\x03 \x01(\tB\x08\xbaH\x05r\x03\xb0\x01\x01H\x00R\ndispatchId\x88\x01\x01:v\xbaHs\x1aq\n\x1atask_store.create_identity\x12!task and context IDs are required\x1a\x30this.task.id != \'\' && this.task.context_id != \'\'B\x0e\n\x0c_dispatch_id\">\n\"TaskStoreServiceCreateTaskResponse\x12\x18\n\x07version\x18\x01 \x01(\x03R\x07version\"k\n\x1eTaskStoreServiceGetTaskRequest\x12\'\n\nsession_id\x18\x01 \x01(\tB\x08\xbaH\x05r\x03\xb0\x01\x01R\tsessionId\x12 \n\x07task_id\x18\x02 \x01(\tB\x07\xbaH\x04r\x02\x10\x01R\x06taskId\"Z\n\x1fTaskStoreServiceGetTaskResponse\x12\x37\n\x06stored\x18\x01 \x01(\x0b\x32\x1f.kagent.api.v1alpha1.StoredTaskR\x06stored\"\x94\x03\n!TaskStoreServiceUpdateTaskRequest\x12\'\n\nsession_id\x18\x01 \x01(\tB\x08\xbaH\x05r\x03\xb0\x01\x01R\tsessionId\x12+\n\x04task\x18\x02 \x01(\x0b\x32\x0f.lf.a2a.v1.TaskB\x06\xbaH\x03\xc8\x01\x01R\x04task\x12\x32\n\x10\x65xpected_version\x18\x03 \x01(\x03\x42\x07\xbaH\x04\"\x02 \x00R\x0f\x65xpectedVersion\x12/\n\x05\x65vent\x18\x04 \x01(\x0b\x32\x19.lf.a2a.v1.StreamResponseR\x05\x65vent\x12.\n\x0b\x64ispatch_id\x18\x05 \x01(\tB\x08\xbaH\x05r\x03\xb0\x01\x01H\x00R\ndispatchId\x88\x01\x01:t\xbaHq\x1ao\n\x18task_store.task_identity\x12!task and context IDs are required\x1a\x30this.task.id != \'\' && this.task.context_id != \'\'B\x0e\n\x0c_dispatch_id\">\n\"TaskStoreServiceUpdateTaskResponse\x12\x18\n\x07version\x18\x01 \x01(\x03R\x07version\"\x8a\x01\n TaskStoreServiceListTasksRequest\x12\'\n\nsession_id\x18\x01 \x01(\tB\x08\xbaH\x05r\x03\xb0\x01\x01R\tsessionId\x12=\n\x07request\x18\x02 \x01(\x0b\x32\x1b.lf.a2a.v1.ListTasksRequestB\x06\xbaH\x03\xc8\x01\x01R\x07request\"Y\n!TaskStoreServiceListTasksResponse\x12\x34\n\x06result\x18\x01 \x01(\x0b\x32\x1c.lf.a2a.v1.ListTasksResponseR\x06result\"\x91\x01\n!TaskStoreServiceSettleTaskRequest\x12\'\n\nsession_id\x18\x01 \x01(\tB\x08\xbaH\x05r\x03\xb0\x01\x01R\tsessionId\x12 \n\x07task_id\x18\x02 \x01(\tB\x07\xbaH\x04r\x02\x10\x01R\x06taskId\x12!\n\x07version\x18\x03 \x01(\x03\x42\x07\xbaH\x04\"\x02 \x00R\x07version\"$\n\"TaskStoreServiceSettleTaskResponse2\x81\x05\n\x10TaskStoreService\x12}\n\nCreateTask\x12\x36.kagent.api.v1alpha1.TaskStoreServiceCreateTaskRequest\x1a\x37.kagent.api.v1alpha1.TaskStoreServiceCreateTaskResponse\x12t\n\x07GetTask\x12\x33.kagent.api.v1alpha1.TaskStoreServiceGetTaskRequest\x1a\x34.kagent.api.v1alpha1.TaskStoreServiceGetTaskResponse\x12}\n\nUpdateTask\x12\x36.kagent.api.v1alpha1.TaskStoreServiceUpdateTaskRequest\x1a\x37.kagent.api.v1alpha1.TaskStoreServiceUpdateTaskResponse\x12z\n\tListTasks\x12\x35.kagent.api.v1alpha1.TaskStoreServiceListTasksRequest\x1a\x36.kagent.api.v1alpha1.TaskStoreServiceListTasksResponse\x12}\n\nSettleTask\x12\x36.kagent.api.v1alpha1.TaskStoreServiceSettleTaskRequest\x1a\x37.kagent.api.v1alpha1.TaskStoreServiceSettleTaskResponseBIZGgithub.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1;apiv1alpha1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n$kagent/api/v1alpha1/task_store.proto\x12\x13kagent.api.v1alpha1\x1a\ta2a.proto\x1a\x1b\x62uf/validate/validate.proto\x1a kagent/api/v1alpha1/common.proto\"K\n\nStoredTask\x12#\n\x04task\x18\x01 \x01(\x0b\x32\x0f.lf.a2a.v1.TaskR\x04task\x12\x18\n\x07version\x18\x02 \x01(\x03R\x07version\"\xb1\x02\n!TaskStoreServiceCreateTaskRequest\x12\'\n\nsession_id\x18\x01 \x01(\tB\x08\xbaH\x05r\x03\xb0\x01\x01R\tsessionId\x12+\n\x04task\x18\x02 \x01(\x0b\x32\x0f.lf.a2a.v1.TaskB\x06\xbaH\x03\xc8\x01\x01R\x04task\x12.\n\x0b\x64ispatch_id\x18\x03 \x01(\tB\x08\xbaH\x05r\x03\xb0\x01\x01H\x00R\ndispatchId\x88\x01\x01:v\xbaHs\x1aq\n\x1atask_store.create_identity\x12!task and context IDs are required\x1a\x30this.task.id != \'\' && this.task.context_id != \'\'B\x0e\n\x0c_dispatch_id\">\n\"TaskStoreServiceCreateTaskResponse\x12\x18\n\x07version\x18\x01 \x01(\x03R\x07version\"k\n\x1eTaskStoreServiceGetTaskRequest\x12\'\n\nsession_id\x18\x01 \x01(\tB\x08\xbaH\x05r\x03\xb0\x01\x01R\tsessionId\x12 \n\x07task_id\x18\x02 \x01(\tB\x07\xbaH\x04r\x02\x10\x01R\x06taskId\"Z\n\x1fTaskStoreServiceGetTaskResponse\x12\x37\n\x06stored\x18\x01 \x01(\x0b\x32\x1f.kagent.api.v1alpha1.StoredTaskR\x06stored\"\x94\x03\n!TaskStoreServiceUpdateTaskRequest\x12\'\n\nsession_id\x18\x01 \x01(\tB\x08\xbaH\x05r\x03\xb0\x01\x01R\tsessionId\x12+\n\x04task\x18\x02 \x01(\x0b\x32\x0f.lf.a2a.v1.TaskB\x06\xbaH\x03\xc8\x01\x01R\x04task\x12\x32\n\x10\x65xpected_version\x18\x03 \x01(\x03\x42\x07\xbaH\x04\"\x02 \x00R\x0f\x65xpectedVersion\x12/\n\x05\x65vent\x18\x04 \x01(\x0b\x32\x19.lf.a2a.v1.StreamResponseR\x05\x65vent\x12.\n\x0b\x64ispatch_id\x18\x05 \x01(\tB\x08\xbaH\x05r\x03\xb0\x01\x01H\x00R\ndispatchId\x88\x01\x01:t\xbaHq\x1ao\n\x18task_store.task_identity\x12!task and context IDs are required\x1a\x30this.task.id != \'\' && this.task.context_id != \'\'B\x0e\n\x0c_dispatch_id\">\n\"TaskStoreServiceUpdateTaskResponse\x12\x18\n\x07version\x18\x01 \x01(\x03R\x07version\"\x8a\x01\n TaskStoreServiceListTasksRequest\x12\'\n\nsession_id\x18\x01 \x01(\tB\x08\xbaH\x05r\x03\xb0\x01\x01R\tsessionId\x12=\n\x07request\x18\x02 \x01(\x0b\x32\x1b.lf.a2a.v1.ListTasksRequestB\x06\xbaH\x03\xc8\x01\x01R\x07request\"Y\n!TaskStoreServiceListTasksResponse\x12\x34\n\x06result\x18\x01 \x01(\x0b\x32\x1c.lf.a2a.v1.ListTasksResponseR\x06result\"\x91\x01\n!TaskStoreServiceSettleTaskRequest\x12\'\n\nsession_id\x18\x01 \x01(\tB\x08\xbaH\x05r\x03\xb0\x01\x01R\tsessionId\x12 \n\x07task_id\x18\x02 \x01(\tB\x07\xbaH\x04r\x02\x10\x01R\x06taskId\x12!\n\x07version\x18\x03 \x01(\x03\x42\x07\xbaH\x04\"\x02 \x00R\x07version\"$\n\"TaskStoreServiceSettleTaskResponse\"N\n#TaskStoreServiceGetWorkspaceRequest\x12\'\n\nsession_id\x18\x01 \x01(\tB\x08\xbaH\x05r\x03\xb0\x01\x01R\tsessionId\"d\n$TaskStoreServiceGetWorkspaceResponse\x12<\n\tworkspace\x18\x01 \x01(\x0b\x32\x1e.kagent.api.v1alpha1.WorkspaceR\tworkspace2\x87\x06\n\x10TaskStoreService\x12}\n\nCreateTask\x12\x36.kagent.api.v1alpha1.TaskStoreServiceCreateTaskRequest\x1a\x37.kagent.api.v1alpha1.TaskStoreServiceCreateTaskResponse\x12t\n\x07GetTask\x12\x33.kagent.api.v1alpha1.TaskStoreServiceGetTaskRequest\x1a\x34.kagent.api.v1alpha1.TaskStoreServiceGetTaskResponse\x12}\n\nUpdateTask\x12\x36.kagent.api.v1alpha1.TaskStoreServiceUpdateTaskRequest\x1a\x37.kagent.api.v1alpha1.TaskStoreServiceUpdateTaskResponse\x12z\n\tListTasks\x12\x35.kagent.api.v1alpha1.TaskStoreServiceListTasksRequest\x1a\x36.kagent.api.v1alpha1.TaskStoreServiceListTasksResponse\x12}\n\nSettleTask\x12\x36.kagent.api.v1alpha1.TaskStoreServiceSettleTaskRequest\x1a\x37.kagent.api.v1alpha1.TaskStoreServiceSettleTaskResponse\x12\x83\x01\n\x0cGetWorkspace\x12\x38.kagent.api.v1alpha1.TaskStoreServiceGetWorkspaceRequest\x1a\x39.kagent.api.v1alpha1.TaskStoreServiceGetWorkspaceResponseBIZGgithub.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1;apiv1alpha1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -66,28 +67,34 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_TASKSTORESERVICESETTLETASKREQUEST'].fields_by_name['task_id']._serialized_options = b'\272H\004r\002\020\001'
   _globals['_TASKSTORESERVICESETTLETASKREQUEST'].fields_by_name['version']._loaded_options = None
   _globals['_TASKSTORESERVICESETTLETASKREQUEST'].fields_by_name['version']._serialized_options = b'\272H\004\"\002 \000'
-  _globals['_STOREDTASK']._serialized_start=101
-  _globals['_STOREDTASK']._serialized_end=176
-  _globals['_TASKSTORESERVICECREATETASKREQUEST']._serialized_start=179
-  _globals['_TASKSTORESERVICECREATETASKREQUEST']._serialized_end=484
-  _globals['_TASKSTORESERVICECREATETASKRESPONSE']._serialized_start=486
-  _globals['_TASKSTORESERVICECREATETASKRESPONSE']._serialized_end=548
-  _globals['_TASKSTORESERVICEGETTASKREQUEST']._serialized_start=550
-  _globals['_TASKSTORESERVICEGETTASKREQUEST']._serialized_end=657
-  _globals['_TASKSTORESERVICEGETTASKRESPONSE']._serialized_start=659
-  _globals['_TASKSTORESERVICEGETTASKRESPONSE']._serialized_end=749
-  _globals['_TASKSTORESERVICEUPDATETASKREQUEST']._serialized_start=752
-  _globals['_TASKSTORESERVICEUPDATETASKREQUEST']._serialized_end=1156
-  _globals['_TASKSTORESERVICEUPDATETASKRESPONSE']._serialized_start=1158
-  _globals['_TASKSTORESERVICEUPDATETASKRESPONSE']._serialized_end=1220
-  _globals['_TASKSTORESERVICELISTTASKSREQUEST']._serialized_start=1223
-  _globals['_TASKSTORESERVICELISTTASKSREQUEST']._serialized_end=1361
-  _globals['_TASKSTORESERVICELISTTASKSRESPONSE']._serialized_start=1363
-  _globals['_TASKSTORESERVICELISTTASKSRESPONSE']._serialized_end=1452
-  _globals['_TASKSTORESERVICESETTLETASKREQUEST']._serialized_start=1455
-  _globals['_TASKSTORESERVICESETTLETASKREQUEST']._serialized_end=1600
-  _globals['_TASKSTORESERVICESETTLETASKRESPONSE']._serialized_start=1602
-  _globals['_TASKSTORESERVICESETTLETASKRESPONSE']._serialized_end=1638
-  _globals['_TASKSTORESERVICE']._serialized_start=1641
-  _globals['_TASKSTORESERVICE']._serialized_end=2282
+  _globals['_TASKSTORESERVICEGETWORKSPACEREQUEST'].fields_by_name['session_id']._loaded_options = None
+  _globals['_TASKSTORESERVICEGETWORKSPACEREQUEST'].fields_by_name['session_id']._serialized_options = b'\272H\005r\003\260\001\001'
+  _globals['_STOREDTASK']._serialized_start=135
+  _globals['_STOREDTASK']._serialized_end=210
+  _globals['_TASKSTORESERVICECREATETASKREQUEST']._serialized_start=213
+  _globals['_TASKSTORESERVICECREATETASKREQUEST']._serialized_end=518
+  _globals['_TASKSTORESERVICECREATETASKRESPONSE']._serialized_start=520
+  _globals['_TASKSTORESERVICECREATETASKRESPONSE']._serialized_end=582
+  _globals['_TASKSTORESERVICEGETTASKREQUEST']._serialized_start=584
+  _globals['_TASKSTORESERVICEGETTASKREQUEST']._serialized_end=691
+  _globals['_TASKSTORESERVICEGETTASKRESPONSE']._serialized_start=693
+  _globals['_TASKSTORESERVICEGETTASKRESPONSE']._serialized_end=783
+  _globals['_TASKSTORESERVICEUPDATETASKREQUEST']._serialized_start=786
+  _globals['_TASKSTORESERVICEUPDATETASKREQUEST']._serialized_end=1190
+  _globals['_TASKSTORESERVICEUPDATETASKRESPONSE']._serialized_start=1192
+  _globals['_TASKSTORESERVICEUPDATETASKRESPONSE']._serialized_end=1254
+  _globals['_TASKSTORESERVICELISTTASKSREQUEST']._serialized_start=1257
+  _globals['_TASKSTORESERVICELISTTASKSREQUEST']._serialized_end=1395
+  _globals['_TASKSTORESERVICELISTTASKSRESPONSE']._serialized_start=1397
+  _globals['_TASKSTORESERVICELISTTASKSRESPONSE']._serialized_end=1486
+  _globals['_TASKSTORESERVICESETTLETASKREQUEST']._serialized_start=1489
+  _globals['_TASKSTORESERVICESETTLETASKREQUEST']._serialized_end=1634
+  _globals['_TASKSTORESERVICESETTLETASKRESPONSE']._serialized_start=1636
+  _globals['_TASKSTORESERVICESETTLETASKRESPONSE']._serialized_end=1672
+  _globals['_TASKSTORESERVICEGETWORKSPACEREQUEST']._serialized_start=1674
+  _globals['_TASKSTORESERVICEGETWORKSPACEREQUEST']._serialized_end=1752
+  _globals['_TASKSTORESERVICEGETWORKSPACERESPONSE']._serialized_start=1754
+  _globals['_TASKSTORESERVICEGETWORKSPACERESPONSE']._serialized_end=1854
+  _globals['_TASKSTORESERVICE']._serialized_start=1857
+  _globals['_TASKSTORESERVICE']._serialized_end=2632
 # @@protoc_insertion_point(module_scope)

@@ -97,6 +97,7 @@ func (c *Client) RecordRuntimeRevision(ctx context.Context, revision RuntimeRevi
 			RuntimeArtifact: RuntimeArtifact{Revision: revision.Revision, Kind: runtimeKindAgent, Namespace: revision.Namespace,
 				ActorTemplateAtespace: revision.ActorTemplateAtespace, ActorTemplateName: revision.ActorTemplateName, ActorTemplateUID: revision.ActorTemplateUID},
 			SourceSnapshot: revision.SourceSnapshot, EgressDestinations: revision.EgressDestinations, Credentials: revision.Credentials,
+			GitOrigins: revision.GitOrigins,
 		}); err != nil {
 			return err
 		}
@@ -229,6 +230,7 @@ type runtimeRevisionRecord struct {
 	SourceSnapshot     json.RawMessage
 	EgressDestinations []string
 	Credentials        []egress.Credential
+	GitOrigins         []string
 }
 
 // recordRuntimeRevision writes immutable common inputs with mutable artifact
@@ -241,14 +243,17 @@ func recordRuntimeRevision(ctx context.Context, tx pgx.Tx, revision runtimeRevis
 	if revision.EgressDestinations == nil {
 		revision.EgressDestinations = []string{}
 	}
+	if revision.GitOrigins == nil {
+		revision.GitOrigins = []string{}
+	}
 	result, err := tx.Exec(ctx, `
   INSERT INTO runtime_revision (revision, kind, namespace, source_snapshot, egress_destinations,
-   actor_template_atespace, actor_template_name, actor_template_uid, credentials)
-  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+   actor_template_atespace, actor_template_name, actor_template_uid, credentials, git_origins)
+  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
   ON CONFLICT (revision) DO UPDATE SET actor_template_uid = EXCLUDED.actor_template_uid, updated_at = NOW()
   WHERE runtime_revision.deleted_at IS NULL AND runtime_revision.kind = EXCLUDED.kind
  `, revision.Revision, revision.Kind, revision.Namespace, revision.SourceSnapshot, revision.EgressDestinations,
-		revision.ActorTemplateAtespace, revision.ActorTemplateName, revision.ActorTemplateUID, revision.Credentials)
+		revision.ActorTemplateAtespace, revision.ActorTemplateName, revision.ActorTemplateUID, revision.Credentials, revision.GitOrigins)
 	if err != nil {
 		return fmt.Errorf("record runtime revision %s: %w", revision.Revision, err)
 	}

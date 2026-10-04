@@ -1,5 +1,6 @@
 import a2a_pb2 as _a2a_pb2
 from buf.validate import validate_pb2 as _validate_pb2
+from kagent.api.v1alpha1 import common_pb2 as _common_pb2
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
 from collections.abc import Mapping as _Mapping
@@ -92,3 +93,15 @@ class TaskStoreServiceSettleTaskRequest(_message.Message):
 class TaskStoreServiceSettleTaskResponse(_message.Message):
     __slots__ = ()
     def __init__(self) -> None: ...
+
+class TaskStoreServiceGetWorkspaceRequest(_message.Message):
+    __slots__ = ("session_id",)
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    session_id: str
+    def __init__(self, session_id: _Optional[str] = ...) -> None: ...
+
+class TaskStoreServiceGetWorkspaceResponse(_message.Message):
+    __slots__ = ("workspace",)
+    WORKSPACE_FIELD_NUMBER: _ClassVar[int]
+    workspace: _common_pb2.Workspace
+    def __init__(self, workspace: _Optional[_Union[_common_pb2.Workspace, _Mapping]] = ...) -> None: ...

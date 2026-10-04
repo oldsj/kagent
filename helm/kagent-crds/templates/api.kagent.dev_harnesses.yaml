@@ -88,6 +88,47 @@ spec:
                 x-kubernetes-list-map-keys:
                 - name
                 x-kubernetes-list-type: map
+              git:
+                description: |-
+                  Git lets sessions bootstrap a repository checkout into the workspace.
+                  Only the Codex and Claude adapters support it.
+                properties:
+                  credentialSecretRef:
+                    description: |-
+                      CredentialSecretRef names a key in a same-namespace Secret holding the
+                      complete Authorization header value for the origin, for example
+                      "Basic <base64 of x-access-token:TOKEN>". Omitted clones anonymously.
+                    properties:
+                      key:
+                        minLength: 1
+                        type: string
+                      name:
+                        minLength: 1
+                        type: string
+                    required:
+                    - key
+                    - name
+                    type: object
+                  origins:
+                    description: |-
+                      Origins lists the HTTPS Git hosts sessions may clone from, for example
+                      github.com. Each is an exact DNS name without scheme, port, or path.
+                    items:
+                      maxLength: 253
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)+$
+                      type: string
+                    maxItems: 16
+                    minItems: 1
+                    type: array
+                    x-kubernetes-list-type: set
+                required:
+                - origins
+                type: object
+                x-kubernetes-validations:
+                - message: credentialSecretRef requires exactly one origin because
+                    the gateway holds one credential per host and header
+                  rule: '!has(self.credentialSecretRef) || self.origins.size() ==
+                    1'
               kagent:
                 description: KagentHarness configures the kagent runtime adapter.
                 properties:
@@ -279,6 +320,8 @@ spec:
                 ? 1 : 0) + (has(self.byo) ? 1 : 0) == 1'
             - message: BYO harnesses must specify workload.command
               rule: '!has(self.byo) || size(self.workload.command) > 0'
+            - message: git is supported only by the codex and claude harnesses
+              rule: '!has(self.git) || has(self.codex) || has(self.claude)'
           status:
             description: HarnessStatus reports controller-derived capabilities and
               current health.

@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
+	"github.com/kagent-dev/kagent/go/api/workspace"
 	"github.com/kagent-dev/kagent/go/core/internal/database"
 	"github.com/kagent-dev/kagent/go/core/internal/service/serviceerrors"
 	"github.com/kagent-dev/kagent/go/core/pkg/auth"
@@ -89,8 +90,14 @@ func NewService(store store, authorizer auth.Authorizer, workflow sessionWorkflo
 // Create reserves and converges a new conversation. name is optional; an empty
 // name leaves the conversation identified by its id, which is how every session
 // created before names existed behaves.
-func (s *Service) Create(ctx context.Context, agent *apiv1alpha1.ResourceReference, requestID, name string) (*apiv1alpha1.Session, error) {
+// Create reserves a Session for the Agent. A non-nil requested workspace asks the runtime to
+// check out a repository before the first turn; its host must be one of the
+// Agent's Git origins.
+func (s *Service) Create(ctx context.Context, agent *apiv1alpha1.ResourceReference, requestID, name string, requested *apiv1alpha1.Workspace) (*apiv1alpha1.Session, error) {
 	if err := validateCreate(agent, requestID); err != nil {
+		return nil, err
+	}
+	if err := validateWorkspace(requested); err != nil {
 		return nil, err
 	}
 	creator, err := s.authorize(ctx, auth.VerbCreate, "")
@@ -107,10 +114,13 @@ func (s *Service) Create(ctx context.Context, agent *apiv1alpha1.ResourceReferen
 	}
 	session, _, err := s.store.CreateSession(ctx, &apiv1alpha1.Session{
 		Id: id.String(), Creator: creator, Name: name,
-		Agent: agent,
+		Agent: agent, Workspace: requested,
 	}, requestID)
 	if errors.Is(err, database.ErrIdempotencyConflict) {
 		return nil, serviceerrors.NewAlreadyExists("request_id was already used for a different Session", err)
+	}
+	if errors.Is(err, database.ErrWorkspaceNotAllowed) {
+		return nil, serviceerrors.NewInvalidArgument("workspace repository host is not one of the Agent's Git origins", err)
 	}
 	if errors.Is(err, database.ErrFailedPrecondition) {
 		return nil, serviceerrors.NewFailedPrecondition("request_id belongs to a deleted Session", err)
@@ -444,6 +454,19 @@ func validateCreate(agent *apiv1alpha1.ResourceReference, requestID string) erro
 	}
 	if requestID == "" || strings.TrimSpace(requestID) != requestID || len(requestID) > 128 {
 		return serviceerrors.NewInvalidArgument("request_id must be 1-128 characters without surrounding whitespace", nil)
+	}
+	return nil
+}
+
+// validateWorkspace checks the parts of a workspace request that need no stored
+// state. Whether the host is an allowed origin is decided against the pinned
+// revision when the Session is reserved.
+func validateWorkspace(requested *apiv1alpha1.Workspace) error {
+	if requested == nil {
+		return nil
+	}
+	if _, err := workspace.RepoHost(requested.GetRepo()); err != nil {
+		return serviceerrors.NewInvalidArgument("workspace repo is invalid: "+err.Error(), err)
 	}
 	return nil
 }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kagent-dev/kagent/go/api/agentplugin"
+	"github.com/kagent-dev/kagent/go/api/workspace"
 	"github.com/kagent-dev/kagent/go/pkg/tracing"
 )
 
@@ -74,6 +75,9 @@ type Config struct {
 	Agents                map[string]Agent       `json:"agents,omitempty"`
 	SkillResources        *agentplugin.Resources `json:"skill_resources,omitempty"`
 	MCPServers            map[string]MCPServer   `json:"mcp_servers,omitempty"`
+	// Git is the repository policy for Session workspaces. Absent means Sessions
+	// cannot request a workspace.
+	Git *workspace.Git `json:"git,omitempty"`
 	// RuntimeTelemetry carries the compiler-owned span identity and content
 	// capture policy. It is absent for standalone runs, which fall back to the
 	// environment for service identity and leave capture disabled.
@@ -143,6 +147,11 @@ func (c Config) Validate() error {
 	}
 	if err := c.RuntimeTelemetry.Validate(); err != nil {
 		return err
+	}
+	if c.Git != nil {
+		if err := c.Git.Validate(); err != nil {
+			return err
+		}
 	}
 	if runtime := c.RuntimeTelemetry.Runtime; runtime != "" && runtime != tracing.RuntimeClaude {
 		return fmt.Errorf("claude runtime telemetry names runtime %q", runtime)

@@ -4,6 +4,7 @@ package kagent.api.v1alpha1;
 
 import "a2a.proto";
 import "buf/validate/validate.proto";
+import "kagent/api/v1alpha1/common.proto";
 
 option go_package = "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1;apiv1alpha1";
 
@@ -21,6 +22,9 @@ service TaskStoreService {
   // at this saved version and publishes its task state and history atomically.
   // Runtime pause/suspend and checkpoint snapshot readiness are independent.
   rpc SettleTask(TaskStoreServiceSettleTaskRequest) returns (TaskStoreServiceSettleTaskResponse);
+  // GetWorkspace returns the Git checkout the Session asked for, or an empty
+  // response when it asked for none. The runtime calls it before the first turn.
+  rpc GetWorkspace(TaskStoreServiceGetWorkspaceRequest) returns (TaskStoreServiceGetWorkspaceResponse);
 }
 
 message StoredTask {
@@ -92,3 +96,12 @@ message TaskStoreServiceSettleTaskRequest {
 }
 
 message TaskStoreServiceSettleTaskResponse {}
+
+message TaskStoreServiceGetWorkspaceRequest {
+  string session_id = 1 [(buf.validate.field).string.uuid = true];
+}
+
+message TaskStoreServiceGetWorkspaceResponse {
+  // Unset when the Session has no workspace.
+  Workspace workspace = 1;
+}

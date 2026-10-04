@@ -29,6 +29,16 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+// SecretKeyReference identifies a key in a same-namespace Secret.
+type SecretKeyReference struct {
+	// +kubebuilder:validation:MinLength=1
+	// +required
+	Name string `json:"name"`
+	// +kubebuilder:validation:MinLength=1
+	// +required
+	Key string `json:"key"`
+}
+
 // ConfigMapKeyReference identifies a key in a same-namespace ConfigMap.
 type ConfigMapKeyReference struct {
 	// +kubebuilder:validation:MinLength=1

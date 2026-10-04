@@ -33,6 +33,7 @@ func TestSessionServicePoliciesMatchTheirEffect(t *testing.T) {
 		{name: "create share", method: apiv1alpha1.SessionService_CreateSessionShare_FullMethodName, want: pkgauth.AccessCreate},
 		{name: "list shares", method: apiv1alpha1.SessionService_ListSessionShares_FullMethodName, want: pkgauth.AccessRead},
 		{name: "revoke share", method: apiv1alpha1.SessionService_RevokeSessionShare_FullMethodName, want: pkgauth.AccessDelete},
+		{name: "runtime workspace read", method: apiv1alpha1.TaskStoreService_GetWorkspace_FullMethodName, want: pkgauth.AccessRuntime},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			got, ok := policies[test.method]

@@ -58,6 +58,7 @@ overrides of these variables are rejected.
 | Gemini API key | `x-goog-api-key: <key>` |
 | Bedrock bearer token | `authorization: Bearer <token>` |
 | RemoteMCPServer Secret-backed header | Configured header; Secret contains its full value |
+| Git origin (`spec.git.credentialSecretRef` on a Harness) | `authorization: <value>`; Secret contains the full header value, for example `Basic <base64 of x-access-token:TOKEN>` |
 
 Provider endpoint overrides determine the allowed HTTP(S) origin. Egress rules
 match its scheme, DNS name, and port; credential bindings remain scoped to the
@@ -66,6 +67,14 @@ are rejected, including conflicts between models, memory embeddings, and MCP
 servers. Use distinct DNS names for
 origins requiring different credentials. IP-address destinations are unsupported
 by alpha3 egress policies.
+
+A Git credential binds to its single origin's hostname and the `authorization`
+header, so the one-credential-per-host-and-header rule applies to it like any
+other source. The gateway overwrites an `Authorization` header only when the
+client already sent one. The Git bootstrap therefore writes a placeholder
+`http.https://<host>/.extraHeader` into the workspace repository's own config,
+never the global one; the real value exists only at the gateway. See
+[Git workspace bootstrap](runtime-and-lifecycle.md#git-workspace-bootstrap).
 
 Harness and SandboxTemplate environment entries accept only literal `value`
 strings, including empty strings. Configure Secret-backed credentials on

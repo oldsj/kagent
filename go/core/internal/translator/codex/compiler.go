@@ -106,6 +106,8 @@ func (c *Compiler) Compile(ctx context.Context, input *v2translator.HarnessInput
 	}
 	cfg := codexconfig.Production(model.Spec.Model, input.Root.Instruction)
 	cfg.Provider, cfg.Agents, cfg.MCPServers = provider, agents, mcp.servers
+	gitPolicy, gitEgress := v2translator.CompileGit(harness.Spec.Git)
+	cfg.Git = gitPolicy
 	cfg.RuntimeTelemetry = runtimeTelemetry
 	if codex := harness.Spec.Codex; codex != nil && codex.AutoCompactTokenLimit != nil {
 		cfg.AutoCompactTokenLimit = *codex.AutoCompactTokenLimit
@@ -143,6 +145,7 @@ func (c *Compiler) Compile(ctx context.Context, input *v2translator.HarnessInput
 	}
 	egress = append(egress, skillEgress...)
 	egress = append(egress, mcp.egress...)
+	egress = append(egress, gitEgress...)
 	egress = append(egress, telemetryConfig.Destinations()...)
 	egress = append(egress, "http://"+utils.GetControllerName()+"."+utils.GetResourceNamespace()+":8083")
 	slices.Sort(egress)
@@ -154,6 +157,7 @@ func (c *Compiler) Compile(ctx context.Context, input *v2translator.HarnessInput
 			WorkerPoolName: harness.Spec.Substrate.WorkerPoolRef.Name, SnapshotLocation: harness.Spec.Substrate.SnapshotPolicy.Location,
 			SnapshotOnQuiesce: harness.Spec.Substrate.SnapshotPolicy.OnQuiesce,
 			Credentials:       credentials, Provenance: provenance, EgressDestinations: egress,
+			GitOrigins: v2translator.GitOrigins(gitPolicy),
 		},
 		Warnings: mcp.warnings,
 	}, nil
