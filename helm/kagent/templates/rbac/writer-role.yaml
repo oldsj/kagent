@@ -1,5 +1,19 @@
 {{- define "kagent.writer.rules" -}}
 - apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - roles
+  - rolebindings
+  verbs:
+  - create
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - networkpolicies
+  verbs:
+  - get
+  - create
+- apiGroups:
   - api.kagent.dev
   resources:
   - harnesses

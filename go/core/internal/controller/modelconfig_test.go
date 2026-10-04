@@ -1,10 +1,13 @@
 package controller
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"testing"
 	"time"
 
 	kagentv1alpha3 "github.com/kagent-dev/kagent/go/api/v1alpha3"
+	"github.com/kagent-dev/kagent/go/core/internal/controller/chatgptrefresh"
 	v2translator "github.com/kagent-dev/kagent/go/core/internal/translator"
 	"istio.io/istio/pkg/kube/krt"
 	"istio.io/istio/pkg/kube/krt/krttest"
@@ -12,6 +15,34 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+func TestModelConfigRefreshFailureBlocksResolutionUntilReseeding(t *testing.T) {
+	stop := make(chan struct{})
+	t.Cleanup(func() { close(stop) })
+	opts := krt.NewOptionsBuilder(stop, "test-refresh", nil)
+	model := &kagentv1alpha3.ModelConfig{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "model"},
+		Spec: kagentv1alpha3.ModelConfigSpec{Provider: kagentv1alpha3.ModelProviderOpenAI, Model: "gpt-5", APIKeySecret: "auth", APIKeySecretKey: "access-token",
+			OpenAI: &kagentv1alpha3.OpenAIConfig{AuthMethod: kagentv1alpha3.OpenAIAuthMethod_ChatGPT, AccountID: "synthetic"}},
+	}
+	data := []byte("synthetic-auth-file")
+	hash := sha256.Sum256(data)
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "auth", Annotations: map[string]string{
+		chatgptrefresh.StateAnnotation: "reauthentication-required", chatgptrefresh.HashAnnotation: hex.EncodeToString(hash[:]),
+	}}, Data: map[string][]byte{chatgptrefresh.AuthKey: data, "access-token": []byte("synthetic-access")}}
+	mock := krttest.NewMock(t, []any{model})
+	secrets := krt.NewStaticCollection(nil, []*corev1.Secret{secret}, opts.WithName("Secrets")...)
+	statuses, resolved := newModelConfigReconciliations(krttest.GetMockCollection[*kagentv1alpha3.ModelConfig](mock), krttest.GetMockCollection[*corev1.ConfigMap](mock), secrets, opts)
+	waitFor(t, func() bool { return len(statuses.List()) == 1 && resolved.GetKey("team-a/model") != nil })
+	condition := apimeta.FindStatusCondition(statuses.List()[0].Status.Conditions, kagentv1alpha3.ModelConfigConditionTypeResolvedRefs)
+	if condition == nil || condition.Status != metav1.ConditionFalse || condition.Reason != chatgptrefresh.ReauthenticationRequired || resolved.GetKey("team-a/model").Usable() {
+		t.Fatal("terminal refresh failure did not block ModelConfig and downstream Agent resolution")
+	}
+	replacement := secret.DeepCopy()
+	replacement.Data[chatgptrefresh.AuthKey] = []byte("dedicated-replacement-auth")
+	secrets.UpdateObject(replacement)
+	waitFor(t, func() bool { return resolved.GetKey("team-a/model").Usable() })
+}
 
 func TestResolvedModelConfigEquals(t *testing.T) {
 	left := v2translator.ResolvedModelConfig{Config: &kagentv1alpha3.ModelConfig{Spec: kagentv1alpha3.ModelConfigSpec{Model: "gpt-5"}}}

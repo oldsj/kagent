@@ -18,6 +18,10 @@ RUN --mount=type=cache,target=/root/go/pkg/mod,rw \
     --mount=type=cache,target=/root/.cache/go-build,rw \
     CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
     go build -trimpath -o /kagent-codex ./harness/codex/cmd
+RUN --mount=type=cache,target=/root/go/pkg/mod,rw \
+    --mount=type=cache,target=/root/.cache/go-build,rw \
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
+    go build -trimpath -o /kagent-credential-refresh ./core/cmd/credential-refresh
 
 FROM alpine:3.22
 ARG CODEX_CLI_VERSION=0.148.0
@@ -43,6 +47,7 @@ RUN apk upgrade --no-cache && apk add --no-cache bash ca-certificates git libgcc
     && chown -R 65532:65532 /data
 
 COPY --from=builder /kagent-codex /usr/local/bin/kagent-codex
+COPY --from=builder /kagent-credential-refresh /usr/local/bin/kagent-credential-refresh
 
 USER 65532:65532
 WORKDIR /data/workspace
