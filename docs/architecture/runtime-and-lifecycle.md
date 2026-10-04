@@ -239,3 +239,35 @@ reconstructs pending from PostgreSQL and resets process-local histogram totals.
   errors require checking the bounded error type and logs (`revision`,
   `actor_template_atespace`, `actor_template_name`, `error`) to identify the
   failing dependency and repeated same-object failures.
+
+## Git workspace bootstrap
+
+`CreateSessionRequest.workspace` (`repo`, optional `ref`, `branch`, `depth`) asks for a
+repository checkout before the first turn. It is stored on the Session and is accepted
+only when the repository host is one of the revision's Git origins (`spec.git.origins`);
+the check runs in the same transaction that pins the revision, so a rejected request
+creates nothing. Sessions without a workspace behave as before. A Harness with
+`spec.git` requires a harness image built with this bootstrap: the adapter
+configuration rejects unknown fields, so an older image fails at startup.
+
+The Codex and Claude adapters wrap their runner with a bootstrapper. Before each turn it
+checks for the marker `/data/workspace/.git/kagent-bootstrap`. When the marker is absent
+it reads the workspace through the runtime-authenticated `TaskStoreService.GetWorkspace`
+call, which resolves only the calling Session. It then clones into `/data/workspace`:
+
+- `ref` may be a branch, a tag, or a full commit SHA; an empty ref selects the remote
+  default branch. `depth` defaults to 1. A non-empty `branch` is created or reset from
+  the checked-out ref.
+- When the Harness has a credential, a placeholder `Authorization` header is written to
+  the repository-local `http.https://<host>/.extraHeader`. It is never written to global
+  Git configuration, because `~/.gitconfig` does not survive a Data snapshot, while
+  `/data` does. The gateway replaces the placeholder in flight. The runtime holds no
+  token.
+- The marker is written last, atomically. A `.git` directory without a marker is an
+  interrupted attempt and is removed and redone, so retries and resumes are idempotent.
+  Files outside `.git` are left alone.
+
+A failed bootstrap does not run the agent. The turn ends as a failed task whose message
+names the cause (ref not found, authentication, unreachable host, timeout, invalid ref
+name), and the next turn retries. The bootstrapper also enforces the Harness origins, so
+a Session row that bypassed create-time validation still cannot reach another host.

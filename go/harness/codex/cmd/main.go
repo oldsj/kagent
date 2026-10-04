@@ -12,8 +12,10 @@ import (
 
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/kagent-dev/kagent/go/adk/pkg/app"
+	"github.com/kagent-dev/kagent/go/adk/pkg/controllerclient"
 	"github.com/kagent-dev/kagent/go/harness/codex/config"
 	"github.com/kagent-dev/kagent/go/harness/codex/executor"
+	"github.com/kagent-dev/kagent/go/harness/runtime/workspace"
 	"github.com/kagent-dev/kagent/go/pkg/logging"
 	"github.com/kagent-dev/kagent/go/pkg/telemetry"
 )
@@ -75,7 +77,19 @@ func run(ctx context.Context, check bool, getenv func(string) string, environmen
 			logging.FromContext(ctx).ErrorContext(ctx, "failed to shutdown harness telemetry", "error", err)
 		}
 	}()
-	exec, err := executor.New(ctx, executor.Config{ConfigJSON: configJSON, DataDir: dataDir, Environment: environment})
+	var controller *controllerclient.Client
+	var source workspace.Source
+	if cfg.Git != nil {
+		if check {
+			source = workspace.Unavailable()
+		} else {
+			if controller, source, err = workspace.OpenController(card.Name); err != nil {
+				return err
+			}
+			defer controller.Close()
+		}
+	}
+	exec, err := executor.New(ctx, executor.Config{ConfigJSON: configJSON, DataDir: dataDir, Environment: environment, Workspace: source})
 	if err != nil {
 		return err
 	}
@@ -84,7 +98,8 @@ func run(ctx context.Context, check bool, getenv func(string) string, environmen
 	}
 	application, err := app.New(app.AppConfig{
 		AgentCard: card, Port: privatePort, AppName: card.Name,
-		Logger: logging.FromContext(ctx), Telemetry: cfg.RuntimeTelemetry, Flush: providers.ForceFlush,
+		ControllerClient: controller,
+		Logger:           logging.FromContext(ctx), Telemetry: cfg.RuntimeTelemetry, Flush: providers.ForceFlush,
 	}, exec)
 	if err != nil {
 		return fmt.Errorf("construct private A2A app: %w", err)
