@@ -107,7 +107,7 @@ tests:
           content: sandboxtemplates
         template: rbac/getter-role.yaml
       - contains:
-          path: rules[0].resources
+          path: rules[2].resources
           content: sandboxtemplates
         template: rbac/writer-role.yaml
 
@@ -138,17 +138,47 @@ tests:
       - rbac/writer-role.yaml
     asserts:
       - equal:
-          path: rules[0].apiGroups
-          value: [api.kagent.dev]
+          path: rules[0]
+          value:
+            apiGroups: [api.kagent.dev]
+            resources: [harnesses, agents, sandboxtemplates, agenttemplates, modelconfigs, modelproviderconfigs, remotemcpservers]
+            verbs: [get, list, watch]
+        template: rbac/getter-role.yaml
       - equal:
-          path: rules[0].resources
-          value: [harnesses, agents, sandboxtemplates, agenttemplates, modelconfigs, modelproviderconfigs, remotemcpservers]
+          path: rules[1]
+          value:
+            apiGroups: [kagent.dev]
+            resources: [mcpservers]
+            verbs: [get, list, watch]
+        template: rbac/getter-role.yaml
       - equal:
-          path: rules[1].apiGroups
-          value: [kagent.dev]
+          path: rules[0]
+          value:
+            apiGroups: [rbac.authorization.k8s.io]
+            resources: [roles, rolebindings]
+            verbs: [create]
+        template: rbac/writer-role.yaml
       - equal:
-          path: rules[1].resources
-          value: [mcpservers]
+          path: rules[1]
+          value:
+            apiGroups: [networking.k8s.io]
+            resources: [networkpolicies]
+            verbs: [get, create]
+        template: rbac/writer-role.yaml
+      - equal:
+          path: rules[2]
+          value:
+            apiGroups: [api.kagent.dev]
+            resources: [harnesses, agents, sandboxtemplates, agenttemplates, modelconfigs, modelproviderconfigs, remotemcpservers]
+            verbs: [create, update, patch, delete]
+        template: rbac/writer-role.yaml
+      - equal:
+          path: rules[3]
+          value:
+            apiGroups: [kagent.dev]
+            resources: [mcpservers]
+            verbs: [create, update, patch, delete]
+        template: rbac/writer-role.yaml
 
   - it: should grant namespaced agent access in the new group and retain KMCP access
     set:
@@ -158,17 +188,47 @@ tests:
       - rbac/writer-role.yaml
     asserts:
       - equal:
-          path: rules[0].apiGroups
-          value: [api.kagent.dev]
+          path: rules[0]
+          value:
+            apiGroups: [api.kagent.dev]
+            resources: [harnesses, agents, sandboxtemplates, agenttemplates, modelconfigs, modelproviderconfigs, remotemcpservers]
+            verbs: [get, list, watch]
+        template: rbac/getter-role.yaml
       - equal:
-          path: rules[0].resources
-          value: [harnesses, agents, sandboxtemplates, agenttemplates, modelconfigs, modelproviderconfigs, remotemcpservers]
+          path: rules[1]
+          value:
+            apiGroups: [kagent.dev]
+            resources: [mcpservers]
+            verbs: [get, list, watch]
+        template: rbac/getter-role.yaml
       - equal:
-          path: rules[1].apiGroups
-          value: [kagent.dev]
+          path: rules[0]
+          value:
+            apiGroups: [rbac.authorization.k8s.io]
+            resources: [roles, rolebindings]
+            verbs: [create]
+        template: rbac/writer-role.yaml
       - equal:
-          path: rules[1].resources
-          value: [mcpservers]
+          path: rules[1]
+          value:
+            apiGroups: [networking.k8s.io]
+            resources: [networkpolicies]
+            verbs: [get, create]
+        template: rbac/writer-role.yaml
+      - equal:
+          path: rules[2]
+          value:
+            apiGroups: [api.kagent.dev]
+            resources: [harnesses, agents, sandboxtemplates, agenttemplates, modelconfigs, modelproviderconfigs, remotemcpservers]
+            verbs: [create, update, patch, delete]
+        template: rbac/writer-role.yaml
+      - equal:
+          path: rules[3]
+          value:
+            apiGroups: [kagent.dev]
+            resources: [mcpservers]
+            verbs: [create, update, patch, delete]
+        template: rbac/writer-role.yaml
 
   - it: should have correct labels on all resources
     templates:
