@@ -663,12 +663,20 @@ func newInteractionFixtureForTemplate(t *testing.T, harness testHarness, target,
 
 func newInteractionFixtureForHarnessTemplate(t *testing.T, target, harnessName, templateName string) *interactionFixture {
 	t.Helper()
+	return newInteractionFixtureWithWorkspace(t, target, templateName, nil)
+}
+
+// newInteractionFixtureWithWorkspace creates a Session that asks for a Git
+// workspace. The Agent named templateName must run on a Harness with git origins.
+func newInteractionFixtureWithWorkspace(t *testing.T, target, templateName string, workspace *apiv1alpha1.Workspace) *interactionFixture {
+	t.Helper()
 	conn := newControllerConn(t, target)
 	ctx, cancel := context.WithTimeout(metadata.AppendToOutgoingContext(t.Context(), "x-user-id", "e2e"), 4*time.Minute)
 	t.Cleanup(cancel)
 	sessions := apiv1alpha1.NewSessionServiceClient(conn)
 	request := &apiv1alpha1.CreateSessionRequest{
 		Agent: &apiv1alpha1.ResourceReference{Namespace: "kagent", Name: templateName}, RequestId: uuid.NewString(),
+		Workspace: workspace,
 	}
 	var created *apiv1alpha1.CreateSessionResponse
 	err := wait.PollUntilContextTimeout(ctx, time.Second, time.Minute, true, func(ctx context.Context) (bool, error) {
