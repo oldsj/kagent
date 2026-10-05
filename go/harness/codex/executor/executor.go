@@ -60,7 +60,7 @@ func New(ctx context.Context, cfg Config) (a2asrv.AgentExecutor, error) {
 			return nil, fmt.Errorf("configuration enables git but no workspace source was provided")
 		}
 		turns, err = workspace.New(runner, workspace.Config{
-			Dir: cfg.DataDir + "/workspace", Policy: *parsed.Git, Source: cfg.Workspace, Environment: cfg.Environment,
+			Dir: cfg.DataDir + "/workspace", StateDir: cfg.DataDir + "/.kagent", Policy: *parsed.Git, Source: cfg.Workspace, Environment: cfg.Environment,
 		})
 		if err != nil {
 			return nil, err
