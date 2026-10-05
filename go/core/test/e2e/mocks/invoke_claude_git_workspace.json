@@ -1,0 +1,436 @@
+{
+  "anthropic": [
+    {
+      "match": {
+        "match_type": "contains",
+        "message": {
+          "content": [
+            {
+              "text": "WS_PROBE_ONE",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      },
+      "name": "ws_probe_one",
+      "response": {
+        "content": [
+          {
+            "id": "toolu_ws_probe_one",
+            "input": {
+              "command": "cd /data/workspace; echo GIT_DIR=$(test -d .git && echo yes || echo no); echo HEAD=$(git rev-parse HEAD 2>&1); echo DONE=$(test -f /data/.kagent/workspace-bootstrap.done && echo yes || echo no); echo STARTED=$(test -e /data/.kagent/workspace-bootstrap.started && echo yes || echo no); echo GIT_MARKERS=$(ls -A .git | grep -ci -e kagent -e bootstrap); echo STATUS=$(git status --porcelain 2>&1 | wc -l); sed s/^/DONE_BODY:/ /data/.kagent/workspace-bootstrap.done; ls -A | sed s/^/FILE:/"
+            },
+            "name": "Bash",
+            "type": "tool_use"
+          }
+        ],
+        "id": "msg_toolu_ws_probe_one",
+        "model": "claude-sonnet-4-5",
+        "role": "assistant",
+        "stop_reason": "tool_use",
+        "type": "message",
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 4
+        }
+      }
+    },
+    {
+      "match": {
+        "match_type": "contains",
+        "message": {
+          "content": [
+            {
+              "tool_use_id": "toolu_ws_probe_one",
+              "type": "tool_result"
+            }
+          ],
+          "role": "user"
+        }
+      },
+      "name": "ws_probe_one_result",
+      "response": {
+        "content": [
+          {
+            "text": "WS_PROBE_ONE_DONE",
+            "type": "text"
+          }
+        ],
+        "id": "msg_toolu_ws_probe_one_done",
+        "model": "claude-sonnet-4-5",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "type": "message",
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 4
+        }
+      }
+    },
+    {
+      "match": {
+        "match_type": "contains",
+        "message": {
+          "content": [
+            {
+              "text": "WS_WRITE_FILE",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      },
+      "name": "ws_write",
+      "response": {
+        "content": [
+          {
+            "id": "toolu_ws_write",
+            "input": {
+              "command": "printf KEEP_ME > /data/workspace/agent-note.txt && printf SENTINEL > /data/workspace/.git/e2e-sentinel && echo WRITTEN"
+            },
+            "name": "Bash",
+            "type": "tool_use"
+          }
+        ],
+        "id": "msg_toolu_ws_write",
+        "model": "claude-sonnet-4-5",
+        "role": "assistant",
+        "stop_reason": "tool_use",
+        "type": "message",
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 4
+        }
+      }
+    },
+    {
+      "match": {
+        "match_type": "contains",
+        "message": {
+          "content": [
+            {
+              "tool_use_id": "toolu_ws_write",
+              "type": "tool_result"
+            }
+          ],
+          "role": "user"
+        }
+      },
+      "name": "ws_write_result",
+      "response": {
+        "content": [
+          {
+            "text": "WS_WRITE_FILE_DONE",
+            "type": "text"
+          }
+        ],
+        "id": "msg_toolu_ws_write_done",
+        "model": "claude-sonnet-4-5",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "type": "message",
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 4
+        }
+      }
+    },
+    {
+      "match": {
+        "match_type": "contains",
+        "message": {
+          "content": [
+            {
+              "text": "WS_PROBE_TWO",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      },
+      "name": "ws_probe_two",
+      "response": {
+        "content": [
+          {
+            "id": "toolu_ws_probe_two",
+            "input": {
+              "command": "cd /data/workspace; echo GIT_DIR=$(test -d .git && echo yes || echo no); echo HEAD=$(git rev-parse HEAD 2>&1); echo DONE=$(test -f /data/.kagent/workspace-bootstrap.done && echo yes || echo no); echo STARTED=$(test -e /data/.kagent/workspace-bootstrap.started && echo yes || echo no); echo GIT_MARKERS=$(ls -A .git | grep -ci -e kagent -e bootstrap); echo STATUS=$(git status --porcelain 2>&1 | wc -l); sed s/^/DONE_BODY:/ /data/.kagent/workspace-bootstrap.done; ls -A | sed s/^/FILE:/; echo NOTE=$(cat agent-note.txt); echo SENTINEL=$(cat .git/e2e-sentinel)"
+            },
+            "name": "Bash",
+            "type": "tool_use"
+          }
+        ],
+        "id": "msg_toolu_ws_probe_two",
+        "model": "claude-sonnet-4-5",
+        "role": "assistant",
+        "stop_reason": "tool_use",
+        "type": "message",
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 4
+        }
+      }
+    },
+    {
+      "match": {
+        "match_type": "contains",
+        "message": {
+          "content": [
+            {
+              "tool_use_id": "toolu_ws_probe_two",
+              "type": "tool_result"
+            }
+          ],
+          "role": "user"
+        }
+      },
+      "name": "ws_probe_two_result",
+      "response": {
+        "content": [
+          {
+            "text": "WS_PROBE_TWO_DONE",
+            "type": "text"
+          }
+        ],
+        "id": "msg_toolu_ws_probe_two_done",
+        "model": "claude-sonnet-4-5",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "type": "message",
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 4
+        }
+      }
+    },
+    {
+      "match": {
+        "match_type": "contains",
+        "message": {
+          "content": [
+            {
+              "text": "WS_FOREIGN_REPLACE",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      },
+      "name": "ws_foreign",
+      "response": {
+        "content": [
+          {
+            "id": "toolu_ws_foreign",
+            "input": {
+              "command": "cd /data/workspace && rm -f /data/.kagent/workspace-bootstrap.done /data/.kagent/workspace-bootstrap.started && rm -rf .git && git init -q . && git config --local e2e.foreign yes && echo FOREIGN_READY"
+            },
+            "name": "Bash",
+            "type": "tool_use"
+          }
+        ],
+        "id": "msg_toolu_ws_foreign",
+        "model": "claude-sonnet-4-5",
+        "role": "assistant",
+        "stop_reason": "tool_use",
+        "type": "message",
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 4
+        }
+      }
+    },
+    {
+      "match": {
+        "match_type": "contains",
+        "message": {
+          "content": [
+            {
+              "tool_use_id": "toolu_ws_foreign",
+              "type": "tool_result"
+            }
+          ],
+          "role": "user"
+        }
+      },
+      "name": "ws_foreign_result",
+      "response": {
+        "content": [
+          {
+            "text": "WS_FOREIGN_REPLACE_DONE",
+            "type": "text"
+          }
+        ],
+        "id": "msg_toolu_ws_foreign_done",
+        "model": "claude-sonnet-4-5",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "type": "message",
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 4
+        }
+      }
+    },
+    {
+      "match": {
+        "match_type": "contains",
+        "message": {
+          "content": [
+            {
+              "text": "WS_AFTER_FOREIGN",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      },
+      "name": "ws_after_foreign",
+      "response": {
+        "content": [
+          {
+            "text": "WS_AFTER_FOREIGN_REACHED_THE_MODEL",
+            "type": "text"
+          }
+        ],
+        "id": "msg_ws_after_foreign",
+        "model": "claude-sonnet-4-5",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "type": "message",
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 4
+        }
+      }
+    },
+    {
+      "match": {
+        "match_type": "contains",
+        "message": {
+          "content": [
+            {
+              "text": "RACE_TURN",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      },
+      "name": "turn_race",
+      "response": {
+        "content": [
+          {
+            "text": "RACE_TURN_DONE",
+            "type": "text"
+          }
+        ],
+        "id": "msg_turn_race",
+        "model": "claude-sonnet-4-5",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "type": "message",
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 4
+        }
+      }
+    },
+    {
+      "match": {
+        "match_type": "contains",
+        "message": {
+          "content": [
+            {
+              "text": "GATED_TURN",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      },
+      "name": "turn_gated",
+      "response": {
+        "content": [
+          {
+            "text": "GATED_TURN_DONE",
+            "type": "text"
+          }
+        ],
+        "id": "msg_turn_gated",
+        "model": "claude-sonnet-4-5",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "type": "message",
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 4
+        }
+      }
+    },
+    {
+      "match": {
+        "match_type": "contains",
+        "message": {
+          "content": [
+            {
+              "text": "FOLLOW_UP_TURN",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      },
+      "name": "turn_follow_up",
+      "response": {
+        "content": [
+          {
+            "text": "FOLLOW_UP_TURN_DONE",
+            "type": "text"
+          }
+        ],
+        "id": "msg_turn_follow_up",
+        "model": "claude-sonnet-4-5",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "type": "message",
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 4
+        }
+      }
+    },
+    {
+      "match": {
+        "match_type": "contains",
+        "message": {
+          "content": [
+            {
+              "text": "",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      },
+      "name": "auxiliary",
+      "response": {
+        "content": [
+          {
+            "text": "OK",
+            "type": "text"
+          }
+        ],
+        "id": "msg_auxiliary",
+        "model": "claude-sonnet-4-5",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "type": "message",
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 4
+        }
+      }
+    }
+  ]
+}
