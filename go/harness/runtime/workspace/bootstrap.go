@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,11 +42,12 @@ type Runner interface {
 
 // Bootstrapper clones a requested repository into Dir before delegating a turn.
 type Bootstrapper struct {
-	next   Runner
-	source Source
-	policy apiworkspace.Git
-	git    *gitRunner
-	dir    string
+	next     Runner
+	source   Source
+	policy   apiworkspace.Git
+	git      *gitRunner
+	dir      string
+	stateDir string
 
 	mu sync.Mutex
 	// none caches that the Session asked for no workspace, so later turns of this
@@ -57,6 +59,10 @@ type Bootstrapper struct {
 type Config struct {
 	// Dir is the workspace directory, normally /data/workspace on the durable disk.
 	Dir string
+	// StateDir holds the bootstrap markers, normally /data/.kagent on the durable
+	// disk. It must be absolute and outside Dir so nothing the agent does in the
+	// workspace can touch the markers.
+	StateDir string
 	// Policy is the compiled Git policy; requests outside its origins fail.
 	Policy apiworkspace.Git
 	Source Source
@@ -69,6 +75,9 @@ func New(next Runner, cfg Config) (*Bootstrapper, error) {
 	if !filepath.IsAbs(cfg.Dir) {
 		return nil, fmt.Errorf("workspace directory %q must be absolute", cfg.Dir)
 	}
+	if err := checkStateDir(cfg.Dir, cfg.StateDir); err != nil {
+		return nil, err
+	}
 	if cfg.Source == nil {
 		return nil, fmt.Errorf("workspace source is required")
 	}
@@ -79,7 +88,7 @@ func New(next Runner, cfg Config) (*Bootstrapper, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Bootstrapper{next: next, source: cfg.Source, policy: cfg.Policy, git: git, dir: cfg.Dir}, nil
+	return &Bootstrapper{next: next, source: cfg.Source, policy: cfg.Policy, git: git, dir: cfg.Dir, stateDir: cfg.StateDir}, nil
 }
 
 // Run bootstraps the workspace if needed, then runs the turn. A bootstrap
@@ -96,7 +105,13 @@ func (b *Bootstrapper) Run(ctx context.Context, turn runtime.Turn, sink runtime.
 func (b *Bootstrapper) ensure(ctx context.Context) string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.none || bootstrapped(b.dir) {
+	if b.none {
+		return ""
+	}
+	if bootstrapped(b.stateDir) {
+		// A started marker left beside done would turn a later removal of done
+		// into a reset of the agent's own .git.
+		markers{b.stateDir}.clearStale(ctx)
 		return ""
 	}
 	ctx, cancel := context.WithTimeout(ctx, Timeout)
@@ -124,7 +139,7 @@ func (b *Bootstrapper) bootstrap(ctx context.Context, request Request) string {
 		return "Workspace bootstrap failed: the workspace directory is not writable."
 	}
 	spec := checkout{
-		Dir: b.dir, Repo: request.Repo, Host: host, Ref: request.Ref, Branch: request.Branch,
+		Dir: b.dir, StateDir: b.stateDir, Repo: request.Repo, Host: host, Ref: request.Ref, Branch: request.Branch,
 		Depth: request.Depth, Credential: b.policy.Credential,
 	}
 	if spec.Depth <= 0 {
@@ -134,4 +149,17 @@ func (b *Bootstrapper) bootstrap(ctx context.Context, request Request) string {
 		return failureMessage(request, err)
 	}
 	return ""
+}
+
+// checkStateDir rejects a marker directory the agent could reach through the
+// workspace: a relative path, or Dir itself or anything inside it.
+func checkStateDir(dir, stateDir string) error {
+	if !filepath.IsAbs(stateDir) {
+		return fmt.Errorf("workspace state directory %q must be absolute", stateDir)
+	}
+	rel, err := filepath.Rel(dir, stateDir)
+	if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("workspace state directory %q must be outside the workspace directory %q", stateDir, dir)
+	}
+	return nil
 }

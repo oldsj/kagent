@@ -21,6 +21,8 @@ func failureMessage(request Request, err error) string {
 		return prefix + "git is not installed in the runtime image."
 	case errors.Is(err, context.DeadlineExceeded):
 		return prefix + "timed out cloning " + request.Repo + "."
+	case errors.Is(err, errForeignGit):
+		return prefix + "the workspace already has a Git repository that the bootstrap did not create, so it was left untouched. Move or remove it, or start a Session without a workspace."
 	case errors.Is(err, errRefNotFound):
 		return fmt.Sprintf("%sref %q was not found in %s.", prefix, request.Ref, request.Repo)
 	case errors.As(err, &gitErr):

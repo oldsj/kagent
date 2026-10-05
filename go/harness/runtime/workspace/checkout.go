@@ -14,10 +14,6 @@ import (
 	"time"
 )
 
-// markerName lives inside .git so a plain `rm -rf .git` or a fresh checkout both
-// reset it, and so it never shows up as an untracked file.
-const markerName = "kagent-bootstrap"
-
 // placeholderHeader gives the egress gateway an Authorization header to
 // overwrite. The gateway replaces a header only when the client already sent
 // one, and the real value never enters the actor.
@@ -34,12 +30,15 @@ var (
 
 // checkout is one fully validated clone request.
 type checkout struct {
-	Dir    string
-	Repo   string
-	Host   string
-	Ref    string
-	Branch string
-	Depth  int
+	Dir string
+	// StateDir is the durable directory that holds the bootstrap markers. It must
+	// be outside Dir.
+	StateDir string
+	Repo     string
+	Host     string
+	Ref      string
+	Branch   string
+	Depth    int
 	// Credential repo-locally configures the placeholder header for Host.
 	Credential bool
 }
@@ -73,27 +72,41 @@ func newGitRunner(environment []string) (*gitRunner, error) {
 	return &gitRunner{path: path, pathErr: err, environment: environment}, nil
 }
 
-func bootstrapped(dir string) bool {
-	_, err := os.Stat(markerPath(dir))
-	return err == nil
-}
+func bootstrapped(stateDir string) bool { return markers{stateDir}.done() }
 
-func markerPath(dir string) string { return filepath.Join(dir, ".git", markerName) }
-
-// checkout builds the repository from scratch and writes the marker last, so an
-// interrupted attempt is always redone from a clean .git. That is safe because
-// bootstrap runs before the first turn: a .git without a marker is ours.
+// checkout builds the repository once. It writes a started marker before the
+// first change and a done marker last, both outside the workspace (see markers).
+//
+//   - done: nothing to do, whatever the workspace holds now.
+//   - started without done: our own interrupted attempt. Its .git is removed
+//     and the checkout redone with -f, because the first attempt may already
+//     have written files that would otherwise block it.
+//   - neither marker but a .git: not ours, so fail and leave it untouched.
 func (g *gitRunner) checkout(ctx context.Context, c checkout) error {
 	if g.pathErr != nil {
 		return g.pathErr
-	}
-	if err := os.RemoveAll(filepath.Join(c.Dir, ".git")); err != nil {
-		return fmt.Errorf("reset partial checkout: %w", err)
 	}
 	for _, name := range []string{c.Ref, c.Branch} {
 		if err := checkRefName(ctx, g, name); err != nil {
 			return err
 		}
+	}
+	m := markers{c.StateDir}
+	hasGit := exists(filepath.Join(c.Dir, ".git"))
+	force := false
+	switch plan(m.done(), m.started(), hasGit) {
+	case actionNone:
+		return nil
+	case actionForeign:
+		return errForeignGit
+	case actionReset:
+		force = true
+		if err := os.RemoveAll(filepath.Join(c.Dir, ".git")); err != nil {
+			return fmt.Errorf("reset partial checkout: %w", err)
+		}
+	}
+	if err := m.markStarted(c); err != nil {
+		return err
 	}
 	if _, err := g.run(ctx, "init", "init", "-q", c.Dir); err != nil {
 		return err
@@ -106,32 +119,32 @@ func (g *gitRunner) checkout(ctx context.Context, c checkout) error {
 	if _, err := g.git(ctx, c.Dir, "remote add", "remote", "add", "origin", c.Repo); err != nil {
 		return err
 	}
-	if err := g.fetchRef(ctx, c); err != nil {
+	if err := g.fetchRef(ctx, c, force); err != nil {
 		return err
 	}
 	if c.Branch != "" {
-		if _, err := g.git(ctx, c.Dir, "checkout", "checkout", "-q", "-B", c.Branch); err != nil {
+		if _, err := g.git(ctx, c.Dir, "checkout", checkoutArgs(force, "-B", c.Branch)...); err != nil {
 			return err
 		}
 	}
-	return writeMarker(c)
+	return m.markDone(ctx, c)
 }
 
 // fetchRef fetches and checks out c.Ref: a full commit SHA, a branch, or a tag,
 // or the remote's default branch when empty.
-func (g *gitRunner) fetchRef(ctx context.Context, c checkout) error {
+func (g *gitRunner) fetchRef(ctx context.Context, c checkout, force bool) error {
 	depth := "--depth=" + strconv.Itoa(c.Depth)
 	switch {
 	case fullSHA.MatchString(c.Ref):
 		if _, err := g.git(ctx, c.Dir, "fetch", "fetch", "-q", depth, "--no-tags", "origin", c.Ref); err != nil {
 			return notFoundOr(err)
 		}
-		_, err := g.git(ctx, c.Dir, "checkout", "checkout", "-q", "--detach", "FETCH_HEAD")
+		_, err := g.git(ctx, c.Dir, "checkout", checkoutArgs(force, "--detach", "FETCH_HEAD")...)
 		return err
 	case c.Ref == "":
-		return g.fetchBranch(ctx, c, g.defaultBranch(ctx, c))
+		return g.fetchBranch(ctx, c, g.defaultBranch(ctx, c), force)
 	}
-	err := g.fetchBranch(ctx, c, c.Ref)
+	err := g.fetchBranch(ctx, c, c.Ref, force)
 	if !errors.Is(err, errRefNotFound) {
 		return err
 	}
@@ -139,25 +152,25 @@ func (g *gitRunner) fetchRef(ctx context.Context, c checkout) error {
 	if _, err := g.git(ctx, c.Dir, "fetch", "fetch", "-q", depth, "origin", "+"+tag+":"+tag); err != nil {
 		return notFoundOr(err)
 	}
-	_, err = g.git(ctx, c.Dir, "checkout", "checkout", "-q", "--detach", tag)
+	_, err = g.git(ctx, c.Dir, "checkout", checkoutArgs(force, "--detach", tag)...)
 	return err
 }
 
-func (g *gitRunner) fetchBranch(ctx context.Context, c checkout, branch string) error {
+func (g *gitRunner) fetchBranch(ctx context.Context, c checkout, branch string, force bool) error {
 	depth := "--depth=" + strconv.Itoa(c.Depth)
 	if branch == "" {
 		// The remote did not name a default branch; fall back to its HEAD.
 		if _, err := g.git(ctx, c.Dir, "fetch", "fetch", "-q", depth, "--no-tags", "origin", "HEAD"); err != nil {
 			return notFoundOr(err)
 		}
-		_, err := g.git(ctx, c.Dir, "checkout", "checkout", "-q", "--detach", "FETCH_HEAD")
+		_, err := g.git(ctx, c.Dir, "checkout", checkoutArgs(force, "--detach", "FETCH_HEAD")...)
 		return err
 	}
 	remote := "refs/remotes/origin/" + branch
 	if _, err := g.git(ctx, c.Dir, "fetch", "fetch", "-q", depth, "--no-tags", "origin", "+refs/heads/"+branch+":"+remote); err != nil {
 		return notFoundOr(err)
 	}
-	if _, err := g.git(ctx, c.Dir, "checkout", "checkout", "-q", "-B", branch, remote); err != nil {
+	if _, err := g.git(ctx, c.Dir, "checkout", checkoutArgs(force, "-B", branch, remote)...); err != nil {
 		return err
 	}
 	_, err := g.git(ctx, c.Dir, "branch", "branch", "-q", "--set-upstream-to=origin/"+branch)
@@ -195,24 +208,15 @@ func checkRefName(ctx context.Context, g *gitRunner, name string) error {
 	return nil
 }
 
-func writeMarker(c checkout) error {
-	body := fmt.Sprintf("repo=%s\nref=%s\nbranch=%s\ncompleted=%s\n", c.Repo, c.Ref, c.Branch, time.Now().UTC().Format(time.RFC3339))
-	tmp, err := os.CreateTemp(filepath.Join(c.Dir, ".git"), markerName+".tmp-*")
-	if err != nil {
-		return fmt.Errorf("write bootstrap marker: %w", err)
+// checkoutArgs builds a quiet `git checkout`. force (-f) discards untracked
+// files in the way; it is set only when redoing our own interrupted attempt,
+// whose earlier checkout may have written files into the workspace.
+func checkoutArgs(force bool, args ...string) []string {
+	base := []string{"checkout", "-q"}
+	if force {
+		base = append(base, "-f")
 	}
-	defer os.Remove(tmp.Name())
-	if _, err := tmp.WriteString(body); err != nil {
-		tmp.Close()
-		return fmt.Errorf("write bootstrap marker: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("write bootstrap marker: %w", err)
-	}
-	if err := os.Rename(tmp.Name(), markerPath(c.Dir)); err != nil {
-		return fmt.Errorf("write bootstrap marker: %w", err)
-	}
-	return nil
+	return append(base, args...)
 }
 
 func (g *gitRunner) git(ctx context.Context, dir, step string, args ...string) (string, error) {
