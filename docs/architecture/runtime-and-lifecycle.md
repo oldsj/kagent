@@ -226,7 +226,7 @@ creates nothing. Sessions without a workspace behave as before. A Harness with
 configuration rejects unknown fields, so an older image fails at startup.
 
 The Codex and Claude adapters wrap their runner with a bootstrapper. Before each turn it
-checks for the marker `/data/workspace/.git/kagent-bootstrap`. When the marker is absent
+checks for the done marker `/data/.kagent/workspace-bootstrap.done`. When it is absent
 it reads the workspace through the runtime-authenticated `TaskStoreService.GetWorkspace`
 call, which resolves only the calling Session. It then clones into `/data/workspace`:
 
@@ -238,9 +238,19 @@ call, which resolves only the calling Session. It then clones into `/data/worksp
   Git configuration, because `~/.gitconfig` does not survive a Data snapshot, while
   `/data` does. The gateway replaces the placeholder in flight. The runtime holds no
   token.
-- The marker is written last, atomically. A `.git` directory without a marker is an
-  interrupted attempt and is removed and redone, so retries and resumes are idempotent.
-  Files outside `.git` are left alone.
+- Two markers record progress in `/data/.kagent`, outside the workspace, so nothing an
+  agent does in the workspace (`git init`, a fresh clone, `rm -rf .git`) can forge or erase them.
+  `workspace-bootstrap.started` is written before the first change. `workspace-bootstrap.done`
+  is written last, and then `started` is removed. Both are written atomically and hold no
+  credentials. A failed attempt leaves `started`, so the next turn redoes it.
+- `done` present: the bootstrap does nothing, whatever the workspace holds, so resumes
+  are idempotent and an agent's own `.git` and commits are never replaced.
+- `started` without `done` is our own interrupted attempt. Its `.git` is removed and the
+  checkout is redone with `git checkout -f`, because the first attempt may already have
+  written files. Other files outside `.git` are left alone.
+- Neither marker but a `.git` present: the repository is not ours (an agent created it, or
+  the markers were removed). The bootstrap fails with a clear message and never deletes
+  it.
 
 A failed bootstrap does not run the agent. The turn ends as a failed task whose message
 names the cause (ref not found, authentication, unreachable host, timeout, invalid ref
