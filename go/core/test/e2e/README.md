@@ -217,3 +217,9 @@ For local interaction debugging, start any retained response fixture from the
 ```bash
 go run ./core/hack/mockllm invoke_mcp_agent.json
 ```
+
+`TestGitWorkspace*` create their own Claude Harness with `git.origins: [github.com]`
+and clone `https://github.com/octocat/Hello-World` through the egress gateway, so
+the cluster must reach github.com. They need the `claude-e2e` Harness from
+`lifecycle.yaml.tmpl`. `TestSuspendSession*` cover Suspend racing a send and
+Suspend during a running turn on the same Harness.
