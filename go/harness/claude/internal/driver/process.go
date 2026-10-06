@@ -15,6 +15,7 @@ import (
 
 	"github.com/kagent-dev/kagent/go/harness/internal/utils"
 	"github.com/kagent-dev/kagent/go/harness/runtime"
+	"github.com/kagent-dev/kagent/go/pkg/logging"
 	"go.opentelemetry.io/otel/propagation"
 )
 
@@ -354,7 +355,12 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 				return runtime.Outcome{}, item.err
 			}
 			if waitErr := <-session.wait; waitErr != nil {
-				return runtime.Outcome{}, fmt.Errorf("claude exited with an error: %w: %s", waitErr, session.stderr.String())
+				stderr := strings.TrimSpace(session.stderr.String())
+				if stderr != "" {
+					// MaxStderrBytes already bounds the captured text.
+					logging.FromContext(ctx).WarnContext(ctx, "claude exited with an error", "error", waitErr, "stderr", stderr)
+				}
+				return runtime.Outcome{}, exitError(waitErr, session.terminal, stderr)
 			}
 			if session.terminal == nil {
 				return runtime.Outcome{}, fmt.Errorf("claude process exited without a terminal result")
@@ -364,6 +370,23 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 			return runtime.Outcome{}, ctx.Err()
 		}
 	}
+}
+
+// exitError describes a non-zero Claude exit. Claude reports why a turn failed
+// in its result event, usually with nothing on stderr, so the terminal failure
+// leads when there is one and stderr is appended only when it adds text.
+func exitError(waitErr error, terminal *runtime.Outcome, stderr string) error {
+	message := stderr
+	if terminal != nil && terminal.Failure != nil {
+		message = terminal.Failure.Message
+		if stderr != "" {
+			message += " (stderr: " + stderr + ")"
+		}
+	}
+	if message == "" {
+		return fmt.Errorf("claude exited with an error: %w", waitErr)
+	}
+	return fmt.Errorf("claude exited with an error: %w: %s", waitErr, message)
 }
 
 func (p *pendingTurn) Request() runtime.InputRequest { return p.pending.approvalRequest() }
