@@ -225,5 +225,5 @@ Agentgateway supports cleartext HTTP injection when its HTTP route's
 and the Session egress policy limit where it applies; an unbound hostname keeps
 the placeholder. The provider must also grant the actor's atespace access to
 the Agent namespace. The Envoy dataplane skips cleartext credential injection
-in stock Substrate v0.3.0-alpha3. Restrict the destination listener with NetworkPolicy.
+in stock Substrate v0.4.0-alpha1. Restrict the destination listener with NetworkPolicy.
 Secret lookup failures surface at the gateway; creation does not read or verify keys.

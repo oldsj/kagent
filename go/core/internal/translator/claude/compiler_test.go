@@ -50,6 +50,16 @@ func TestCompileProviderCredentials(t *testing.T) {
 			wantEgress: []string{"http://kagent-controller.kagent:8083", "https://api.anthropic.com:443"},
 		},
 		{
+			name: "Anthropic subscription OAuth token with defaulted cache TTL",
+			model: v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderAnthropic, Model: "claude-sonnet-4-5",
+				APIKeySecret: "model-auth", APIKeySecretKey: "oauth-token",
+				// cacheTTL is defaulted to "5m" by the CRD whenever the anthropic block is set.
+				Anthropic: &v1alpha3.AnthropicConfig{AuthMethod: v1alpha3.AnthropicAuthMethodOAuthToken, CacheTTL: "5m"}},
+			secretData: map[string][]byte{"oauth-token": []byte(credentialValue)},
+			wantEnv:    map[string]string{claudeconfig.ClaudeCodeOAuthTokenEnvName: v2translator.CredentialPlaceholder},
+			wantEgress: []string{"http://kagent-controller.kagent:8083", "https://api.anthropic.com:443"},
+		},
+		{
 			name: "Anthropic rejects unknown auth method",
 			model: v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderAnthropic, Model: "claude-sonnet-4-5",
 				APIKeySecret: "model-auth", APIKeySecretKey: "api-key",

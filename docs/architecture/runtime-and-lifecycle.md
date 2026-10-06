@@ -144,9 +144,9 @@ are not forkable. The Session stays logically READY, and Substrate ingress
 resumes it when another authorized interaction arrives.
 
 The snapshot scope for terminal work comes from `spec.substrate.snapshotPolicy.onQuiesce`
-on the Harness. `Data` (the default) snapshots only `/data`; the actor restarts from
-its golden image on the next request, so processes such as a dev server do not
-survive. `Full` also captures guest memory and the root filesystem, so those
+on the Harness. `Data` (the default) snapshots only `/data`; the actor starts fresh from
+the OCI image with `/data` restored on the next request, so processes such as a
+dev server do not survive. `Full` also captures guest memory and the root filesystem, so those
 processes keep running across suspend and resume. Full snapshots are larger and
 slower to take and restore, and the choice is part of the runtime revision, so
 changing it creates a new ActorTemplate. Pausing for INPUT_REQUIRED/AUTH_REQUIRED
@@ -208,7 +208,8 @@ state there—local framework state, workspaces, and downloaded assets that must
 survive Actor replacement. This state is runtime-private; public task history
 remains in PostgreSQL.
 
-Templates capture Full snapshots when paused and Data snapshots when suspended.
+Templates capture Full snapshots when paused; suspension captures the `onQuiesce`
+scope (Data by default).
 Substrate v0.4.0-alpha1 resumes a Data snapshot by starting fresh containers from
 the OCI image with the saved durable directories. Data restores no longer combine
 Golden memory with the Actor's saved data.

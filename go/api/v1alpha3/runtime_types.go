@@ -26,7 +26,8 @@ type RuntimeSnapshotScope string
 
 const (
 	// RuntimeSnapshotScopeData captures only the durable /data directory. The
-	// Actor restarts from its golden image, so processes do not survive.
+	// Actor starts fresh from the OCI image with /data restored, so processes do
+	// not survive.
 	RuntimeSnapshotScopeData RuntimeSnapshotScope = "Data"
 	// RuntimeSnapshotScopeFull also captures guest memory and the root
 	// filesystem, so running processes survive the snapshot. Snapshots are
