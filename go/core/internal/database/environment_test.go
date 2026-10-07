@@ -2,8 +2,9 @@ package database
 
 import (
 	"encoding/json"
-	"github.com/google/uuid"
 	"testing"
+
+	"github.com/google/uuid"
 
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 	"github.com/stretchr/testify/require"

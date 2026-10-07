@@ -57,7 +57,7 @@ func TestControlAuthNativeAndWeb(t *testing.T) {
 	const futurePublic = "/test.Public/Discover"
 	policies[futurePublic] = pkgauth.AccessPublic
 	server, err := New(Config{Listener: listener, Authenticator: provider, Reflection: true, MethodPolicies: policies, RegisterServices: func(registrar grpc.ServiceRegistrar) {
-		registrar.RegisterService(&grpc.ServiceDesc{ServiceName: "test.Public", HandlerType: (*interface{})(nil), Methods: []grpc.MethodDesc{{MethodName: "Discover"}}}, &struct{}{})
+		registrar.RegisterService(&grpc.ServiceDesc{ServiceName: "test.Public", HandlerType: (*any)(nil), Methods: []grpc.MethodDesc{{MethodName: "Discover"}}}, &struct{}{})
 	}, SystemService: testSystemService(), SessionService: sessionsvc.NewService(store, policy, credentialTestWorkflow{})})
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -158,7 +158,6 @@ func TestControlAuthNativeAndWeb(t *testing.T) {
 			require.False(t, called, fullMethod)
 		}
 	}
-
 }
 
 // A stream must be refused before its handler receives the first message.

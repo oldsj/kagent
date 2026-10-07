@@ -155,6 +155,9 @@ func (c *Compiler) CompileAgent(ctx context.Context, agent *v1alpha3.Agent) (*Co
 // compileConfiguration compiles resolved configuration for the named Agent.
 // The Agent name owns runtime identity; template and Harness names are provenance.
 func (c *Compiler) compileConfiguration(ctx context.Context, agentName string, harness *HarnessConfiguration, template *TemplateConfiguration) (*CompileResult, error) {
+	if len(harness.Spec.ExtraHTTPSOrigins) != 0 && harnessType(harness) != HarnessTypeCodex && harnessType(harness) != HarnessTypeClaude {
+		return nil, NewValidationError("extraHTTPSOrigins is supported only by the codex and claude harnesses")
+	}
 	harnessCompiler := c.harnessCompilers[harnessType(harness)]
 	if harnessCompiler == nil {
 		return nil, NewValidationError("Harness runtime is not supported by any compiler")

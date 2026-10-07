@@ -1114,3 +1114,76 @@ func TestSessionIdleTTLDoesNotChangeRuntimeRevision(t *testing.T) {
 		})
 	}
 }
+
+func TestCompileAgentExtraHTTPSOrigins(t *testing.T) {
+	for _, harnessType := range []v2translator.HarnessType{v2translator.HarnessTypeCodex, v2translator.HarnessTypeClaude} {
+		t.Run(string(harnessType), func(t *testing.T) {
+			harness, template, model := runtimeFixture(harnessType)
+			harness.Spec.Git = &v1alpha3.HarnessGit{
+				Origins:             []string{"github.com"},
+				CredentialSecretRef: &v1alpha3.SecretKeyReference{Name: "git-auth", Key: "authorization"},
+			}
+			server := remoteMCPServer("packages-test-mcp", "https://mcp.example.com/mcp")
+			server.Spec.HeadersFrom = []v1alpha3.ValueRef{{Name: "Authorization", ValueFrom: &v1alpha3.ValueSource{Type: v1alpha3.SecretValueSource, Name: "mcp-auth", Key: "token"}}}
+			template.Spec.Tools = []v1alpha3.ToolBinding{{MCP: &v1alpha3.MCPToolBinding{Server: corev1.TypedLocalObjectReference{Kind: "RemoteMCPServer", Name: server.Name}, Tools: []string{"lookup"}}}}
+			objects := []any{model, server,
+				&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "test", Name: "mcp-auth"}, Data: map[string][]byte{"token": []byte("mcp-secret")}},
+				&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "test", Name: "model-auth"}, Data: map[string][]byte{"api-key": []byte("secret")}},
+				&atev1alpha1.WorkerPool{ObjectMeta: metav1.ObjectMeta{Namespace: "test", Name: "selected"}},
+			}
+			compile := func(origins []string) *v2translator.CompileResult {
+				harness.Spec.ExtraHTTPSOrigins = origins
+				result, err := compiler(t, objects...).CompileAgent(t.Context(), inlineAgent(harness, template))
+				require.NoError(t, err)
+				return result
+			}
+			baseline := compile(nil)
+			origins := []string{"https://registry.npmjs.org", "https://pypi.org", "https://files.pythonhosted.org", "https://proxy.golang.org", "https://sum.golang.org", "https://storage.googleapis.com"}
+			configured := compile(origins)
+			for _, origin := range origins {
+				require.Contains(t, configured.EgressDestinations, origin+":443")
+			}
+			for _, origin := range baseline.EgressDestinations {
+				require.Contains(t, configured.EgressDestinations, origin)
+			}
+			require.Equal(t, baseline.Credentials, configured.Credentials)
+			require.Equal(t, baseline.Environment, configured.Environment)
+			require.Equal(t, baseline.ConfigJSON, configured.ConfigJSON)
+			before, err := baseline.Digest()
+			require.NoError(t, err)
+			after, err := configured.Digest()
+			require.NoError(t, err)
+			require.NotEqual(t, before, after)
+			require.Equal(t, origins, harness.Spec.ExtraHTTPSOrigins)
+			reordered := slices.Clone(origins)
+			slices.Reverse(reordered)
+			reordered = append(reordered, "https://PYPI.org:443/")
+			normalized := compile(reordered)
+			require.Equal(t, configured.EgressDestinations, normalized.EgressDestinations)
+			// Source provenance retains authored spelling/order, independently of the
+			// canonical destinations used by the prepared policy.
+			for _, invalid := range []string{"http://pypi.org", "https://*.pypi.org", "https://pypi.org:8443", "https://127.0.0.1", "https://user@pypi.org", "https://pypi.org/simple", "https://github.com", "https://mcp.example.com", "https://api.openai.com", "https://api.anthropic.com"} {
+				if (invalid == "https://api.openai.com" && harnessType == v2translator.HarnessTypeClaude) || (invalid == "https://api.anthropic.com" && harnessType == v2translator.HarnessTypeCodex) {
+					continue
+				}
+				harness.Spec.ExtraHTTPSOrigins = []string{invalid}
+				result, err := compiler(t, objects...).CompileAgent(t.Context(), inlineAgent(harness, template))
+				require.Error(t, err)
+				require.Nil(t, result)
+				require.ErrorAs(t, err, new(*v2translator.ValidationError))
+			}
+		})
+	}
+}
+
+func TestCompileAgentRejectsExtraHTTPSOriginsForOtherHarnesses(t *testing.T) {
+	for _, harnessType := range []v2translator.HarnessType{v2translator.HarnessTypeKagent, v2translator.HarnessTypeBYO} {
+		t.Run(string(harnessType), func(t *testing.T) {
+			harness, template, _ := runtimeFixture(harnessType)
+			harness.Spec.ExtraHTTPSOrigins = []string{"https://pypi.org"}
+			result, err := compiler(t).CompileAgent(t.Context(), inlineAgent(harness, template))
+			require.ErrorContains(t, err, "extraHTTPSOrigins is supported only")
+			require.Nil(t, result)
+		})
+	}
+}
