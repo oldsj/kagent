@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+
+	"github.com/kagent-dev/kagent/go/harness/internal/utils"
 )
 
 type parser struct {
@@ -102,7 +104,7 @@ func (p *parser) parseLine(line []byte, emit func(Event) error) error {
 		}
 		p.terminal = true
 		if envelope.IsError || envelope.Subtype != "success" {
-			message := envelope.Result
+			message := utils.SafeDiagnostic(envelope.Result)
 			if message == "" {
 				message = "Claude execution failed"
 			}
