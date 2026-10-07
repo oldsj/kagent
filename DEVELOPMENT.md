@@ -64,10 +64,28 @@ gh workflow run mainloop-fork-ci.yaml --repo oldsj/kagent --ref SOURCE_BRANCH
 Verify the recorded SHA against the published candidate before accepting a
 remote result. Bootstrap fixtures participate once their changes are in the
 tested checkout. This gate uses synthetic credentials, fake Kubernetes clients,
-and a fixture CLI; it needs no provider secrets or subscription. Image builds
-and publication, live provider calls, and container/Kubernetes E2E suites remain
-separate, opt-in validation. A passing fixture gate does not prove image CI,
-live credential refresh, or deployment readiness.
+and a fixture CLI; it needs no provider secrets or subscription. Fork image
+publication uses the separate workflow below; live provider calls and
+container/Kubernetes E2E suites remain opt-in validation. A passing fixture
+gate does not prove image CI, live credential refresh, or deployment readiness.
+
+## Mainloop fork images
+
+In `oldsj/kagent`, `.github/workflows/mainloop-fork-images.yaml` publishes
+`kagent-controller`, `kagent-claude-harness`, and `kagent-codex-harness` to
+`ghcr.io/oldsj` on pushes to `mainloop-substrate-0-4` and manual dispatches.
+It uses the native `ubuntu-24.04-arm` runner and builds only `linux/arm64`,
+with tags `0.0.0-<7-character-source-SHA>`. It does not run on pull requests.
+OCI labels record the source repository and full commit SHA; each job summary
+records its platform, tag, and immutable `name@digest` for deployment pins.
+Update pins through a separately reviewed infrastructure PR. This workflow
+builds neither Helm charts nor the infrastructure-owned workspace harness.
+
+The package owner must grant `oldsj/kagent` **write** access under **Manage
+Actions access** in each existing GHCR package's settings:
+`kagent-controller`, `kagent-claude-harness`, and `kagent-codex-harness`.
+Publication uses the job's `GITHUB_TOKEN` with `packages: write` and
+`contents: read`; no separate registry secret is needed.
 
 ## Nightly releases
 
