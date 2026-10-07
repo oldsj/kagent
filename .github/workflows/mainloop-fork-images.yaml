@@ -31,6 +31,12 @@ jobs:
           - image: kagent-codex-harness
             file: go/harness/codex/Dockerfile
             build-args: ''
+          - image: kagent-claude-runtime
+            file: go/harness/runtime/payload/Dockerfile
+            build-args: PROVIDER=claude
+          - image: kagent-codex-runtime
+            file: go/harness/runtime/payload/Dockerfile
+            build-args: PROVIDER=codex
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
