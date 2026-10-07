@@ -251,6 +251,9 @@ controller:
       #   header: authorization
       #   purpose: mcp
       credentials: []
+      # Exact registry authorities (optionally host:port), never repository prefixes.
+      # Empty denies development environment selection, including for Mainloop.
+      developmentEnvironmentRegistries: []
   # -- Public gateway base URL advertised by Session Agent Cards for gRPC and HTTP/JSON-RPC.
   # @default -- `http://<fullname>-controller.<namespace>.svc:<grpc-port>`
   a2aGatewayUrl: ""

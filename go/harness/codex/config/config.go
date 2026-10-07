@@ -14,13 +14,11 @@ import (
 
 	"github.com/kagent-dev/kagent/go/api/agentplugin"
 	"github.com/kagent-dev/kagent/go/api/workspace"
+	"github.com/kagent-dev/kagent/go/harness/runtime/payload"
 	"github.com/kagent-dev/kagent/go/pkg/tracing"
 )
 
-const (
-	Version            = 4
-	PinnedCodexVersion = "0.148.0"
-)
+const Version = 4
 
 var nativeNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
@@ -224,3 +222,6 @@ func validateURL(raw string) error {
 func (c Config) InterruptGrace() time.Duration {
 	return time.Duration(c.InterruptGraceMillis) * time.Millisecond
 }
+
+// PinnedCodexVersion comes from the central runtime release lock.
+var PinnedCodexVersion = payload.LockedRelease("codex").Version

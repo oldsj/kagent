@@ -24,23 +24,15 @@ RUN --mount=type=cache,target=/root/go/pkg/mod,rw \
     go build -trimpath -o /kagent-credential-refresh ./core/cmd/credential-refresh
 
 FROM alpine:3.22
-ARG CODEX_CLI_VERSION=0.148.0
-ARG CODEX_CLI_AMD64_SHA256=8c790500af2ba6e74ce4948fe26c651ac1f77f6dbb005b47c8d26ff711146262
-ARG CODEX_CLI_ARM64_SHA256=580db3c7411f5852b550876f185c30b61b674e01b948fd5030f2cd7a30db110a
 ARG TARGETARCH
 ARG VERSION
 
-RUN apk upgrade --no-cache && apk add --no-cache bash ca-certificates git libgcc libstdc++ \
-    && case "${TARGETARCH}" in \
-        amd64) platform="x86_64-unknown-linux-musl"; checksum="${CODEX_CLI_AMD64_SHA256}" ;; \
-        arm64) platform="aarch64-unknown-linux-musl"; checksum="${CODEX_CLI_ARM64_SHA256}" ;; \
-        *) echo "unsupported target architecture: ${TARGETARCH}" >&2; exit 1 ;; \
-    esac \
-    && wget -T 60 -t 3 -O /tmp/codex.tar.gz \
-        "https://github.com/openai/codex/releases/download/rust-v${CODEX_CLI_VERSION}/codex-package-${platform}.tar.gz" \
-    && echo "${checksum}  /tmp/codex.tar.gz" | sha256sum -c - \
-    && tar -xzf /tmp/codex.tar.gz -C /usr/local \
-    && rm /tmp/codex.tar.gz \
+COPY harness/runtime/payload/install-cli.sh /build/install-cli
+COPY harness/runtime/payload/runtime-lock.json /build/runtime-lock.json
+
+RUN apk upgrade --no-cache && apk add --no-cache bash ca-certificates git libgcc libstdc++ jq \
+    && /build/install-cli codex "$TARGETARCH" /usr/local /build/runtime-lock.json \
+    && rm -rf /build \
     && addgroup -S -g 65532 kagent \
     && adduser -S -D -H -u 65532 -G kagent -h /data -s /sbin/nologin kagent \
     && mkdir -p /data/adapter /data/codex /data/workspace \

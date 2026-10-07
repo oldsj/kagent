@@ -71,10 +71,12 @@ type SessionPolicy interface {
 }
 
 type Service struct {
-	store       store
-	authorizer  auth.Authorizer
-	workflow    sessionWorkflow
-	shareMaxTTL time.Duration
+	store               store
+	authorizer          auth.Authorizer
+	workflow            sessionWorkflow
+	shareMaxTTL         time.Duration
+	environmentPreparer EnvironmentPreparer
+	environmentPolicy   EnvironmentPolicy
 }
 
 type Option func(*Service)
@@ -102,11 +104,18 @@ func NewService(store store, authorizer auth.Authorizer, workflow sessionWorkflo
 // check out a repository before the first turn; its host must be one of the
 // Agent's Git origins.
 func (s *Service) Create(ctx context.Context, agent *apiv1alpha1.ResourceReference, requestID, name string, requested *apiv1alpha1.Workspace, credentials ...*apiv1alpha1.SessionCredential) (*apiv1alpha1.Session, error) {
+	return s.create(ctx, agent, requestID, name, requested, nil, credentials...)
+}
+
+func (s *Service) create(ctx context.Context, agent *apiv1alpha1.ResourceReference, requestID, name string, requested *apiv1alpha1.Workspace, environment *apiv1alpha1.DevelopmentEnvironment, credentials ...*apiv1alpha1.SessionCredential) (*apiv1alpha1.Session, error) {
 	if err := validateCreate(agent, requestID); err != nil {
 		return nil, err
 	}
-	if err := protovalidate.Validate(&apiv1alpha1.CreateSessionRequest{Agent: agent, RequestId: requestID, Credentials: credentials}); err != nil {
-		return nil, serviceerrors.NewInvalidArgument("Session credential references are invalid", err)
+	if err := protovalidate.Validate(&apiv1alpha1.CreateSessionRequest{Agent: agent, RequestId: requestID, Credentials: credentials, DevelopmentEnvironment: environment}); err != nil {
+		if environment == nil {
+			return nil, serviceerrors.NewInvalidArgument("Session credential references are invalid", err)
+		}
+		return nil, serviceerrors.NewInvalidArgument("Session creation inputs are invalid", err)
 	}
 	if err := validateWorkspace(requested); err != nil {
 		return nil, err
@@ -128,10 +137,13 @@ func (s *Service) Create(ctx context.Context, agent *apiv1alpha1.ResourceReferen
 	if err != nil {
 		return nil, serviceerrors.NewInternal("Failed to generate Session identifier", err)
 	}
-	session, _, err := s.store.CreateSession(ctx, &apiv1alpha1.Session{
-		Id: id.String(), Creator: creator, Name: name,
-		Agent: agent, Workspace: requested, Credentials: credentials,
-	}, requestID)
+	creation := &apiv1alpha1.Session{Id: id.String(), Creator: creator, Name: name, Agent: agent, Workspace: requested, Credentials: credentials, DevelopmentEnvironment: environment}
+	if environment != nil {
+		if err := s.prepareEnvironment(ctx, creation, requestID); err != nil {
+			return nil, err
+		}
+	}
+	session, _, err := s.store.CreateSession(ctx, creation, requestID)
 	if errors.Is(err, database.ErrIdempotencyConflict) {
 		return nil, serviceerrors.NewAlreadyExists("request_id was already used for a different Session", err)
 	}

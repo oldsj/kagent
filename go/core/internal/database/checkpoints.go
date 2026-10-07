@@ -88,6 +88,9 @@ func (c *Client) ForkSession(ctx context.Context, checkpointID, userID, requestI
 			Operation:        apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_CREATE,
 			CreatedAt:        now, UpdatedAt: now,
 		}
+		if err := inheritEnvironmentRevision(revision.SourceSnapshot, session); err != nil {
+			return err
+		}
 		row, err = insertSessionRecords(ctx, tx, session, requestID, historyID, &checkpoint.ID)
 		if err != nil {
 			return err

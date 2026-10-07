@@ -12,3 +12,5 @@ var SubstrateAtenetRouterURL = RegisterStringVar(
 	"Substrate router endpoint for agent and sandbox guest traffic.",
 	ComponentController,
 )
+
+var RuntimePayloadCatalog = RegisterStringVar("KAGENT_RUNTIME_PAYLOAD_CATALOG", "", "JSON provider/platform to {image, cliVersion} native payload catalog (e.g. claude/linux/arm64); images must be digest-pinned. Empty disables composed Sessions.", ComponentController)

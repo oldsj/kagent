@@ -11,6 +11,7 @@ import (
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/kagent-dev/kagent/go/core/internal/translator"
+	"github.com/kagent-dev/kagent/go/harness/runtime/payload"
 	"github.com/kagent-dev/kagent/go/pkg/tracing"
 	"go.opentelemetry.io/otel/attribute"
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
@@ -59,6 +60,14 @@ func ActorTemplateForRevision(spec *translator.Revision, revisionID translator.R
 		return nil, fmt.Errorf("render runtime Agent Card: %w", err)
 	}
 	environment := withServiceVersion(append([]corev1.EnvVar(nil), spec.Environment...), revisionID.Short())
+	if spec.Composition != nil {
+		for _, variable := range environment {
+			if variable.Name == payload.PlatformEnvironment {
+				return nil, fmt.Errorf("runtime environment %q conflicts with selected platform", variable.Name)
+			}
+		}
+		environment = append(environment, corev1.EnvVar{Name: payload.PlatformEnvironment, Value: spec.Composition.Platform})
+	}
 	// The systemInfo trustBundle volume below projects the gateway CA. These
 	// variables tell each TLS client to trust it; mounting the file alone does
 	// not configure trust. The gateway intercepts HTTPS even without credentials.
@@ -127,6 +136,16 @@ func ActorTemplateForRevision(spec *translator.Revision, revisionID translator.R
 				{TrustBundle: &ateapipb.TrustBundleDataSource{Names: []string{"egress-mitm.ate.dev"}, Path: "trust-bundle.pem"}},
 			}}},
 		},
+	}
+	if spec.Composition != nil {
+		if err := spec.Composition.Validate(); err != nil {
+			return nil, err
+		}
+		if spec.Image != spec.Composition.DevelopmentImage || len(spec.Command) != 1 || spec.Command[0] != payload.Root+"/bin/launch" || len(spec.Args) != 0 {
+			return nil, fmt.Errorf("composed revision has invalid image or launch command")
+		}
+		template.Volumes = append(template.Volumes, &ateapipb.Volume{Name: "runtime-payload", Image: &ateapipb.ImageVolumeSource{Reference: spec.Composition.PayloadImage}})
+		template.Containers[0].VolumeMounts = append(template.Containers[0].VolumeMounts, &ateapipb.VolumeMount{Name: "runtime-payload", MountPath: payload.Root})
 	}
 	return template, nil
 }

@@ -349,7 +349,13 @@ func Run(ctx context.Context, opts Options) error {
 	if shareMaxTTL < 0 {
 		return fmt.Errorf("%s must not be negative", kagentenv.SessionShareMaxTTL.Name())
 	}
-	sessions := sessionsvc.NewService(store, authorizer, sessionWorkflow, sessionsvc.WithShareMaxTTL(shareMaxTTL))
+	catalog, err := v2controller.ParseRuntimePayloadCatalog(kagentenv.RuntimePayloadCatalog.Get())
+	if err != nil {
+		return err
+	}
+	environmentPreparer := v2controller.NewEnvironmentPreparer(runtime.Collections, store, actors, catalog)
+	sessionOptions := append(environmentOptions(authenticator, catalog, environmentPreparer), sessionsvc.WithShareMaxTTL(shareMaxTTL))
+	sessions := sessionsvc.NewService(store, authorizer, sessionWorkflow, sessionOptions...)
 	checkpoints := checkpoint.NewService(store, authorizer, actors, sessionWorkflow)
 	gatewayDialer, err := a2agateway.NewRuntimeDialer(
 		kagentenv.SubstrateAtenetRouterURL.Get(),
