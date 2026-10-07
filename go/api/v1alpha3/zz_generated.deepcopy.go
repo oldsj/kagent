@@ -773,6 +773,11 @@ func (in *HarnessSpec) DeepCopyInto(out *HarnessSpec) {
 		*out = new(HarnessGit)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.ExtraHTTPSOrigins != nil {
+		in, out := &in.ExtraHTTPSOrigins, &out.ExtraHTTPSOrigins
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	in.Workload.DeepCopyInto(&out.Workload)
 	if in.Env != nil {
 		in, out := &in.Env, &out.Env

@@ -95,6 +95,19 @@ spec:
                     x-kubernetes-list-map-keys:
                     - name
                     x-kubernetes-list-type: map
+                  extraHTTPSOrigins:
+                    description: |-
+                      ExtraHTTPSOrigins grants whole-host HTTPS access without credentials.
+                      Only trusted Harness authors may configure it; each entry is an exact
+                      DNS origin on port 443, with an optional root slash. No suffix grants.
+                      Only the Codex and Claude adapters support it.
+                    items:
+                      maxLength: 273
+                      pattern: ^https://([A-Za-z0-9]([-A-Za-z0-9]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]([-A-Za-z0-9]{0,61}[A-Za-z0-9])?(:443)?/?$
+                      type: string
+                    maxItems: 32
+                    type: array
+                    x-kubernetes-list-type: set
                   git:
                     description: |-
                       Git lets sessions bootstrap a repository checkout into the workspace.
@@ -338,6 +351,9 @@ spec:
                   rule: '!has(self.byo) || size(self.workload.command) > 0'
                 - message: git is supported only by the codex and claude harnesses
                   rule: '!has(self.git) || has(self.codex) || has(self.claude)'
+                - message: extraHTTPSOrigins is supported only by the codex and claude
+                    harnesses
+                  rule: '!has(self.extraHTTPSOrigins) || has(self.codex) || has(self.claude)'
               harnessRef:
                 description: |-
                   LocalObjectReference contains enough information to let you locate the

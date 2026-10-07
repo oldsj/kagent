@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"strings"
 
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
@@ -65,9 +66,7 @@ type EnvironmentPreparer struct {
 
 func NewEnvironmentPreparer(collections Collections, store runtimeRevisionStore, templates actorTemplateClient, catalog RuntimePayloadCatalog) *EnvironmentPreparer {
 	copy := RuntimePayloadCatalog{}
-	for key, value := range catalog {
-		copy[key] = value
-	}
+	maps.Copy(copy, catalog)
 	return &EnvironmentPreparer{collections: collections, store: store, templates: templates, catalog: copy}
 }
 

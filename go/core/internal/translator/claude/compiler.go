@@ -38,6 +38,10 @@ func (c *Compiler) Compile(ctx context.Context, input *v2translator.HarnessInput
 	if input == nil || input.Harness == nil || input.Root == nil || input.Root.Template == nil || input.Root.ResolvedModelConfig == nil || input.Root.ResolvedModelConfig.Config == nil {
 		return nil, fmt.Errorf("claude compiler requires a resolved Harness, AgentTemplate, and ModelConfig")
 	}
+	extraEgress, err := v2translator.CompileExtraHTTPSOrigins(input.Harness.Spec.ExtraHTTPSOrigins)
+	if err != nil {
+		return nil, err
+	}
 	model := input.Root.ResolvedModelConfig.Config
 	if strings.TrimSpace(model.Spec.Model) == "" {
 		return nil, v2translator.NewValidationError("Claude ModelConfig model is required")
@@ -125,6 +129,10 @@ func (c *Compiler) Compile(ctx context.Context, input *v2translator.HarnessInput
 		return nil, err
 	}
 
+	if err := v2translator.ValidateExtraHTTPSCredentials(extraEgress, credentials); err != nil {
+		return nil, err
+	}
+	egress = append(egress, extraEgress...)
 	egress = append(egress, skillEgress...)
 	egress = append(egress, mcp.egress...)
 	egress = append(egress, gitEgress...)

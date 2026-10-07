@@ -163,6 +163,7 @@ type HarnessWorkload struct {
 // +kubebuilder:validation:XValidation:rule="(has(self.kagent) ? 1 : 0) + (has(self.codex) ? 1 : 0) + (has(self.claude) ? 1 : 0) + (has(self.byo) ? 1 : 0) == 1",message="exactly one of kagent, codex, claude, or byo must be specified"
 // +kubebuilder:validation:XValidation:rule="!has(self.byo) || size(self.workload.command) > 0",message="BYO harnesses must specify workload.command"
 // +kubebuilder:validation:XValidation:rule="!has(self.git) || has(self.codex) || has(self.claude)",message="git is supported only by the codex and claude harnesses"
+// +kubebuilder:validation:XValidation:rule="!has(self.extraHTTPSOrigins) || has(self.codex) || has(self.claude)",message="extraHTTPSOrigins is supported only by the codex and claude harnesses"
 type HarnessSpec struct {
 	// SessionIdleTTL overrides the controller default for all Sessions of this
 	// Agent, including existing Sessions. Zero disables idle expiration.
@@ -186,6 +187,17 @@ type HarnessSpec struct {
 	// Only the Codex and Claude adapters support it.
 	// +optional
 	Git *HarnessGit `json:"git,omitempty"`
+
+	// ExtraHTTPSOrigins grants whole-host HTTPS access without credentials.
+	// Only trusted Harness authors may configure it; each entry is an exact
+	// DNS origin on port 443, with an optional root slash. No suffix grants.
+	// Only the Codex and Claude adapters support it.
+	// +kubebuilder:validation:MaxItems=32
+	// +kubebuilder:validation:items:MaxLength=273
+	// +kubebuilder:validation:items:Pattern=`^https://([A-Za-z0-9]([-A-Za-z0-9]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]([-A-Za-z0-9]{0,61}[A-Za-z0-9])?(:443)?/?$`
+	// +listType=set
+	// +optional
+	ExtraHTTPSOrigins []string `json:"extraHTTPSOrigins,omitempty"`
 
 	// +required
 	Workload HarnessWorkload `json:"workload"`

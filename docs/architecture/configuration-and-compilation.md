@@ -312,3 +312,47 @@ Agent's last successful revision.
 This replaces implicit label selection and the old template/Harness inputs as a
 breaking API change. SandboxTemplate hosting configuration is not part of this
 change.
+
+## Credential-free package origins
+
+Trusted Harness authors can configure `spec.extraHTTPSOrigins` for Codex and
+Claude. This is a bounded list (at most 32 entries) of exact HTTPS DNS origins
+on port 443. An omitted port and a root slash are accepted; hostnames are
+lowercased and destinations sorted and deduplicated. Wildcards, IP addresses,
+userinfo, queries, fragments, other ports and non-root paths are rejected during
+compilation, before runtime preparation. Other harness types reject this field.
+The schema also bounds entries and rejects unsupported URL shapes.
+
+For npm, PyPI and Go package downloads, an operator may explicitly grant:
+
+```yaml
+spec:
+  extraHTTPSOrigins:
+    - https://registry.npmjs.org
+    - https://pypi.org
+    - https://files.pythonhosted.org
+    - https://proxy.golang.org
+    - https://sum.golang.org
+    - https://storage.googleapis.com
+```
+
+These entries join the existing provider, Git, MCP, skills and telemetry egress
+destinations in the immutable prepared revision. Changing the destination list
+changes revision identity. Existing Sessions retain their pinned policy. An
+absent list preserves the default policy. The extra list creates no credential
+bindings or runtime environment/configuration effects; a host already carrying
+a provider, Git or MCP credential binding is rejected as an extra origin.
+
+Each grant allows the **whole host**, including `storage.googleapis.com`, rather
+than a particular bucket, package, HTTP method or path. Audit the union of all
+existing grants. Registry access does not enforce package approval or prevent
+publishing or exfiltration to an allowed host. Unlisted redirect targets, VCS
+sources and binary download hosts fail closed; obtain an explicit reviewed
+policy change rather than adding suffix grants or automatic fallback hosts.
+
+Harness policy, including an inline Agent Harness, must remain controlled by
+trusted configuration authors. Session requests and AgentTemplates cannot
+supply this list. This field does not add actor authority to edit Harnesses or
+Agents. Cluster gateway host configuration and live package-installation proof
+are separate deployment work; this compiler contract alone does not demonstrate
+registry reachability.

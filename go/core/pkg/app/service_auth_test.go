@@ -1,14 +1,15 @@
 package app
 
 import (
-	authimpl "github.com/kagent-dev/kagent/go/core/internal/httpserver/auth"
-	"github.com/kagent-dev/kagent/go/core/internal/service/controlauth"
-	"github.com/kagent-dev/kagent/go/core/pkg/auth"
-	"github.com/stretchr/testify/require"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	authimpl "github.com/kagent-dev/kagent/go/core/internal/httpserver/auth"
+	"github.com/kagent-dev/kagent/go/core/internal/service/controlauth"
+	"github.com/kagent-dev/kagent/go/core/pkg/auth"
+	"github.com/stretchr/testify/require"
 )
 
 func TestServiceAuthenticatorDefaultsToScopedPolicy(t *testing.T) {

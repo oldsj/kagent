@@ -64,7 +64,7 @@ func New(config Config) (*Policy, error) {
 	for _, rule := range config.Credentials {
 		origin, err := url.Parse(rule.Origin)
 		_, patternErr := path.Match(rule.SecretNamePattern, "probe")
-		if rule.Namespace != config.Namespace || rule.SecretNamePattern == "" || patternErr != nil || rule.Key == "" || rule.Purpose != "mcp" || rule.Header != "authorization" || err != nil || (origin.Scheme != "https" && !(origin.Scheme == "http" && slices.Contains(config.CleartextMCPOrigins, rule.Origin))) || origin.Host == "" || origin.User != nil || origin.RawQuery != "" || origin.ForceQuery || origin.Fragment != "" || origin.Path != "" {
+		if rule.Namespace != config.Namespace || rule.SecretNamePattern == "" || patternErr != nil || rule.Key == "" || rule.Purpose != "mcp" || rule.Header != "authorization" || err != nil || (origin.Scheme != "https" && (origin.Scheme != "http" || !slices.Contains(config.CleartextMCPOrigins, rule.Origin))) || origin.Host == "" || origin.User != nil || origin.RawQuery != "" || origin.ForceQuery || origin.Fragment != "" || origin.Path != "" {
 			return nil, errors.New("invalid approved credential tuple")
 		}
 	}
@@ -121,12 +121,7 @@ func (p *Policy) approvedDevelopmentImage(image string) bool {
 	if !qualified {
 		return false
 	}
-	for _, allowed := range p.config.DevelopmentEnvironmentRegistries {
-		if registry == allowed {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(p.config.DevelopmentEnvironmentRegistries, registry)
 }
 
 // CheckDevelopmentEnvironment validates all caller selection fields before any
@@ -144,12 +139,7 @@ func (p *Policy) agent(namespace, name string) bool {
 	if namespace != p.config.Namespace {
 		return false
 	}
-	for _, allowed := range p.config.Agents {
-		if name == allowed {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(p.config.Agents, name)
 }
 
 func internal(ctx context.Context) bool {
