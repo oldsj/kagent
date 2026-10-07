@@ -61,7 +61,7 @@ func (c *Controller) sweep(ctx context.Context) error {
 	if len(namespaces) == 0 {
 		namespaces = []string{""}
 	}
-	keys := make(map[types.NamespacedName]string)
+	descriptors := make(map[types.NamespacedName]credentialDescriptor)
 	failed := false
 	for _, namespace := range namespaces {
 		var models kagentv1alpha3.ModelConfigList
@@ -70,23 +70,28 @@ func (c *Controller) sweep(ctx context.Context) error {
 			continue
 		}
 		for _, model := range models.Items {
-			if !chatGPT(&model) || model.Spec.APIKeySecret == "" || model.Spec.APIKeySecretKey == "" {
+			if !chatGPT(&model) || model.Spec.APIKeySecret == "" {
 				continue
 			}
 			name := types.NamespacedName{Namespace: model.Namespace, Name: model.Spec.APIKeySecret}
-			if previous, found := keys[name]; found && previous != model.Spec.APIKeySecretKey {
-				keys[name] = ""
-			} else if !found {
-				keys[name] = model.Spec.APIKeySecretKey
+			descriptor := credentialDescriptor{key: model.Spec.APIKeySecretKey, account: model.Spec.OpenAI.AccountID}
+			if previous, found := descriptors[name]; found {
+				descriptor.keyConflict = previous.keyConflict || previous.key != descriptor.key
+				descriptor.accountConflict = previous.accountConflict || previous.account != descriptor.account
 			}
+			descriptors[name] = descriptor
 		}
 	}
-	for name, key := range keys {
-		if key == "" {
+	// An incomplete model listing cannot prove agreement across references.
+	if failed {
+		return errOperation
+	}
+	for name, descriptor := range descriptors {
+		if descriptor.keyConflict {
 			failed = true
 			continue
 		}
-		if c.reconcile(ctx, name, key, time.Now()) != nil {
+		if c.reconcileCredential(ctx, name, descriptor, time.Now()) != nil {
 			failed = true
 		}
 	}
@@ -101,6 +106,11 @@ func RequiresReauthentication(secret *corev1.Secret) bool {
 }
 
 func (c *Controller) reconcile(ctx context.Context, name types.NamespacedName, key string, now time.Time) error {
+	return c.reconcileCredential(ctx, name, credentialDescriptor{key: key}, now)
+}
+
+func (c *Controller) reconcileCredential(ctx context.Context, name types.NamespacedName, descriptor credentialDescriptor, now time.Time) error {
+	key := descriptor.key
 	var secret corev1.Secret
 	if err := c.client.Get(ctx, name, &secret); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -108,9 +118,15 @@ func (c *Controller) reconcile(ctx context.Context, name types.NamespacedName, k
 		}
 		return errOperation
 	}
+	if handled, err := c.bootstrap(ctx, &secret, descriptor, now); handled {
+		return err
+	}
 	if len(secret.Data[AuthKey]) == 0 {
 		return nil
 	} // Existing access-only credentials remain manual.
+	if key == "" {
+		return nil
+	}
 	if RequiresReauthentication(&secret) {
 		return nil
 	}
@@ -130,14 +146,7 @@ func (c *Controller) reconcile(ctx context.Context, name types.NamespacedName, k
 		}
 		// Terminal conditions, rather than failed Pod counts, prove that all
 		// execution has settled. Never overlap replacement Jobs with old Pods.
-		complete, failed := false, false
-		for _, condition := range job.Status.Conditions {
-			if condition.Status == corev1.ConditionTrue {
-				complete = complete || condition.Type == batchv1.JobComplete
-				failed = failed || condition.Type == batchv1.JobFailed
-			}
-		}
-		if !complete && !failed {
+		if !terminalJob(&job) {
 			return nil
 		}
 		if job.Annotations[ClaimAnnotation] == secret.Annotations[ClaimAnnotation] && secret.Annotations[HashAnnotation] == authHash(secret.Data[AuthKey]) {
