@@ -130,13 +130,103 @@ The account ID is identifying data retained in the Actor and provenance.
 Create a **dedicated** ChatGPT login for the controller. Never seed it from a
 developer's existing Codex home: rotating a shared refresh token invalidates
 the other login. Use the official pinned Codex CLI with an isolated temporary
-`CODEX_HOME` and file credential storage. After interactive login, load its full
-`auth.json` into the control-side Secret key `auth.json` and its derived access
-token into the ModelConfig's existing `apiKeySecretKey` (normally
-`access-token`), in one version-checked update. Do not use client-side apply,
-which retains the credential-bearing manifest in an annotation. Remove the
-temporary home after seeding. Neither the gateway nor an Actor receives the
-`auth.json` key; bindings continue to reference only the access-token key.
+`CODEX_HOME` and file credential storage. Store the original full `auth.json`
+and its exact paired access token in your secret store. A Secret operator can
+publish this pair to a source Secret; kagent automatically bootstraps a separate
+runtime Secret when its `kagent.dev/chatgpt-auth-seed-secret` annotation names
+that source in the **same namespace**. ModelConfig references the runtime
+Secret and its access-token key, with a nonempty `openAI.accountID` matching
+both the file and the access token's `https://api.openai.com/auth` /
+`chatgpt_account_id` claim.
+
+For example, with an existing External Secrets Operator and SecretStore, keep
+the dedicated login pair in two properties of one store entry. Replace the
+store, entry, model and account placeholders with your deployment's values:
+
+```yaml
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: chatgpt-auth-seed
+  namespace: kagent
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: credential-store
+    kind: SecretStore
+  target:
+    name: chatgpt-auth-seed
+    creationPolicy: Owner
+    template:
+      type: Opaque
+  data:
+    - secretKey: auth.json
+      remoteRef:
+        key: dedicated-chatgpt-login
+        property: auth.json
+    - secretKey: access-token
+      remoteRef:
+        key: dedicated-chatgpt-login
+        property: access-token
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: chatgpt-auth-runtime
+  namespace: kagent
+  annotations:
+    kagent.dev/chatgpt-auth-seed-secret: chatgpt-auth-seed
+type: Opaque
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: ModelConfig
+metadata:
+  name: chatgpt
+  namespace: kagent
+spec:
+  provider: OpenAI
+  model: <model-name>
+  apiKeySecret: chatgpt-auth-runtime
+  apiKeySecretKey: access-token
+  openAI:
+    authMethod: chatGPT
+    accountID: <account-id-from-dedicated-login>
+```
+
+The operator owns only the source; the refresher owns the runtime credential
+values. GitOps manages the runtime envelope and annotation, leaving runtime
+data to kagent. Do not configure an operator or GitOps reconciliation to reset
+the runtime data. No backend Secret copying or new RBAC is needed. Enable the
+existing leader-owned credential controller with the refresh image below.
+
+Each normal uncached sweep attempts bootstrap before refresh. It waits without
+mutation when the source is absent or a nonterminal Secret-UID-owned Job exists.
+Only a mutable Opaque runtime with no populated data and no refresh state,
+claim, hash or retry annotations is eligible; empty unrelated keys are kept.
+The source name must be a canonical Secret name, without a namespace prefix,
+and cannot reference the runtime itself. All ChatGPT ModelConfigs sharing the
+runtime must agree on the account and access key, which must differ from
+`auth.json`. The seed must pass the deployed credential-file parser, contain a
+nonempty refresh token and matching account identities, and have an access
+token with more than ten minutes remaining. Invalid or ambiguous configuration
+produces a sanitized controller failure without persisting a rejection or claim;
+correcting the source or configuration permits a later sweep to bootstrap.
+
+One resourceVersion-fenced update writes the original file bytes and paired
+access token together, preserving the runtime UID and metadata. Bootstrap
+neither invokes Codex nor spends refresh tokens. Conflicts and uncertain update
+responses wait for the next sweep to reread the destination. Once populated,
+the runtime automatically hands off to the existing refresher: seed updates,
+controller restarts, expiry and rejection never reseed or overwrite it. A rejected
+runtime requires the explicit dedicated re-authentication procedure below.
+
+Without the annotation, the existing manual mode remains available: load the
+full `auth.json` and its derived access token into the runtime in one
+version-checked update. Do not use client-side apply for credentials, which
+retains the credential-bearing manifest in an annotation. Remove the temporary
+home after storing the dedicated login. Neither the gateway nor an Actor receives
+the source or runtime `auth.json` key; bindings continue to reference only the
+runtime access-token key, and Actors retain their synthetic auth file.
 
 Set controller environment variable `KAGENT_CHATGPT_REFRESH_IMAGE` to an
 immutable digest of the Codex Harness image containing
