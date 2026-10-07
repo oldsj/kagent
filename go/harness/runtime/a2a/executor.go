@@ -292,13 +292,18 @@ func (e *Executor) Execute(ctx context.Context, reqCtx *a2asrv.ExecutorContext) 
 			return
 		}
 		if runErr != nil {
+			publicMessage := "Harness runtime execution failed"
+			var terminalFailure *runtime.TerminalFailure
+			if errors.As(runErr, &terminalFailure) {
+				publicMessage = terminalFailure.PublicMessage()
+			}
 			a2alog.Error(ctx, "Harness runtime execution failed", runErr)
 			if finish() {
 				return
 			}
 			result = tracing.Result{TaskState: string(a2atype.TaskStateFailed), Error: "runtime_error"}
 			endInvocation()
-			message := taskMessage(reqCtx, "Harness runtime execution failed")
+			message := taskMessage(reqCtx, publicMessage)
 			apia2a.SetTimelinePosition(message, sink.nextTimelinePosition())
 			yield(a2atype.NewStatusUpdateEvent(reqCtx, a2atype.TaskStateFailed, message), nil)
 			return

@@ -15,6 +15,7 @@ import (
 
 	"github.com/kagent-dev/kagent/go/harness/internal/utils"
 	"github.com/kagent-dev/kagent/go/harness/runtime"
+	"github.com/kagent-dev/kagent/go/pkg/logging"
 	"go.opentelemetry.io/otel/propagation"
 )
 
@@ -348,13 +349,17 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 				// only on stderr. Reap it to finish draining stderr; malformed
 				// output can also stop the parser while the process is still alive.
 				d.stopSession(session)
-				if stderr := strings.TrimSpace(session.stderr.String()); stderr != "" {
+				if stderr := session.stderr.Diagnostic(); stderr != "" {
 					return runtime.Outcome{}, fmt.Errorf("%w: %s", item.err, stderr)
 				}
 				return runtime.Outcome{}, item.err
 			}
 			if waitErr := <-session.wait; waitErr != nil {
-				return runtime.Outcome{}, fmt.Errorf("claude exited with an error: %w: %s", waitErr, session.stderr.String())
+				stderr := session.stderr.Diagnostic()
+				if stderr != "" {
+					logging.FromContext(ctx).WarnContext(ctx, "claude exited with an error", "error", waitErr, "stderr", stderr)
+				}
+				return runtime.Outcome{}, exitError(waitErr, session.terminal, stderr)
 			}
 			if session.terminal == nil {
 				return runtime.Outcome{}, fmt.Errorf("claude process exited without a terminal result")
@@ -364,6 +369,19 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 			return runtime.Outcome{}, ctx.Err()
 		}
 	}
+}
+
+// exitError preserves a terminal failure for the shared executor while keeping
+// stderr in diagnostics only. Unexpected exits retain the generic status.
+func exitError(waitErr error, terminal *runtime.Outcome, stderr string) error {
+	if terminal != nil && terminal.Failure != nil {
+		return runtime.NewTerminalFailure(terminal.Failure.Message, waitErr)
+	}
+	message := utils.SafeDiagnostic(stderr)
+	if message == "" {
+		return fmt.Errorf("claude exited with an error: %w", waitErr)
+	}
+	return fmt.Errorf("claude exited with an error: %w: %s", waitErr, message)
 }
 
 func (p *pendingTurn) Request() runtime.InputRequest { return p.pending.approvalRequest() }
@@ -437,7 +455,7 @@ func emitEvent(event Event, sink runtime.EventSink, terminal bool) (*runtime.Out
 	case EventCompleted:
 		return &runtime.Outcome{}, nil
 	case EventFailed:
-		return &runtime.Outcome{Failure: &runtime.Failure{Message: event.SafeMessage}}, nil
+		return &runtime.Outcome{Failure: &runtime.Failure{Message: runtime.NewTerminalFailure(event.SafeMessage, nil).PublicMessage()}}, nil
 	default:
 		return nil, fmt.Errorf("unsupported Claude event kind %q", event.Kind)
 	}

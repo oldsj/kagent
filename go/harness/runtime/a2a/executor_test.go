@@ -265,6 +265,42 @@ func TestExecuteFailureBoundary(t *testing.T) {
 	}
 }
 
+func TestExecuteRuntimeErrorBoundary(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "unexpected error", err: errors.New("private runtime detail"), want: "Harness runtime execution failed"},
+		{name: "terminal failure", err: runtime.NewTerminalFailure("provider rejected request", errors.New("private cause")), want: "provider rejected request"},
+		{name: "cancellation wins", err: runtime.NewTerminalFailure("provider rejected request", context.Canceled)},
+		{name: "deadline wins", err: runtime.NewTerminalFailure("provider rejected request", context.DeadlineExceeded)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			executor, err := New(fakeRunner{run: func(context.Context, runtime.Turn, runtime.EventSink) (runtime.Outcome, error) {
+				return runtime.Outcome{}, test.err
+			}}, &fakeContinuation{}, tracing.RuntimeTelemetry{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			events, errs := collect(executor.Execute(t.Context(), requestContext("task-1", "hello")))
+			if len(errs) != 0 {
+				t.Fatal(errs)
+			}
+			last := events[len(events)-1].(*a2atype.TaskStatusUpdateEvent)
+			if test.want == "" {
+				if last.Status.State == a2atype.TaskStateFailed {
+					t.Fatal("cancellation published a terminal failure")
+				}
+				return
+			}
+			if last.Status.State != a2atype.TaskStateFailed || last.Status.Message.Parts[0].Text() != test.want {
+				t.Fatalf("failure event = %#v", last)
+			}
+		})
+	}
+}
+
 func TestExecuteReleasesActiveTaskBeforeTerminalEvent(t *testing.T) {
 	runnerReturned := make(chan struct{})
 	executor, err := New(fakeRunner{run: func(context.Context, runtime.Turn, runtime.EventSink) (runtime.Outcome, error) {

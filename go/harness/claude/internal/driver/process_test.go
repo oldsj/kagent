@@ -2,7 +2,9 @@ package driver
 
 import (
 	"context"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -204,6 +206,85 @@ func TestProcessDriverParserFailureIncludesStderr(t *testing.T) {
 			}
 			if time.Since(started) > time.Second {
 				t.Fatal("parser failure waited for the live subprocess to exit")
+			}
+		})
+	}
+}
+
+func TestProcessDriverNonZeroExitKeepsTerminalFailure(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		script     string
+		want       []string
+		wantAbsent []string
+	}{
+		{
+			name:       "error result and empty stderr",
+			script:     `printf '%s\n' '{"type":"result","subtype":"success","is_error":true,"result":"API Error: 401 invalid x-api-key"}'` + "\nexit 1\n",
+			want:       []string{"upstream error (details withheld: possible credential)"},
+			wantAbsent: []string{"stderr:"},
+		},
+		{
+			name:       "error result and stderr",
+			script:     `printf '%s\n' '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"turn failed"}'` + "\necho 'proxy refused' >&2\nexit 1\n",
+			want:       []string{"turn failed"},
+			wantAbsent: []string{"proxy refused"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			executable := filepath.Join(dir, "claude")
+			if err := os.WriteFile(executable, []byte("#!/bin/sh\n"+test.script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			d := NewProcessDriver(ProcessConfig{
+				Executable: executable, Workspace: dir,
+				MaxEventBytes: 4096, MaxStderrBytes: 1024, InterruptGrace: time.Second,
+			})
+			_, err := d.Run(t.Context(), runtime.Turn{Prompt: "hello"}, &recordingSink{})
+			if err == nil {
+				t.Fatal("Run() error = nil, want the non-zero exit")
+			}
+			var exitErr *exec.ExitError
+			if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+				t.Fatalf("Run() error = %v, want wrapped exit code 1", err)
+			}
+			for _, want := range test.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("Run() error = %q, want it to contain %q", err, want)
+				}
+			}
+			for _, absent := range test.wantAbsent {
+				if strings.Contains(err.Error(), absent) {
+					t.Errorf("Run() error = %q, want it to omit %q", err, absent)
+				}
+			}
+		})
+	}
+}
+
+func TestExitError(t *testing.T) {
+	waitErr := errors.New("exit status 1")
+	failure := &runtime.Outcome{Failure: &runtime.Failure{Message: "boom"}}
+	for _, test := range []struct {
+		name     string
+		terminal *runtime.Outcome
+		stderr   string
+		want     string
+	}{
+		{name: "nothing known", want: "claude exited with an error: exit status 1"},
+		{name: "stderr only", stderr: "oops", want: "claude exited with an error: exit status 1: oops"},
+		{name: "completed result", terminal: &runtime.Outcome{}, stderr: "oops", want: "claude exited with an error: exit status 1: oops"},
+		{name: "failure only", terminal: failure, want: "boom"},
+		{name: "failure and stderr", terminal: failure, stderr: "oops", want: "boom"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := exitError(waitErr, test.terminal, test.stderr)
+			if err.Error() != test.want {
+				t.Errorf("exitError() = %q, want %q", err, test.want)
+			}
+			if !errors.Is(err, waitErr) {
+				t.Error("exitError() does not wrap the wait error")
 			}
 		})
 	}

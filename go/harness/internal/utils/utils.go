@@ -14,9 +14,10 @@ import (
 // every write as consumed, so reaching the diagnostic limit never disrupts
 // the child process.
 type BoundedBuffer struct {
-	mu    sync.Mutex
-	data  []byte
-	limit int
+	mu        sync.Mutex
+	data      []byte
+	limit     int
+	truncated bool
 }
 
 // NewBoundedBuffer returns an empty buffer that retains the first limit bytes.
@@ -29,6 +30,9 @@ func (b *BoundedBuffer) Write(data []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	remaining := b.limit - len(b.data)
+	if len(data) > remaining {
+		b.truncated = true
+	}
 	if remaining > 0 {
 		b.data = append(b.data, data[:min(len(data), remaining)]...)
 	}
@@ -40,6 +44,18 @@ func (b *BoundedBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return string(b.data)
+}
+
+// Diagnostic returns vetted output from a complete capture. If any bytes were
+// discarded, the missing suffix may contain an indicator; never expose the
+// retained prefix. Read capture state and contents under the same lock.
+func (b *BoundedBuffer) Diagnostic() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.truncated {
+		return "upstream error (details withheld: stderr truncated)"
+	}
+	return SafeDiagnostic(string(b.data))
 }
 
 // EnsurePrivateDir creates path when necessary, rejects symlinks and
