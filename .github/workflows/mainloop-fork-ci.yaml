@@ -1,0 +1,51 @@
+name: Mainloop Fork Fixture CI
+
+on:
+  pull_request:
+    branches: [mainloop-substrate-0-4]
+  push:
+    branches: [mainloop-substrate-0-4]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  fixture-check:
+    name: ChatGPT refresh fixtures
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+        working-directory: go
+    env:
+      GOFLAGS: -p=2
+      GOMAXPROCS: "2"
+    steps:
+      - name: Checkout event source
+        # Keep the event default: PR merge candidate, push SHA, or dispatch SHA.
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Record tested source
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SOURCE_REF: ${{ github.ref }}
+          EVENT_SHA: ${{ github.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          checkout_sha=$(git rev-parse HEAD)
+          printf 'Event: %s\nRef: %s\nEvent SHA: %s\nCheckout SHA: %s\nPR head SHA: %s\n' \
+            "$EVENT_NAME" "$SOURCE_REF" "$EVENT_SHA" "$checkout_sha" "$PR_HEAD_SHA" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          test "$checkout_sha" = "$EVENT_SHA"
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go/go.mod
+          cache: false
+      - name: Test refresh fixtures
+        run: go test ./core/internal/controller/chatgptrefresh -count=1 -timeout=180s
+      - name: Vet refresh package
+        run: go vet ./core/internal/controller/chatgptrefresh
