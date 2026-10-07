@@ -145,3 +145,23 @@ tests:
       - matchRegex:
           path: data.KAGENT_AUTH_SERVICE_POLICY
           pattern: '"developmentEnvironmentRegistries":\["registry.example:5000"\]'
+
+  - it: denies cleartext MCP origins by default
+    set:
+      controller.auth.mode: service-token
+      controller.auth.serviceToken.secretName: mainloop-control
+    asserts:
+      - matchRegex:
+          path: data.KAGENT_AUTH_SERVICE_POLICY
+          pattern: '"cleartextMCPOrigins":\[\]'
+
+  - it: renders exact cleartext MCP origins
+    set:
+      controller.auth.mode: service-token
+      controller.auth.serviceToken.secretName: mainloop-control
+      controller.auth.serviceToken.cleartextMCPOrigins:
+        - http://mainloop-mcp.mainloop.svc.cluster.local
+    asserts:
+      - matchRegex:
+          path: data.KAGENT_AUTH_SERVICE_POLICY
+          pattern: '"cleartextMCPOrigins":\["http://mainloop-mcp.mainloop.svc.cluster.local"\]'

@@ -251,6 +251,9 @@ controller:
       #   header: authorization
       #   purpose: mcp
       credentials: []
+      # Exact HTTP origins on *.svc.cluster.local hosts, only for MCP tuples.
+      # Empty requires HTTPS for every credential tuple.
+      cleartextMCPOrigins: []
       # Exact registry authorities (optionally host:port), never repository prefixes.
       # Empty denies development environment selection, including for Mainloop.
       developmentEnvironmentRegistries: []

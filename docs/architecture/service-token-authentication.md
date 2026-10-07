@@ -63,7 +63,7 @@ controller:
 ```
 
 The tuple uses the Agent namespace, a shell-style Secret name pattern, exact key
-and HTTPS origin, and a case-insensitive authorization header. Only MCP-purpose
+and exact origin, and a case-insensitive authorization header. Only MCP-purpose
 credentials are supported. Duplicate origin/header pairs and unapproved extra
 headers deny before Session reservation or Secret resolution. Existing checkout
 validation against the prepared Agent revision still applies.
@@ -78,3 +78,30 @@ or a Secret label lookup. No label alone confers authority.
 Control bearers are stripped from outbound HTTP headers and A2A service metadata.
 Runtime identity headers continue to follow the existing callback contract; this
 slice does not claim verified runtime identity or listener separation.
+
+Credential origins require HTTPS by default. To allow an in-cluster MCP service
+using HTTP, explicitly configure the separate allowlist:
+
+```yaml
+controller:
+  auth:
+    serviceToken:
+      cleartextMCPOrigins:
+        - http://mainloop-mcp.mainloop.svc.cluster.local
+```
+
+The corresponding approved credential tuple must use that exact origin and
+`purpose: mcp`. Entries must be plain HTTP origins with a lowercase DNS hostname
+ending in `.svc.cluster.local` and an optional numeric port from 1 to 65535.
+Paths (including `/`), wildcards, userinfo, queries, fragments, and non-cluster
+hosts are rejected at startup, even when no credential tuple uses the entry.
+The empty default denies HTTP tuples. Host and port differences never match;
+the allowlist does not itself grant access to credentials. This exception only
+controls MCP credential tuples and does not change control API transport or TLS.
+
+This policy setting only admits the credential tuple; it does not enable gateway
+injection or prove routing. The actor egress gateway must separately be configured
+to inject credentials for that exact cleartext host, and actor traffic must route
+through it. The injected Authorization header travels unencrypted from the gateway
+to the in-cluster service, relying on the cluster network as the trust boundary.
+Use HTTPS where that trust boundary is not acceptable.
