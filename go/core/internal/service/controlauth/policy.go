@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/url"
 	"path"
+	"slices"
+	"strconv"
 	"strings"
 
 	"buf.build/go/protovalidate"
@@ -31,6 +33,7 @@ type Config struct {
 	Namespace                        string           `json:"namespace"`
 	Agents                           []string         `json:"agents"`
 	Credentials                      []CredentialRule `json:"credentials"`
+	CleartextMCPOrigins              []string         `json:"cleartextMCPOrigins"`
 	DevelopmentEnvironmentRegistries []string         `json:"developmentEnvironmentRegistries"`
 }
 
@@ -50,15 +53,24 @@ func New(config Config) (*Policy, error) {
 			return nil, errors.New("invalid service Agent allowlist")
 		}
 	}
+	for i, origin := range config.CleartextMCPOrigins {
+		if !validCleartextMCPOrigin(origin) {
+			return nil, errors.New("cleartext MCP allowlist requires exact HTTP origins on svc.cluster.local hosts")
+		}
+		if slices.Contains(config.CleartextMCPOrigins[:i], origin) {
+			return nil, errors.New("cleartext MCP allowlist contains a duplicate origin")
+		}
+	}
 	for _, rule := range config.Credentials {
 		origin, err := url.Parse(rule.Origin)
 		_, patternErr := path.Match(rule.SecretNamePattern, "probe")
-		if rule.Namespace != config.Namespace || rule.SecretNamePattern == "" || patternErr != nil || rule.Key == "" || rule.Purpose != "mcp" || rule.Header != "authorization" || err != nil || origin.Scheme != "https" || origin.Host == "" || origin.User != nil || origin.RawQuery != "" || origin.ForceQuery || origin.Fragment != "" || origin.Path != "" {
+		if rule.Namespace != config.Namespace || rule.SecretNamePattern == "" || patternErr != nil || rule.Key == "" || rule.Purpose != "mcp" || rule.Header != "authorization" || err != nil || (origin.Scheme != "https" && !(origin.Scheme == "http" && slices.Contains(config.CleartextMCPOrigins, rule.Origin))) || origin.Host == "" || origin.User != nil || origin.RawQuery != "" || origin.ForceQuery || origin.Fragment != "" || origin.Path != "" {
 			return nil, errors.New("invalid approved credential tuple")
 		}
 	}
 	config.Agents = append([]string(nil), config.Agents...)
 	config.Credentials = append([]CredentialRule(nil), config.Credentials...)
+	config.CleartextMCPOrigins = append([]string(nil), config.CleartextMCPOrigins...)
 	for _, registry := range config.DevelopmentEnvironmentRegistries {
 		parsed, err := url.Parse("https://" + registry)
 		if err != nil || registry == "" || parsed.Host != registry || parsed.Hostname() == "" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || registry != strings.ToLower(registry) {
@@ -67,6 +79,27 @@ func New(config Config) (*Policy, error) {
 	}
 	config.DevelopmentEnvironmentRegistries = append([]string(nil), config.DevelopmentEnvironmentRegistries...)
 	return &Policy{config: config}, nil
+}
+
+// validCleartextMCPOrigin accepts only canonical, exact in-cluster HTTP origins.
+func validCleartextMCPOrigin(origin string) bool {
+	parsed, err := url.Parse(origin)
+	if err != nil || parsed.Scheme != "http" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || parsed.RawFragment != "" {
+		return false
+	}
+	host := parsed.Hostname()
+	if !strings.HasSuffix(host, ".svc.cluster.local") || len(validation.IsDNS1123Subdomain(host)) != 0 {
+		return false
+	}
+	authority := host
+	if port := parsed.Port(); port != "" {
+		number, err := strconv.Atoi(port)
+		if err != nil || number < 1 || number > 65535 {
+			return false
+		}
+		authority += ":" + port
+	}
+	return origin == "http://"+authority
 }
 
 // WithRuntimePlatforms binds selection to the operator's current payload catalog.
