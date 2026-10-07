@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
@@ -97,6 +98,13 @@ func (u *upstreamAuthInterceptor) Before(ctx context.Context, req *a2aclient.Req
 		principal := auth.Principal{Agent: auth.Agent{ID: u.session.GetId()}}
 		if err := u.authenticator.UpstreamAuth(httpRequest, session, principal); err != nil {
 			return ctx, nil, err
+		}
+	}
+	if session, ok := auth.AuthSessionFrom(ctx); ok && session.Principal().Service == auth.MainloopService {
+		for key := range req.ServiceParams {
+			if strings.EqualFold(key, "Authorization") {
+				delete(req.ServiceParams, key)
+			}
 		}
 	}
 	for key, values := range httpRequest.Header {

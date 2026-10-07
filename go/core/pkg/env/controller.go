@@ -5,12 +5,16 @@ import "time"
 const (
 	AuthModeInsecure     = "insecure"
 	AuthModeTrustedProxy = "trusted-proxy"
+	AuthModeServiceToken = "service-token"
 )
 
 var (
-	AuthMode = RegisterStringVar(
+	AuthServiceTokenCurrentFile = RegisterStringVar("KAGENT_AUTH_SERVICE_TOKEN_CURRENT_FILE", "", "Current service bearer file, read on each request.", ComponentController)
+	AuthServiceTokenNextFile    = RegisterStringVar("KAGENT_AUTH_SERVICE_TOKEN_NEXT_FILE", "", "Optional overlapping service bearer file, read on each request.", ComponentController)
+	AuthServicePolicy           = RegisterStringVar("KAGENT_AUTH_SERVICE_POLICY", "", "JSON Mainloop Agent and credential allowlist; required in service-token mode.", ComponentController)
+	AuthMode                    = RegisterStringVar(
 		"KAGENT_AUTH_MODE", AuthModeInsecure,
-		"Controller authentication mode: insecure or trusted-proxy. trusted-proxy requires an upstream credential-validating proxy and network isolation preventing bypass.", ComponentController,
+		"Controller authentication mode: insecure, trusted-proxy, or service-token. trusted-proxy requires an upstream credential-validating proxy and network isolation preventing bypass.", ComponentController,
 	)
 	AuthUserIDClaim = RegisterStringVar(
 		"KAGENT_AUTH_USER_ID_CLAIM", "",

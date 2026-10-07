@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"buf.build/go/protovalidate"
-
 	"github.com/google/uuid"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 	"github.com/kagent-dev/kagent/go/api/workspace"
@@ -64,6 +63,13 @@ type ShareListResult struct {
 	NextPageToken string
 }
 
+// SessionPolicy validates proposed and stored Session attributes before side effects.
+type SessionPolicy interface {
+	CheckAgent(context.Context, *apiv1alpha1.ResourceReference) error
+	CheckCreateSession(context.Context, *apiv1alpha1.ResourceReference, []*apiv1alpha1.SessionCredential) error
+	CheckSession(context.Context, *apiv1alpha1.Session) error
+}
+
 type Service struct {
 	store       store
 	authorizer  auth.Authorizer
@@ -108,6 +114,11 @@ func (s *Service) Create(ctx context.Context, agent *apiv1alpha1.ResourceReferen
 	creator, err := s.authorize(ctx, auth.VerbCreate, "")
 	if err != nil {
 		return nil, err
+	}
+	if policy, ok := s.authorizer.(SessionPolicy); ok {
+		if err := policy.CheckCreateSession(ctx, agent, credentials); err != nil {
+			return nil, serviceerrors.NewPermissionDenied("Session creation is not authorized", err)
+		}
 	}
 	// A share grants access to an existing conversation, never creation.
 	if _, shared := auth.ShareContextFrom(ctx); shared {
@@ -172,9 +183,10 @@ func (s *Service) getAuthorized(ctx context.Context, id string, verb auth.Verb) 
 	var session *apiv1alpha1.Session
 	authSession, _ := auth.AuthSessionFrom(ctx)
 	_, shared := auth.ShareContextFrom(ctx)
-	// Internal controllers may access Sessions independently of ownership,
-	// after authorization. A share never grants that broader authority.
-	if _, controlPlane := authSession.(auth.ControlPlaneSession); controlPlane && !shared {
+	// Internal controllers may access Sessions independently of ownership.
+	// Service callers load trusted attributes and must pass checkSession below.
+	// A share never grants either unscoped lookup.
+	if _, controlPlane := authSession.(auth.ControlPlaneSession); (controlPlane || authSession.Principal().Service == auth.MainloopService) && !shared {
 		session, err = s.store.GetSessionByID(ctx, id)
 	} else {
 		session, err = s.store.GetSession(ctx, id, creator)
@@ -185,7 +197,19 @@ func (s *Service) getAuthorized(ctx context.Context, id string, verb auth.Verb) 
 	if err != nil {
 		return nil, serviceerrors.NewInternal("Failed to get Session", err)
 	}
+	if err := s.checkSession(ctx, session); err != nil {
+		return nil, err
+	}
 	return session, nil
+}
+
+func (s *Service) checkSession(ctx context.Context, session *apiv1alpha1.Session) error {
+	if policy, ok := s.authorizer.(SessionPolicy); ok {
+		if err := policy.CheckSession(ctx, session); err != nil {
+			return serviceerrors.NewPermissionDenied("Session is outside the service scope", err)
+		}
+	}
+	return nil
 }
 
 // Rename sets the conversation's display name. Unlike every other read on this
@@ -235,6 +259,11 @@ func (s *Service) List(ctx context.Context, request ListRequest) (ListResult, er
 	if err != nil {
 		return ListResult{}, err
 	}
+	if policy, ok := s.authorizer.(SessionPolicy); ok && request.Agent != nil {
+		if err := policy.CheckAgent(ctx, request.Agent); err != nil {
+			return ListResult{}, serviceerrors.NewPermissionDenied("Agent is outside the service scope", err)
+		}
+	}
 	if request.AllCreators {
 		if _, err := s.authorizeType(ctx, auth.VerbGet, "SessionAllCreators", ""); err != nil {
 			return ListResult{}, err
@@ -255,6 +284,12 @@ func (s *Service) List(ctx context.Context, request ListRequest) (ListResult, er
 			// Authorize before pagination. A denied Session must not consume a
 			// result slot or become the cursor exposed to the caller.
 			if _, err := s.authorize(ctx, auth.VerbGet, session.Id); err != nil {
+				if serviceerrors.IsCode(err, serviceerrors.CodePermissionDenied) {
+					continue
+				}
+				return ListResult{}, err
+			}
+			if err := s.checkSession(ctx, session); err != nil {
 				if serviceerrors.IsCode(err, serviceerrors.CodePermissionDenied) {
 					continue
 				}

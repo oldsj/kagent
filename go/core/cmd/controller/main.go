@@ -18,13 +18,17 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	authimpl "github.com/kagent-dev/kagent/go/core/internal/httpserver/auth"
+	"github.com/kagent-dev/kagent/go/core/internal/service/controlauth"
 	"github.com/kagent-dev/kagent/go/core/pkg/app"
 	"github.com/kagent-dev/kagent/go/core/pkg/auth"
 	"github.com/kagent-dev/kagent/go/core/pkg/env"
@@ -54,9 +58,28 @@ func controllerAuthenticator(mode, userIDClaim string) (auth.AuthProvider, error
 	switch mode {
 	case env.AuthModeInsecure:
 		return &authimpl.InsecureAuthenticator{}, nil
+	case env.AuthModeServiceToken:
+		policy, err := controllerServicePolicy()
+		if err != nil {
+			return nil, err
+		}
+		return authimpl.NewServiceTokenAuthenticator(env.AuthServiceTokenCurrentFile.Get(), env.AuthServiceTokenNextFile.Get(), policy)
 	case env.AuthModeTrustedProxy:
 		return authimpl.NewProxyAuthenticator(userIDClaim), nil
 	default:
-		return nil, fmt.Errorf("unsupported %s %q: expected %s or %s", env.AuthMode.Name(), mode, env.AuthModeInsecure, env.AuthModeTrustedProxy)
+		return nil, fmt.Errorf("unsupported %s %q: expected %s, %s or %s", env.AuthMode.Name(), mode, env.AuthModeInsecure, env.AuthModeTrustedProxy, env.AuthModeServiceToken)
 	}
+}
+
+func controllerServicePolicy() (*controlauth.Policy, error) {
+	var config controlauth.Config
+	decoder := json.NewDecoder(strings.NewReader(env.AuthServicePolicy.Get()))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&config); err != nil {
+		return nil, fmt.Errorf("invalid service policy configuration")
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return nil, fmt.Errorf("invalid service policy configuration")
+	}
+	return controlauth.New(config)
 }
