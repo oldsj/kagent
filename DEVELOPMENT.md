@@ -43,6 +43,32 @@ When making changes to `kagent`, the most important thing is to figure out which
 - [go](go): Contains the code for the kubernetes controller, and the CLI.
 - [ui](ui): Contains the code for the web UI.
 
+## Mainloop fork fixture gate
+
+In `oldsj/kagent`, `.github/workflows/mainloop-fork-ci.yaml` runs the
+`chatgptrefresh` package's fixture tests (`-count=1 -timeout=180s`) and `go vet`
+on a standard GitHub-hosted runner. It runs for pull requests targeting
+`mainloop-substrate-0-4`, pushes to that branch, and manual dispatches, without
+path filters. The upstream CI workflow is unchanged.
+
+PR runs test GitHub's merge candidate; push and manual runs test the event's
+commit. The run summary records the ref, event SHA, checkout SHA, and PR head
+SHA so publication checks can be matched to the intended source. After
+publication, when the workflow is available for dispatch on the default branch,
+select the source branch in **Run workflow** or use:
+
+```shell
+gh workflow run mainloop-fork-ci.yaml --repo oldsj/kagent --ref SOURCE_BRANCH
+```
+
+Verify the recorded SHA against the published candidate before accepting a
+remote result. Bootstrap fixtures participate once their changes are in the
+tested checkout. This gate uses synthetic credentials, fake Kubernetes clients,
+and a fixture CLI; it needs no provider secrets or subscription. Image builds
+and publication, live provider calls, and container/Kubernetes E2E suites remain
+separate, opt-in validation. A passing fixture gate does not prove image CI,
+live credential refresh, or deployment readiness.
+
 ## Nightly releases
 
 The [Nightly Release workflow](https://github.com/kagent-dev/kagent/actions/workflows/nightly.yaml)
