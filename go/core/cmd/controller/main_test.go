@@ -52,3 +52,16 @@ func TestControllerAuthenticator(t *testing.T) {
 		})
 	}
 }
+
+func TestServiceTokenStartupFailsClosed(t *testing.T) {
+	t.Setenv("KAGENT_AUTH_SERVICE_POLICY", `{"namespace":"kagent","agents":["mainloop-main"],"credentials":[]}`)
+	t.Setenv("KAGENT_AUTH_SERVICE_TOKEN_CURRENT_FILE", "")
+	_, err := controllerAuthenticator(env.AuthModeServiceToken, "")
+	require.Error(t, err)
+	t.Setenv("KAGENT_AUTH_SERVICE_POLICY", `{"namespace":"kagent","agents":[]}`)
+	_, err = controllerAuthenticator(env.AuthModeServiceToken, "")
+	require.Error(t, err)
+	t.Setenv("KAGENT_AUTH_SERVICE_POLICY", `{"namespace":"kagent","agents":["mainloop-main"],"unknown":true}`)
+	_, err = controllerAuthenticator(env.AuthModeServiceToken, "")
+	require.Error(t, err)
+}

@@ -13,12 +13,16 @@ import (
 
 	a2apb "github.com/a2aproject/a2a-go/v2/a2apb/v1"
 	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
+	api "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
+	authimpl "github.com/kagent-dev/kagent/go/core/internal/httpserver/auth"
+	"github.com/kagent-dev/kagent/go/core/internal/service/controlauth"
 	"github.com/kagent-dev/kagent/go/core/internal/service/serviceerrors"
 	sessionsvc "github.com/kagent-dev/kagent/go/core/internal/service/session"
 	"github.com/kagent-dev/kagent/go/core/pkg/auth"
 	"github.com/kagent-dev/kagent/go/pkg/logging"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	grpc_health_v1 "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
@@ -58,6 +62,13 @@ func authenticate(ctx context.Context, fullMethod string, authenticator, runtime
 		return ctx, status.Error(codes.PermissionDenied, "RPC authorization policy is not configured")
 	}
 	if access == auth.AccessPublic {
+		if _, serviceToken := authenticator.(*authimpl.ServiceTokenAuthenticator); serviceToken {
+			switch fullMethod {
+			case api.SystemService_GetVersion_FullMethodName, grpc_health_v1.Health_Check_FullMethodName, grpc_health_v1.Health_List_FullMethodName, grpc_health_v1.Health_Watch_FullMethodName:
+			default:
+				return ctx, status.Error(codes.PermissionDenied, "service public method is not authorized")
+			}
+		}
 		return ctx, nil
 	}
 	if access == auth.AccessRuntime {
@@ -77,6 +88,15 @@ func authenticate(ctx context.Context, fullMethod string, authenticator, runtime
 	if access == auth.AccessRuntime {
 		if headers.Get("X-Share-Token") != "" {
 			return ctx, status.Error(codes.PermissionDenied, "share credentials cannot access runtime storage")
+		}
+		return authenticatedContext, nil
+	}
+	if session.Principal().Service == auth.MainloopService {
+		if err := controlauth.CheckMethod(fullMethod); err != nil {
+			return ctx, status.Error(codes.PermissionDenied, "service method is not authorized")
+		}
+		if headers.Get("X-Share-Token") != "" {
+			return ctx, status.Error(codes.PermissionDenied, "service credentials cannot use shares")
 		}
 		return authenticatedContext, nil
 	}

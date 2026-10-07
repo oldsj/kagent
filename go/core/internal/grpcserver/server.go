@@ -17,6 +17,7 @@ import (
 	"github.com/kagent-dev/kagent/go/api/client"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 	"github.com/kagent-dev/kagent/go/api/v1alpha3"
+	authimpl "github.com/kagent-dev/kagent/go/core/internal/httpserver/auth"
 	"github.com/kagent-dev/kagent/go/core/internal/service/checkpoint"
 	"github.com/kagent-dev/kagent/go/core/internal/service/kubecrud"
 	memoryservice "github.com/kagent-dev/kagent/go/core/internal/service/memory"
@@ -153,7 +154,10 @@ func New(config Config) (*Server, error) {
 	if config.RegisterServices != nil {
 		config.RegisterServices(grpcServer)
 	}
-	if config.Reflection {
+	// The service credential does not authorize discovery, even when the generic
+	// reflection setting is enabled. Other authentication modes retain reflection.
+	_, serviceToken := config.Authenticator.(*authimpl.ServiceTokenAuthenticator)
+	if config.Reflection && !serviceToken {
 		reflection.Register(grpcServer)
 	}
 

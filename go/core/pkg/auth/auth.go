@@ -33,10 +33,14 @@ type Agent struct {
 }
 
 // Authn
+const MainloopService = "mainloop"
+
 type Principal struct {
-	User   User
-	Agent  Agent
-	Claims map[string]any // Raw JWT claims (nil for non-JWT auth)
+	// Service is set only by a verified service authenticator.
+	Service string
+	User    User
+	Agent   Agent
+	Claims  map[string]any // Raw JWT claims (nil for non-JWT auth)
 }
 
 type Session interface {

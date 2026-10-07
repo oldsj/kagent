@@ -12,7 +12,9 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/google/uuid"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
+	"github.com/kagent-dev/kagent/go/core/internal/service/controlauth"
 	sessionsvc "github.com/kagent-dev/kagent/go/core/internal/service/session"
+	"github.com/kagent-dev/kagent/go/core/pkg/auth"
 	"k8s.io/apimachinery/pkg/types"
 )
 
@@ -49,7 +51,7 @@ var _ interactionService = (*sessionsvc.InteractionService)(nil)
 func New(interactions interactionService, dialer runtimeDialer, gatewayURL string) a2asrv.RequestHandler {
 	return &a2asrv.InterceptedHandler{
 		Handler:      &Gateway{interactions: interactions, dialer: dialer, gatewayURL: gatewayURL},
-		Interceptors: []a2asrv.CallInterceptor{a2aext.NewServerPropagator(nil)},
+		Interceptors: []a2asrv.CallInterceptor{&serviceMethodGuard{}, a2aext.NewServerPropagator(nil)},
 	}
 }
 
@@ -78,6 +80,9 @@ func (g *Gateway) CancelTask(ctx context.Context, req *a2a.CancelTaskRequest) (*
 }
 
 func (g *Gateway) SendMessage(ctx context.Context, req *a2a.SendMessageRequest) (a2a.SendMessageResult, error) {
+	if session, ok := auth.AuthSessionFrom(ctx); ok && session.Principal().Service == auth.MainloopService {
+		return nil, a2a.ErrUnauthorized
+	}
 	agent, err := route(ctx)
 	if err != nil {
 		return nil, err
@@ -151,4 +156,18 @@ func (g *Gateway) GetExtendedAgentCard(ctx context.Context, req *a2a.GetExtended
 	card.SecuritySchemes = nil
 	card.Signatures = nil
 	return card, nil
+}
+
+// Guard parsed operations so new SDK methods do not gain service authority.
+type serviceMethodGuard struct {
+	a2asrv.PassthroughCallInterceptor
+}
+
+func (*serviceMethodGuard) Before(ctx context.Context, call *a2asrv.CallContext, _ *a2asrv.Request) (context.Context, any, error) {
+	if session, ok := auth.AuthSessionFrom(ctx); ok && session.Principal().Service == auth.MainloopService {
+		if err := controlauth.CheckA2AMethod(call.Method()); err != nil {
+			return ctx, nil, a2a.ErrUnauthorized
+		}
+	}
+	return ctx, nil, nil
 }

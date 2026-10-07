@@ -375,6 +375,9 @@ func (s *InteractionService) resolveSend(ctx context.Context, agent types.Namesp
 	case req.Message.TaskID != "" || req.Message.ContextID != "":
 		session, err = s.messageSession(ctx, agent, req.Message)
 	default:
+		if session, ok := auth.AuthSessionFrom(ctx); ok && session.Principal().Service == auth.MainloopService {
+			return nil, a2atype.NewError(a2atype.ErrUnauthorized, "service sends require an existing context or task")
+		}
 		if _, err = s.agents.Get(ctx, agent); err != nil {
 			return nil, interactionError(ctx, err)
 		}

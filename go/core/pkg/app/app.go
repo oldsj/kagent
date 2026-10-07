@@ -128,7 +128,11 @@ func (o Options) resolve() (auth.AuthProvider, auth.CollectionAuthorizer) {
 	}
 	authorizer := o.Authorizer
 	if authorizer == nil {
-		authorizer = &auth.NoopAuthorizer{}
+		if service, ok := authenticator.(*authimpl.ServiceTokenAuthenticator); ok {
+			authorizer = service.Authorizer()
+		} else {
+			authorizer = &auth.NoopAuthorizer{}
+		}
 	}
 	return authenticator, authorizer
 }
@@ -403,7 +407,13 @@ func Run(ctx context.Context, opts Options) error {
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	mux.Handle("/mcp", otelhttp.NewHandler(auth.AuthnMiddleware(authenticator)(mcpHandler), "/mcp"))
+	mux.Handle("/mcp", otelhttp.NewHandler(auth.AuthnMiddleware(authenticator)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if session, ok := auth.AuthSessionFrom(r.Context()); ok && session.Principal().Service == auth.MainloopService {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+		mcpHandler.ServeHTTP(w, r)
+	})), "/mcp"))
 	mux.Handle(a2agateway.HTTPPathPrefix, otelhttp.NewHandler(a2agateway.NewHTTPHandler(gateway, authenticator, store), a2agateway.HTTPPathPrefix))
 	server, err := grpcserver.New(grpcserver.Config{
 		MethodPolicies:        policies,

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	a2a "github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/kagent-dev/kagent/go/core/pkg/auth"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
 )
@@ -18,5 +19,14 @@ func route(ctx context.Context) (types.NamespacedName, error) {
 	if !ok || len(validation.IsDNS1123Label(namespace)) != 0 || len(validation.IsDNS1123Subdomain(name)) != 0 {
 		return types.NamespacedName{}, a2a.NewError(a2a.ErrInvalidRequest, "Agent tenant must be namespace/name")
 	}
-	return types.NamespacedName{Namespace: namespace, Name: name}, nil
+	ref := types.NamespacedName{Namespace: namespace, Name: name}
+	if session, ok := auth.AuthSessionFrom(ctx); ok && session.Principal().Service == auth.MainloopService {
+		policy, ok := session.(interface {
+			CheckAgent(context.Context, types.NamespacedName) error
+		})
+		if !ok || policy.CheckAgent(ctx, ref) != nil {
+			return types.NamespacedName{}, a2a.ErrUnauthorized
+		}
+	}
+	return ref, nil
 }

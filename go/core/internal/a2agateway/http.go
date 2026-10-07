@@ -69,6 +69,14 @@ func NewHTTPHandler(gateway a2asrv.RequestHandler, authenticator auth.AuthProvid
 			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
 			return
 		}
+		if session, _ := auth.AuthSessionFrom(r.Context()); session.Principal().Service == auth.MainloopService {
+			if r.Header.Get("X-Share-Token") != "" {
+				http.Error(w, "Forbidden", http.StatusForbidden)
+				return
+			}
+			mux.ServeHTTP(w, r)
+			return
+		}
 		share, err := sessionsvc.ResolveShare(r.Context(), shares, r.Header.Get("X-Share-Token"))
 		if err != nil {
 			status := http.StatusInternalServerError

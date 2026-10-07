@@ -35,8 +35,20 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "kagent.controller.serviceAccountName" . | quote }}
-      {{- if or (gt (len .Values.controller.volumes) 0) (and .Values.controller.substrate .Values.controller.substrate.enabled) }}
+      {{- if or (eq .Values.controller.auth.mode "service-token") (gt (len .Values.controller.volumes) 0) (and .Values.controller.substrate .Values.controller.substrate.enabled) }}
       volumes:
+      {{- if eq .Values.controller.auth.mode "service-token" }}
+      - name: control-auth
+        secret:
+          secretName: {{ required "service-token mode requires controller.auth.serviceToken.secretName" .Values.controller.auth.serviceToken.secretName | quote }}
+          items:
+          - key: {{ required "service-token currentKey is required" .Values.controller.auth.serviceToken.currentKey | quote }}
+            path: current
+          {{- if .Values.controller.auth.serviceToken.nextKey }}
+          - key: {{ .Values.controller.auth.serviceToken.nextKey | quote }}
+            path: next
+          {{- end }}
+      {{- end }}
       {{- if and .Values.controller.substrate .Values.controller.substrate.enabled }}
       - name: substrate-servicedns
         projected:
@@ -161,8 +173,13 @@ spec:
               port: http
             periodSeconds: 30
           {{- end }}
-          {{- if or (gt (len .Values.controller.volumeMounts) 0) (and .Values.controller.substrate .Values.controller.substrate.enabled) }}
+          {{- if or (eq .Values.controller.auth.mode "service-token") (gt (len .Values.controller.volumeMounts) 0) (and .Values.controller.substrate .Values.controller.substrate.enabled) }}
           volumeMounts:
+            {{- if eq .Values.controller.auth.mode "service-token" }}
+            - name: control-auth
+              mountPath: /run/kagent-control-auth
+              readOnly: true
+            {{- end }}
             {{- if and .Values.controller.substrate .Values.controller.substrate.enabled }}
             - name: substrate-servicedns
               mountPath: /run/substrate-servicedns

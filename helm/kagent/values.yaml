@@ -224,12 +224,33 @@ controller:
   replicas: 1
   loglevel: "info"
   auth:
-    # -- Controller authentication: insecure or trusted-proxy.
+    # -- Controller authentication: insecure, trusted-proxy, or service-token.
     # trusted-proxy requires a validating proxy and network isolation; see
     # docs/architecture/oidc-proxy-authentication.md.
     mode: insecure
     # -- JWT identity claim. Empty uses sub; a missing custom claim falls back to sub.
     userIdClaim: ""
+    serviceToken:
+      # Existing Secret with a >=32-byte bearer per key. Never put tokens in values.
+      secretName: ""
+      currentKey: current
+      # Empty disables overlap. A configured next key must contain a valid token.
+      nextKey: ""
+      namespace: kagent
+      agents:
+        - mainloop-main
+        - claude-subscription
+        - codex-subscription-https
+        - claude-workspace
+        - codex-workspace
+      # Approved tuples only; no credentials are permitted by default.
+      # - namespace: kagent
+      #   secretNamePattern: mainloop-mcp-binding-*
+      #   key: authorization
+      #   origin: https://mainloop.example.com
+      #   header: authorization
+      #   purpose: mcp
+      credentials: []
   # -- Public gateway base URL advertised by Session Agent Cards for gRPC and HTTP/JSON-RPC.
   # @default -- `http://<fullname>-controller.<namespace>.svc:<grpc-port>`
   a2aGatewayUrl: ""

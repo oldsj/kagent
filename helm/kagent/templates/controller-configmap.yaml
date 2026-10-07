@@ -7,6 +7,11 @@ metadata:
     {{- include "kagent.controller.labels" . | nindent 4 }}
 data:
   KAGENT_AUTH_MODE: {{ .Values.controller.auth.mode | quote }}
+  {{- if eq .Values.controller.auth.mode "service-token" }}
+  KAGENT_AUTH_SERVICE_TOKEN_CURRENT_FILE: /run/kagent-control-auth/current
+  KAGENT_AUTH_SERVICE_TOKEN_NEXT_FILE: {{ ternary "/run/kagent-control-auth/next" "" (ne .Values.controller.auth.serviceToken.nextKey "") | quote }}
+  KAGENT_AUTH_SERVICE_POLICY: {{ dict "namespace" .Values.controller.auth.serviceToken.namespace "agents" .Values.controller.auth.serviceToken.agents "credentials" .Values.controller.auth.serviceToken.credentials | toJson | quote }}
+  {{- end }}
   KAGENT_AUTH_USER_ID_CLAIM: {{ .Values.controller.auth.userIdClaim | quote }}
   KAGENT_GATEWAY_URL: {{ include "kagent.a2aGatewayUrl" . | quote }}
   DEFAULT_MODEL_CONFIG_NAME: {{ include "kagent.defaultModelConfigName" . | quote }}
