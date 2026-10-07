@@ -2,6 +2,8 @@ package substrate
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -12,7 +14,9 @@ import (
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/kagent-dev/kagent/go/core/internal/translator"
+	"github.com/kagent-dev/kagent/go/harness/runtime/payload"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	corev1 "k8s.io/api/core/v1"
 )
@@ -208,4 +212,63 @@ func TestActorTemplateEnvironmentValueSize(t *testing.T) {
 			require.NotNil(t, template)
 		})
 	}
+}
+
+func TestComposedActorTemplate(t *testing.T) {
+	selection := translator.Composition{DevelopmentImage: "registry/dev@sha256:" + strings.Repeat("a", 64), PayloadImage: "registry/payload@sha256:" + strings.Repeat("b", 64), Platform: "linux/arm64", Provider: translator.HarnessTypeClaude, PolicyIdentity: "accepted-v1", Schema: 1, CLIVersion: "2.1.260"}
+	spec := translator.Revision{AgentName: "helper", Namespace: "agents", Image: selection.DevelopmentImage, Composition: &selection, Command: []string{"/opt/mainloop-runtime/bin/launch"}, ConfigJSON: []byte(`{}`), AgentCard: &a2apb.AgentCard{Name: "helper", Version: "v1", Capabilities: &a2apb.AgentCapabilities{}, SupportedInterfaces: []*a2apb.AgentInterface{{Url: "http://localhost:80", ProtocolBinding: "GRPC", ProtocolVersion: "1.0"}}, DefaultInputModes: []string{"text"}, DefaultOutputModes: []string{"text"}}}
+	id, err := spec.Digest()
+	require.NoError(t, err)
+	template, err := ActorTemplateForRevision(&spec, id)
+	require.NoError(t, err)
+	require.Equal(t, selection.DevelopmentImage, template.Containers[0].Image)
+	require.Equal(t, []string{"/opt/mainloop-runtime/bin/launch"}, template.Containers[0].Command)
+	require.Equal(t, selection.PayloadImage, template.Volumes[len(template.Volumes)-1].GetImage().GetReference())
+	require.Equal(t, "/opt/mainloop-runtime", template.Containers[0].VolumeMounts[len(template.Containers[0].VolumeMounts)-1].MountPath)
+	rendered, err := protojson.MarshalOptions{Indent: "  ", UseProtoNames: true}.Marshal(template)
+	require.NoError(t, err)
+	goldenPath := filepath.Join("testdata", "composed-template.golden.json")
+	if os.Getenv("KAGENT_TEST_UPDATE_GOLDEN") == "1" {
+		require.NoError(t, os.MkdirAll(filepath.Dir(goldenPath), 0755))
+		require.NoError(t, os.WriteFile(goldenPath, rendered, 0644))
+	}
+	golden, err := os.ReadFile(goldenPath)
+	require.NoError(t, err)
+	require.JSONEq(t, string(golden), string(rendered))
+	spec.Image = "changed"
+	_, err = ActorTemplateForRevision(&spec, id)
+	require.ErrorContains(t, err, "invalid image")
+}
+
+func TestComposedPlatformExecutionContract(t *testing.T) {
+	// Digest references may point to multi-arch indexes. Identical D/R indexes
+	// selected for different platforms must carry different execution inputs.
+	spec := translator.Revision{Namespace: "agents", AgentName: "helper", WorkerPoolName: "native", Command: []string{payload.Root + "/bin/launch"}, ConfigJSON: []byte(`{}`), AgentCard: &a2apb.AgentCard{Name: "helper", Version: "v1", Capabilities: &a2apb.AgentCapabilities{}, SupportedInterfaces: []*a2apb.AgentInterface{{Url: "http://localhost:80", ProtocolBinding: "GRPC", ProtocolVersion: "1.0"}}, DefaultInputModes: []string{"text"}, DefaultOutputModes: []string{"text"}}}
+	var previous *ateapipb.ActorTemplate
+	for _, platform := range []string{"linux/arm64", "linux/amd64"} {
+		selection := translator.Composition{DevelopmentImage: "registry/dev-index@sha256:" + strings.Repeat("a", 64), PayloadImage: "registry/runtime-index@sha256:" + strings.Repeat("b", 64), Platform: platform, Provider: translator.HarnessTypeClaude, PolicyIdentity: "accepted-v1", Schema: 1, CLIVersion: "2.1.260"}
+		spec.Image, spec.Composition = selection.DevelopmentImage, &selection
+		id, err := spec.Digest()
+		require.NoError(t, err)
+		template, err := ActorTemplateForRevision(&spec, id)
+		require.NoError(t, err)
+		found := false
+		for _, variable := range template.Containers[0].Env {
+			if variable.Name == payload.PlatformEnvironment {
+				require.Equal(t, platform, variable.Value)
+				found = true
+			}
+		}
+		require.True(t, found)
+		template.Metadata = nil
+		if previous != nil {
+			require.False(t, proto.Equal(previous, template), "index resolution must not erase the selected execution platform")
+		}
+		previous = template
+	}
+	spec.Environment = []corev1.EnvVar{{Name: payload.PlatformEnvironment, Value: "linux/arm64"}}
+	id, err := spec.Digest()
+	require.NoError(t, err)
+	_, err = ActorTemplateForRevision(&spec, id)
+	require.ErrorContains(t, err, "conflicts with selected platform")
 }

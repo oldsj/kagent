@@ -77,7 +77,7 @@ func (c *Compiler) Compile(ctx context.Context, input *v2translator.HarnessInput
 		}
 		environment = append(environment, corev1.EnvVar{Name: variable.Name, Value: variable.Value})
 	}
-	// Substrate v0.0.20 runs Actor processes as root even when the image declares
+	// Stock Substrate runs Actor processes as root even when the image declares
 	// a non-root USER. Claude otherwise rejects --dangerously-skip-permissions.
 	environment = append(environment,
 		corev1.EnvVar{Name: claudeconfig.SandboxEnvName, Value: "1"},
@@ -134,8 +134,9 @@ func (c *Compiler) Compile(ctx context.Context, input *v2translator.HarnessInput
 	egress = slices.Compact(egress)
 	return &v2translator.CompileResult{
 		Revision: v2translator.Revision{
-			Namespace: template.Namespace,
-			Image:     harness.Spec.Workload.Image, Environment: environment,
+			NativeProvider: v2translator.HarnessTypeClaude,
+			Namespace:      template.Namespace,
+			Image:          harness.Spec.Workload.Image, Environment: environment,
 			ConfigJSON: configJSON, AgentCard: card,
 			WorkerPoolName:    harness.Spec.Substrate.WorkerPoolRef.Name,
 			SnapshotLocation:  harness.Spec.Substrate.SnapshotPolicy.Location,

@@ -1,0 +1,147 @@
+{
+  "metadata": {
+    "atespace": "agents",
+    "name": "helper-45f2eb367f8c"
+  },
+  "worker_selector": {
+    "match_labels": {
+      "kagent.dev/worker-pool": ""
+    }
+  },
+  "containers": [
+    {
+      "name": "kagent",
+      "image": "registry/dev@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "command": [
+        "/opt/mainloop-runtime/bin/launch"
+      ],
+      "env": [
+        {
+          "name": "MAINLOOP_RUNTIME_PLATFORM",
+          "value": "linux/arm64"
+        },
+        {
+          "name": "SSL_CERT_FILE",
+          "value": "/run/kagent/egress/trust-bundle.pem"
+        },
+        {
+          "name": "REQUESTS_CA_BUNDLE",
+          "value": "/run/kagent/egress/trust-bundle.pem"
+        },
+        {
+          "name": "AWS_CA_BUNDLE",
+          "value": "/run/kagent/egress/trust-bundle.pem"
+        },
+        {
+          "name": "NODE_EXTRA_CA_CERTS",
+          "value": "/run/kagent/egress/trust-bundle.pem"
+        },
+        {
+          "name": "CURL_CA_BUNDLE",
+          "value": "/run/kagent/egress/trust-bundle.pem"
+        },
+        {
+          "name": "GIT_SSL_CAINFO",
+          "value": "/run/kagent/egress/trust-bundle.pem"
+        },
+        {
+          "name": "SSL_CERT_DIR",
+          "value": "/run/kagent/egress"
+        },
+        {
+          "name": "KAGENT_CONFIG_JSON",
+          "value": "{}"
+        },
+        {
+          "name": "KAGENT_AGENT_CARD_JSON",
+          "value": "{\"supportedInterfaces\":[{\"url\":\"http://localhost:80\",\"protocolBinding\":\"GRPC\",\"protocolVersion\":\"1.0\"}],\"capabilities\":{\"pushNotifications\":false,\"streaming\":false},\"defaultInputModes\":[\"text\"],\"defaultOutputModes\":[\"text\"],\"description\":\"\",\"name\":\"helper\",\"skills\":[],\"version\":\"v1\"}"
+        }
+      ],
+      "wakeup_probe": {
+        "http_get": {
+          "path": "/readyz",
+          "port": 8081
+        },
+        "timeout_seconds": 30
+      },
+      "volume_mounts": [
+        {
+          "name": "data",
+          "mount_path": "/data"
+        },
+        {
+          "name": "egress-trust",
+          "mount_path": "/run/kagent/egress"
+        },
+        {
+          "name": "actor-identity",
+          "mount_path": "/run/kagent/identity"
+        },
+        {
+          "name": "runtime-payload",
+          "mount_path": "/opt/mainloop-runtime"
+        }
+      ]
+    }
+  ],
+  "volumes": [
+    {
+      "name": "data",
+      "durable_dir": {}
+    },
+    {
+      "name": "actor-identity",
+      "system_info": {
+        "data_sources": [
+          {
+            "actor_metadata": {
+              "items": [
+                {
+                  "field": "ACTOR_METADATA_FIELD_NAME",
+                  "path": "name"
+                },
+                {
+                  "field": "ACTOR_METADATA_FIELD_ATESPACE",
+                  "path": "atespace"
+                },
+                {
+                  "field": "ACTOR_METADATA_FIELD_UID",
+                  "path": "uid"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "egress-trust",
+      "system_info": {
+        "data_sources": [
+          {
+            "trust_bundle": {
+              "names": [
+                "egress-mitm.ate.dev"
+              ],
+              "path": "trust-bundle.pem"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "runtime-payload",
+      "image": {
+        "reference": "registry/payload@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    }
+  ],
+  "snapshot_config": {
+    "on_pause": "SNAPSHOT_CONTENT_SCOPE_FULL",
+    "on_commit": "SNAPSHOT_CONTENT_SCOPE_DATA"
+  },
+  "sandbox_config": {
+    "sandbox_class": "SANDBOX_CLASS_GVISOR",
+    "config_name": "gvisor-default"
+  }
+}

@@ -12,16 +12,14 @@ import (
 
 	"github.com/kagent-dev/kagent/go/api/agentplugin"
 	"github.com/kagent-dev/kagent/go/api/workspace"
+	"github.com/kagent-dev/kagent/go/harness/runtime/payload"
 	"github.com/kagent-dev/kagent/go/pkg/tracing"
 )
 
 var agentNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 const (
-	Version = 5
-	// PinnedClaudeVersion is the Claude Code release the image installs. A bump
-	// must recheck the telemetry gate in the driver.
-	PinnedClaudeVersion                 = "2.1.260"
+	Version                             = 5
 	ClaudeConfigDirEnvName              = "CLAUDE_CONFIG_DIR"
 	DisableUpdatesEnvName               = "DISABLE_UPDATES"
 	GoogleApplicationCredentialsEnvName = "GOOGLE_APPLICATION_CREDENTIALS"
@@ -219,3 +217,6 @@ func (c Config) MCPConfigJSON() ([]byte, error) {
 func (c Config) InterruptGrace() time.Duration {
 	return time.Duration(c.InterruptGraceMillis) * time.Millisecond
 }
+
+// PinnedClaudeVersion comes from the central runtime release lock.
+var PinnedClaudeVersion = payload.LockedRelease("claude").Version

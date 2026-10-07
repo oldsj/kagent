@@ -152,8 +152,9 @@ func (c *Compiler) Compile(ctx context.Context, input *v2translator.HarnessInput
 	egress = slices.Compact(egress)
 	return &v2translator.CompileResult{
 		Revision: v2translator.Revision{
-			Namespace: template.Namespace,
-			Image:     harness.Spec.Workload.Image, Environment: environment, ConfigJSON: configJSON, AgentCard: card,
+			NativeProvider: v2translator.HarnessTypeCodex,
+			Namespace:      template.Namespace,
+			Image:          harness.Spec.Workload.Image, Environment: environment, ConfigJSON: configJSON, AgentCard: card,
 			WorkerPoolName: harness.Spec.Substrate.WorkerPoolRef.Name, SnapshotLocation: harness.Spec.Substrate.SnapshotPolicy.Location,
 			SnapshotOnQuiesce: harness.Spec.Substrate.SnapshotPolicy.OnQuiesce,
 			Credentials:       credentials, Provenance: provenance, EgressDestinations: egress,

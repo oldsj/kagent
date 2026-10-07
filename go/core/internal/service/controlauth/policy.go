@@ -8,6 +8,7 @@ import (
 	"path"
 	"strings"
 
+	"buf.build/go/protovalidate"
 	a2apb "github.com/a2aproject/a2a-go/v2/a2apb/v1"
 	"github.com/kagent-dev/kagent/go/api/authorization"
 	api "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
@@ -27,12 +28,16 @@ type CredentialRule struct {
 }
 
 type Config struct {
-	Namespace   string           `json:"namespace"`
-	Agents      []string         `json:"agents"`
-	Credentials []CredentialRule `json:"credentials"`
+	Namespace                        string           `json:"namespace"`
+	Agents                           []string         `json:"agents"`
+	Credentials                      []CredentialRule `json:"credentials"`
+	DevelopmentEnvironmentRegistries []string         `json:"developmentEnvironmentRegistries"`
 }
 
-type Policy struct{ config Config }
+type Policy struct {
+	config           Config
+	runtimePlatforms map[string]bool
+}
 
 var _ auth.CollectionAuthorizer = (*Policy)(nil)
 
@@ -54,7 +59,52 @@ func New(config Config) (*Policy, error) {
 	}
 	config.Agents = append([]string(nil), config.Agents...)
 	config.Credentials = append([]CredentialRule(nil), config.Credentials...)
+	for _, registry := range config.DevelopmentEnvironmentRegistries {
+		parsed, err := url.Parse("https://" + registry)
+		if err != nil || registry == "" || parsed.Host != registry || parsed.Hostname() == "" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || registry != strings.ToLower(registry) {
+			return nil, errors.New("development environment allowlist requires registry authorities without paths")
+		}
+	}
+	config.DevelopmentEnvironmentRegistries = append([]string(nil), config.DevelopmentEnvironmentRegistries...)
 	return &Policy{config: config}, nil
+}
+
+// WithRuntimePlatforms binds selection to the operator's current payload catalog.
+// It returns a copy, keeping the authenticator's original policy immutable.
+func (p *Policy) WithRuntimePlatforms(platforms []string) *Policy {
+	result := &Policy{config: p.config, runtimePlatforms: make(map[string]bool)}
+	for _, platform := range platforms {
+		result.runtimePlatforms[platform] = true
+	}
+	return result
+}
+
+func (p *Policy) approvedDevelopmentImage(image string) bool {
+	selection := &api.DevelopmentEnvironment{Image: image, Platform: "linux/amd64", PolicyIdentity: "validation"}
+	if protovalidate.Validate(selection) != nil {
+		return false
+	}
+	registry, _, qualified := strings.Cut(image, "/")
+	if !qualified {
+		return false
+	}
+	for _, allowed := range p.config.DevelopmentEnvironmentRegistries {
+		if registry == allowed {
+			return true
+		}
+	}
+	return false
+}
+
+// CheckDevelopmentEnvironment validates all caller selection fields before any
+// store/preparer effect. Only a verified service principal can select D; internal
+// controller sessions and spoofable proxy/insecure user identities cannot.
+func (p *Policy) CheckDevelopmentEnvironment(ctx context.Context, agent *api.ResourceReference, selection *api.DevelopmentEnvironment) error {
+	session, ok := auth.AuthSessionFrom(ctx)
+	if !ok || selection == nil || protovalidate.Validate(selection) != nil || strings.TrimSpace(selection.GetPolicyIdentity()) == "" || !p.agent(agent.GetNamespace(), agent.GetName()) || !p.runtimePlatforms[selection.GetPlatform()] {
+		return errDenied
+	}
+	return p.Check(ctx, session.Principal(), auth.VerbCreate, auth.Resource{Type: "DevelopmentEnvironment", Namespace: agent.GetNamespace(), Name: selection.GetImage()})
 }
 
 func (p *Policy) agent(namespace, name string) bool {
@@ -76,6 +126,12 @@ func internal(ctx context.Context) bool {
 }
 
 func (p *Policy) Check(ctx context.Context, principal auth.Principal, verb auth.Verb, resource auth.Resource) error {
+	if resource.Type == "DevelopmentEnvironment" {
+		if principal.Service == auth.MainloopService && principal.User.ID == auth.MainloopService && principal.Agent.ID == "" && verb == auth.VerbCreate && resource.Namespace == p.config.Namespace && p.approvedDevelopmentImage(resource.Name) {
+			return nil
+		}
+		return errDenied
+	}
 	if internal(ctx) {
 		return nil
 	}

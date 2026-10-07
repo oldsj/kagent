@@ -125,3 +125,23 @@ tests:
       - equal:
           path: data.KAGENT_SANDBOX_GUEST_IMAGE
           value: mirror.example.com/team/guest@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+
+  - it: denies development environment registries by default in service-token mode
+    set:
+      controller.auth.mode: service-token
+      controller.auth.serviceToken.secretName: mainloop-control
+    asserts:
+      - matchRegex:
+          path: data.KAGENT_AUTH_SERVICE_POLICY
+          pattern: '"developmentEnvironmentRegistries":\[\]'
+
+  - it: renders the explicit development registry allowlist
+    set:
+      controller.auth.mode: service-token
+      controller.auth.serviceToken.secretName: mainloop-control
+      controller.auth.serviceToken.developmentEnvironmentRegistries:
+        - registry.example:5000
+    asserts:
+      - matchRegex:
+          path: data.KAGENT_AUTH_SERVICE_POLICY
+          pattern: '"developmentEnvironmentRegistries":\["registry.example:5000"\]'

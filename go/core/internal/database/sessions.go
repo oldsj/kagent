@@ -52,8 +52,7 @@ func marshalSession(session *apiv1alpha1.Session) ([]byte, error) {
 // workspace, and credential references. Names and other mutable fields do not
 // affect retry identity.
 func sameSessionRequest(session, request *apiv1alpha1.Session) bool {
-	return proto.Equal(session.GetAgent(), request.GetAgent()) && proto.Equal(session.GetWorkspace(), request.GetWorkspace()) &&
-		proto.Equal(&apiv1alpha1.Session{Credentials: session.GetCredentials()}, &apiv1alpha1.Session{Credentials: request.GetCredentials()})
+	return SameSessionSelection(session, request) && proto.Equal(session.GetRuntimeComposition(), request.GetRuntimeComposition())
 }
 
 // CreateSession atomically reserves a session, its conversation history, and the
@@ -111,20 +110,56 @@ func (c *Client) CreateSession(ctx context.Context, request *apiv1alpha1.Session
 func insertSession(ctx context.Context, db pgx.Tx, request *apiv1alpha1.Session, requestID string) (sessionRow, error) {
 	type preparedRevision struct {
 		Revision string
+		AgentUID string
 		DBTime   time.Time
 	}
-	revision, err := queryOne(ctx, db, `
-		SELECT r.revision, clock_timestamp() AS db_time
-		FROM agent_definition p
-		JOIN agent_runtime_revision r ON r.revision = p.latest_successful_revision
-  WHERE p.namespace = $1 AND p.agent_name = $2 AND p.retired_at IS NULL
- `, pgx.RowToStructByName[preparedRevision], request.GetAgent().GetNamespace(), request.GetAgent().GetName())
+	var revision preparedRevision
+	var err error
+	if request.GetDevelopmentEnvironment() == nil {
+		// Keep legacy selection independent of per-environment preparation.
+		revision, err = queryOne(ctx, db, `
+         SELECT r.revision, p.agent_uid, clock_timestamp() AS db_time
+         FROM agent_definition p
+         JOIN agent_runtime_revision r ON r.revision=p.latest_successful_revision
+         WHERE p.namespace=$1 AND p.agent_name=$2 AND p.retired_at IS NULL
+        `, pgx.RowToStructByName[preparedRevision], request.GetAgent().GetNamespace(), request.GetAgent().GetName())
+		if request.GetRuntimeComposition() != nil {
+			return sessionRow{}, fmt.Errorf("runtime composition requires environment selection: %w", ErrConflict)
+		}
+	} else {
+		// A composed golden can succeed independently of the legacy image.
+		// Lock the active definition before the selected revision, matching GC.
+		revision, err = queryOne(ctx, db, `
+         SELECT desired_revision AS revision, agent_uid, clock_timestamp() AS db_time
+         FROM agent_definition
+         WHERE namespace=$1 AND agent_name=$2 AND retired_at IS NULL
+          FOR UPDATE
+        `, pgx.RowToStructByName[preparedRevision], request.GetAgent().GetNamespace(), request.GetAgent().GetName())
+		if request.GetPreparedRevision() == "" || request.GetRuntimeComposition() == nil {
+			return sessionRow{}, fmt.Errorf("environment revision has not been prepared: %w", ErrFailedPrecondition)
+		}
+	}
 	if err != nil {
-		return sessionRow{}, fmt.Errorf("get latest successful runtime revision: %w", notFoundOr(err))
+		if request.GetDevelopmentEnvironment() == nil {
+			return sessionRow{}, fmt.Errorf("get latest successful runtime revision: %w", notFoundOr(err))
+		}
+		return sessionRow{}, fmt.Errorf("get active runtime definition: %w", notFoundOr(err))
+	}
+	baseRevision := revision.Revision
+	if request.GetDevelopmentEnvironment() != nil {
+		revision.Revision = request.GetPreparedRevision()
 	}
 	pinned, err := getAvailableRuntimeRevisionForUpdate(ctx, db, revision.Revision)
 	if err != nil {
 		return sessionRow{}, err
+	}
+	if request.GetDevelopmentEnvironment() != nil {
+		if pinned.AgentUID != revision.AgentUID {
+			return sessionRow{}, fmt.Errorf("selected Agent identity is stale: %w", ErrConflict)
+		}
+		if err := validateEnvironmentRevision(pinned, request, baseRevision); err != nil {
+			return sessionRow{}, err
+		}
 	}
 	if err := checkWorkspaceOrigin(ctx, db, revision.Revision, request.GetWorkspace()); err != nil {
 		return sessionRow{}, err
