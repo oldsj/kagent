@@ -17,6 +17,7 @@ import (
 	"github.com/kagent-dev/kagent/go/core/internal/database"
 	"github.com/kagent-dev/kagent/go/core/internal/service/serviceerrors"
 	"github.com/kagent-dev/kagent/go/core/pkg/auth"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	utilvalidation "k8s.io/apimachinery/pkg/util/validation"
 )
@@ -42,6 +43,12 @@ type sessionWorkflow interface {
 	Suspend(context.Context, *apiv1alpha1.Session) (*apiv1alpha1.Session, error)
 	Resume(context.Context, *apiv1alpha1.Session) (*apiv1alpha1.Session, error)
 	Delete(context.Context, *apiv1alpha1.Session) (*apiv1alpha1.Session, error)
+}
+
+// Runtime inspection is an optional read capability of the injected workflow;
+// services without an Actor backend still support ordinary conversation reads.
+type runtimeAssociationReader interface {
+	InspectRuntime(context.Context, *apiv1alpha1.Session) (*apiv1alpha1.RuntimeAssociation, error)
 }
 
 type ListRequest struct {
@@ -176,7 +183,28 @@ func (s *Service) create(ctx context.Context, agent *apiv1alpha1.ResourceReferen
 }
 
 func (s *Service) Get(ctx context.Context, id string) (*apiv1alpha1.Session, error) {
-	return s.getAuthorized(ctx, id, auth.VerbGet)
+	session, err := s.getAuthorized(ctx, id, auth.VerbGet)
+	if err != nil {
+		return nil, err
+	}
+	if _, shared := auth.ShareContextFrom(ctx); shared {
+		return session, nil
+	}
+	reader, ok := s.workflow.(runtimeAssociationReader)
+	if !ok {
+		return session, nil
+	}
+	association, err := reader.InspectRuntime(ctx, session)
+	if err != nil {
+		// Actor errors may contain private runtime data. Report the failed read
+		// without forwarding that error text into transport responses or logs.
+		return nil, serviceerrors.NewUnavailable("Failed to inspect Session runtime", nil)
+	}
+	if association != nil {
+		session = proto.CloneOf(session)
+		session.RuntimeAssociation = association
+	}
+	return session, nil
 }
 
 // getAuthorized loads a Session authorized for the requested operation. Reads are
@@ -212,7 +240,18 @@ func (s *Service) getAuthorized(ctx context.Context, id string, verb auth.Verb) 
 	if err := s.checkSession(ctx, session); err != nil {
 		return nil, err
 	}
-	return session, nil
+	return withoutRuntimeAssociation(session), nil
+}
+
+// Never carry an earlier observation through cached reads or lifecycle inputs,
+// and never attach a new observation to an object owned by the store.
+func withoutRuntimeAssociation(session *apiv1alpha1.Session) *apiv1alpha1.Session {
+	if session.GetRuntimeAssociation() == nil {
+		return session
+	}
+	result := proto.CloneOf(session)
+	result.RuntimeAssociation = nil
+	return result
 }
 
 func (s *Service) checkSession(ctx context.Context, session *apiv1alpha1.Session) error {
@@ -307,7 +346,7 @@ func (s *Service) List(ctx context.Context, request ListRequest) (ListResult, er
 				}
 				return ListResult{}, err
 			}
-			result.Sessions = append(result.Sessions, session)
+			result.Sessions = append(result.Sessions, withoutRuntimeAssociation(session))
 			if len(result.Sessions) > pageSize {
 				result.Sessions = result.Sessions[:pageSize]
 				result.NextPageToken = encodePageToken(result.Sessions[pageSize-1].Id)

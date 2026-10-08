@@ -70,6 +70,23 @@ message Session {
   DevelopmentEnvironment development_environment = 18;
   // Output only. Operator-resolved payload pinned at creation.
   RuntimeComposition runtime_composition = 19;
+  // Output only. Present only on authorized GetSession for a freshly observed
+  // current active runtime. Never a creation, resume, or fork input.
+  RuntimeAssociation runtime_association = 20;
+}
+
+// Output only. A bounded observation, not an atomic cross-system grant.
+// The durable generation must remain active around a fresh lookup of the exact
+// running Actor, and the Session must remain READY with no pending operation.
+// Dispatchers must recheck with their normal fencing/locks before runtime work.
+// Absence means no current active association was verified by this read.
+message RuntimeAssociation {
+  string generation_id = 1;
+  string atespace = 2;
+  string actor_name = 3;
+  string actor_uid = 4;
+  string phase = 5;
+  bool current_active = 6;
 }
 
 // SecretKeyReference identifies a key in the Agent's namespace. The value is

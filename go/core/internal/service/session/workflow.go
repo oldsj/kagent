@@ -13,6 +13,8 @@ import (
 	"github.com/kagent-dev/kagent/go/core/internal/database"
 	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"github.com/kagent-dev/kagent/go/core/internal/substrate"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type workflowStore interface {
@@ -58,6 +60,87 @@ type ActorWorkflow struct {
 
 func NewActorWorkflow(store workflowStore, actors actorClient, credentials runtimeCredentials, callbackOrigin string) *ActorWorkflow {
 	return &ActorWorkflow{store: store, actors: actors, credentials: credentials, callbackOrigin: callbackOrigin}
+}
+
+var _ runtimeAssociationReader = (*ActorWorkflow)(nil)
+
+// InspectRuntime observes only; it never reconciles Actors or credentials and
+// holds no lifecycle locks across the network read. Durable checks surround the
+// Actor lookup, but changes after these reads remain possible. This is not a
+// cross-system authorization grant; dispatch must apply its own normal fencing.
+func (w *ActorWorkflow) InspectRuntime(ctx context.Context, session *apiv1alpha1.Session) (*apiv1alpha1.RuntimeAssociation, error) {
+	if w == nil {
+		return nil, nil
+	}
+	if !activeRuntimeSession(session, session) {
+		return nil, nil
+	}
+	generation, err := w.store.GetRuntimeGeneration(ctx, session.GetId())
+	if errors.Is(err, database.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to read runtime generation: %w", err)
+	}
+	if !activeRuntimeGeneration(generation, session) {
+		return nil, nil
+	}
+	current, err := w.store.GetSessionForRuntime(ctx, session.GetId(), generation.ActorUID)
+	if errors.Is(err, database.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to read runtime Session: %w", err)
+	}
+	if !activeRuntimeSession(current, session) {
+		return nil, nil
+	}
+	actor, err := w.actors.GetActor(ctx, generation.Atespace, generation.ActorName)
+	if status.Code(err) == codes.NotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to observe runtime Actor: %w", err)
+	}
+	metadata := actor.GetMetadata()
+	if metadata.GetAtespace() != generation.Atespace || metadata.GetName() != generation.ActorName || metadata.GetUid() != generation.ActorUID || actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		return nil, nil
+	}
+	current, err = w.store.GetSessionForRuntime(ctx, session.GetId(), generation.ActorUID)
+	if errors.Is(err, database.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to recheck runtime Session: %w", err)
+	}
+	if !activeRuntimeSession(current, session) {
+		return nil, nil
+	}
+	observed, err := w.store.GetRuntimeGeneration(ctx, session.GetId())
+	if errors.Is(err, database.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to recheck runtime generation: %w", err)
+	}
+	if !activeRuntimeGeneration(observed, session) || observed.ID != generation.ID || observed.Atespace != generation.Atespace || observed.ActorName != generation.ActorName || observed.ActorUID != generation.ActorUID {
+		return nil, nil
+	}
+	return &apiv1alpha1.RuntimeAssociation{
+		GenerationId: generation.ID.String(), Atespace: generation.Atespace,
+		ActorName: generation.ActorName, ActorUid: generation.ActorUID,
+		Phase: generation.Phase, CurrentActive: true,
+	}, nil
+}
+
+func activeRuntimeGeneration(generation *database.RuntimeGeneration, session *apiv1alpha1.Session) bool {
+	return generation != nil && generation.ID != uuid.Nil && generation.SessionID.String() == session.GetId() && generation.Phase == "active" && generation.Atespace != "" && generation.ActorName != "" && generation.ActorUID != ""
+}
+
+func activeRuntimeSession(current, expected *apiv1alpha1.Session) bool {
+	return current != nil && current.GetId() == expected.GetId() && current.GetCreator() == expected.GetCreator() && current.GetPreparedRevision() == expected.GetPreparedRevision() &&
+		current.GetAgent().GetNamespace() == expected.GetAgent().GetNamespace() && current.GetAgent().GetName() == expected.GetAgent().GetName() &&
+		current.GetState() == apiv1alpha1.RuntimeState_RUNTIME_STATE_READY && current.GetOperation() == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_NONE
 }
 
 // Pause checkpoints the runtime on its current worker without changing the
