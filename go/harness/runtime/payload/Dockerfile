@@ -28,6 +28,7 @@ RUN /build/install-cli "$PROVIDER" "$TARGETARCH" /opt/mainloop-runtime /build/ru
 COPY --from=builder /out/ /opt/mainloop-runtime/bin/
 # Copy the Alpine helper/library closure without introducing a global LD_LIBRARY_PATH.
 # Dereference symlinks: the mounted payload never resolves into D's filesystem.
+# Git helpers share inodes; configure their private ABI only once.
 RUN mkdir -p /opt/mainloop-runtime/lib /opt/mainloop-runtime/libexec /opt/mainloop-runtime/share \
  && mv "/opt/mainloop-runtime/bin/$PROVIDER" "/opt/mainloop-runtime/libexec/$PROVIDER" \
  && cp /opt/mainloop-runtime/bin/launch "/opt/mainloop-runtime/bin/$PROVIDER" \
@@ -38,9 +39,9 @@ RUN mkdir -p /opt/mainloop-runtime/lib /opt/mainloop-runtime/libexec /opt/mainlo
  && find /opt/mainloop-runtime -type f -exec sh -c '\
    for file do \
      case "$file" in /opt/mainloop-runtime/libexec/claude|/opt/mainloop-runtime/libexec/codex) continue ;; esac; \
-     if patchelf --print-interpreter "$file" >/dev/null 2>&1; then \
-       patchelf --set-interpreter /opt/mainloop-runtime/lib/ld-musl-*.so.1 "$file"; \
-       patchelf --set-rpath /opt/mainloop-runtime/lib "$file"; \
+     if interpreter=$(patchelf --print-interpreter "$file" 2>/dev/null); then \
+       case "$interpreter" in /opt/mainloop-runtime/lib/ld-musl-*.so.1) continue ;; esac; \
+       patchelf --set-interpreter /opt/mainloop-runtime/lib/ld-musl-*.so.1 --set-rpath /opt/mainloop-runtime/lib "$file"; \
      fi; \
    done' sh {} + \
  && chmod -R a+rX /opt/mainloop-runtime \
