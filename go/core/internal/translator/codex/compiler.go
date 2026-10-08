@@ -110,7 +110,10 @@ func (c *Compiler) Compile(ctx context.Context, input *v2translator.HarnessInput
 	}
 	cfg := codexconfig.Production(model.Spec.Model, input.Root.Instruction)
 	cfg.Provider, cfg.Agents, cfg.MCPServers = provider, agents, mcp.servers
-	gitPolicy, gitEgress := v2translator.CompileGit(harness.Spec.Git)
+	gitPolicy, gitEgress, err := v2translator.CompileGit(harness.Spec.Git)
+	if err != nil {
+		return nil, err
+	}
 	cfg.Git = gitPolicy
 	cfg.RuntimeTelemetry = runtimeTelemetry
 	if codex := harness.Spec.Codex; codex != nil && codex.AutoCompactTokenLimit != nil {
@@ -158,6 +161,9 @@ func (c *Compiler) Compile(ctx context.Context, input *v2translator.HarnessInput
 	egress = append(egress, "http://"+utils.GetControllerName()+"."+utils.GetResourceNamespace()+":8083")
 	slices.Sort(egress)
 	egress = slices.Compact(egress)
+	if err := v2translator.ValidateGitEgress(gitPolicy, egress, credentials); err != nil {
+		return nil, err
+	}
 	return &v2translator.CompileResult{
 		Revision: v2translator.Revision{
 			NativeProvider: v2translator.HarnessTypeCodex,

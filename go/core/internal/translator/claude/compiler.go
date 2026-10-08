@@ -107,7 +107,10 @@ func (c *Compiler) Compile(ctx context.Context, input *v2translator.HarnessInput
 		config.SkillResources = &skillResources
 	}
 	config.MCPServers = mcp.servers
-	gitPolicy, gitEgress := v2translator.CompileGit(harness.Spec.Git)
+	gitPolicy, gitEgress, err := v2translator.CompileGit(harness.Spec.Git)
+	if err != nil {
+		return nil, err
+	}
 	config.Git = gitPolicy
 	if err := config.Validate(); err != nil {
 		return nil, v2translator.NewValidationError("invalid compiled Claude configuration: %v", err)
@@ -140,6 +143,9 @@ func (c *Compiler) Compile(ctx context.Context, input *v2translator.HarnessInput
 	egress = append(egress, "http://"+utils.GetControllerName()+"."+utils.GetResourceNamespace()+":8083")
 	slices.Sort(egress)
 	egress = slices.Compact(egress)
+	if err := v2translator.ValidateGitEgress(gitPolicy, egress, credentials); err != nil {
+		return nil, err
+	}
 	return &v2translator.CompileResult{
 		Revision: v2translator.Revision{
 			NativeProvider: v2translator.HarnessTypeClaude,

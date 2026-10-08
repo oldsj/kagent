@@ -21,6 +21,10 @@ const CredentialPlaceholder = "kagent-credential-injected"
 // placeholders and compiles their destination-scoped gateway bindings. Models
 // outside the agent tree (such as memory embeddings) are supplied separately.
 func CompileCredentials(input *HarnessInput, extraModels []*ResolvedModelConfig, environment []corev1.EnvVar) ([]corev1.EnvVar, []egress.Credential, error) {
+	gitPolicy, _, err := CompileGit(input.Harness.Spec.Git)
+	if err != nil {
+		return nil, nil, err
+	}
 	var bindings []egress.Credential
 	boundModels := map[string]bool{}
 	boundMCP := map[string]bool{}
@@ -92,9 +96,14 @@ func CompileCredentials(input *HarnessInput, extraModels []*ResolvedModelConfig,
 		}
 		boundModels[name+"\x00"+model.Spec.APIKeySecret+"\x00"+key] = true
 	}
-	bindings, err := egress.CanonicalCredentials(bindings)
+	bindings, err = egress.CanonicalCredentials(bindings)
 	if err != nil {
 		return nil, nil, NewValidationError("%v", err)
+	}
+	if input.Harness.Spec.Claude != nil || input.Harness.Spec.Codex != nil || (gitPolicy != nil && gitPolicy.ReadProxyOrigin != nil) {
+		if err := ValidateGitEgress(gitPolicy, nil, bindings); err != nil {
+			return nil, nil, err
+		}
 	}
 	for _, resolved := range models {
 		if !resolved.Config.Spec.APIKeyPassthrough {

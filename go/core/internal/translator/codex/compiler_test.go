@@ -5,16 +5,22 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 	"github.com/kagent-dev/kagent/go/api/v1alpha3"
+	"github.com/kagent-dev/kagent/go/api/workspace"
+	"github.com/kagent-dev/kagent/go/core/internal/egress"
+	"github.com/kagent-dev/kagent/go/core/internal/substrate"
 	v2translator "github.com/kagent-dev/kagent/go/core/internal/translator"
 	codexconfig "github.com/kagent-dev/kagent/go/harness/codex/config"
 	"github.com/kagent-dev/kagent/go/pkg/tracing"
+	"github.com/stretchr/testify/require"
 	"istio.io/istio/pkg/kube/krt"
 	"istio.io/istio/pkg/kube/krt/krttest"
 	corev1 "k8s.io/api/core/v1"
@@ -456,4 +462,110 @@ func TestCompileAutoCompactTokenLimit(t *testing.T) {
 	if id == unsetID {
 		t.Fatal("changing the compaction limit must create a new runtime revision")
 	}
+}
+
+func TestCompileTrustedGitCompleteUnion(t *testing.T) {
+	packages := []string{"https://registry.npmjs.org", "https://pypi.org", "https://files.pythonhosted.org", "https://proxy.golang.org", "https://sum.golang.org", "https://storage.googleapis.com"}
+	fixture := func() (*v2translator.HarnessInput, v2translator.Collections) {
+		input, reader := testInput(t, v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderOpenAI, Model: "gpt", APIKeySecret: "model-auth", APIKeySecretKey: "api-key", OpenAI: &v1alpha3.OpenAIConfig{APIFormat: new(v1alpha3.OpenAIAPIFormatResponses)}}, map[string][]byte{"api-key": []byte(credentialValue)})
+		input.Harness.Spec.Git = &v1alpha3.HarnessGit{Origins: []string{"github.com"}, ReadProxyOrigin: new(workspace.ReadProxyOrigin), PushProxyOrigin: new(workspace.PushProxyOrigin)}
+		input.Harness.Spec.ExtraHTTPSOrigins = packages
+		mock := krttest.NewMock(t, []any{&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "model-auth", Namespace: "test"}, Data: map[string][]byte{"api-key": []byte(credentialValue)}}, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "mcp-binding", Namespace: "test"}, Data: map[string][]byte{"authorization": []byte(credentialValue)}}})
+		reader.Secrets = krttest.GetMockCollection[*corev1.Secret](mock)
+		input.Root.MCPTools = []v2translator.ResolvedMCPTool{{Binding: v1alpha3.MCPToolBinding{Server: corev1.TypedLocalObjectReference{Kind: "RemoteMCPServer", Name: "tools"}}, Server: &v1alpha3.RemoteMCPServer{
+			ObjectMeta: metav1.ObjectMeta{Name: "tools", Namespace: "test", UID: "mcp-uid", Generation: 1},
+			Spec:       v1alpha3.RemoteMCPServerSpec{URL: "http://mainloop-mcp.mainloop.svc.cluster.local/mcp", Protocol: v1alpha3.RemoteMCPServerProtocolStreamableHttp, HeadersFrom: []v1alpha3.ValueRef{{Name: "Authorization", ValueFrom: &v1alpha3.ValueSource{Type: v1alpha3.SecretValueSource, Name: "mcp-binding", Key: "authorization"}}}},
+			Status:     v1alpha3.RemoteMCPServerStatus{ObservedGeneration: 1, DiscoveredTools: []*v1alpha3.MCPTool{{Name: "echo"}}},
+		}}}
+		return input, reader
+	}
+	input, reader := fixture()
+	revision, err := NewCompiler(krt.TestingDummyContext{}, reader).Compile(t.Context(), input)
+	require.NoError(t, err)
+	require.Equal(t, []string{"github.com"}, revision.GitOrigins)
+	require.Contains(t, revision.EgressDestinations, workspace.ReadProxyOrigin+":80")
+	require.Contains(t, revision.EgressDestinations, workspace.PushProxyOrigin+":80")
+	require.Contains(t, revision.EgressDestinations, "http://kagent-controller.kagent:8083")
+	require.Len(t, revision.Credentials, 2, "only provider and MCP; no revision Git value/reference")
+	for _, origin := range packages {
+		require.Contains(t, revision.EgressDestinations, origin+":443")
+	}
+	refs := []*apiv1alpha1.SessionCredential{
+		{Origin: workspace.ReadProxyOrigin, Header: "Authorization", SecretRef: &apiv1alpha1.SecretKeyReference{Name: "mainloop-git-read-unpublished", Key: "authorization"}},
+		{Origin: workspace.PushProxyOrigin, Header: "Authorization", SecretRef: &apiv1alpha1.SecretKeyReference{Name: "mainloop-git-push-unpublished", Key: "authorization"}},
+	}
+	bindings, err := egress.SessionCredentials("test", refs, revision.EgressDestinations, revision.Credentials)
+	require.NoError(t, err)
+	generation, _, err := substrate.NewRuntimeGeneration("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "test", "test")
+	require.NoError(t, err)
+	actorPolicy, err := substrate.RuntimeEgressPolicy(generation, "http://kagent-controller.kagent:8083", revision.EgressDestinations, bindings)
+	require.NoError(t, err)
+	for _, rule := range actorPolicy.Rules {
+		for _, host := range rule.GetHttps().GetHostnames() {
+			if slices.Contains(packages, "https://"+host) {
+				require.Empty(t, rule.GetHttps().GetEffects().GetReplaceHeaders(), host)
+			}
+		}
+	}
+	var parsed codexconfig.Config
+	require.NoError(t, json.Unmarshal(revision.ConfigJSON, &parsed))
+	require.Equal(t, workspace.ReadProxyOrigin, *parsed.Git.ReadProxyOrigin)
+	first, err := revision.Digest()
+	require.NoError(t, err)
+	input.Harness.Spec.Git.PushProxyOrigin = nil
+	readonly, err := NewCompiler(krt.TestingDummyContext{}, reader).Compile(t.Context(), input)
+	require.NoError(t, err)
+	second, err := readonly.Digest()
+	require.NoError(t, err)
+	require.NotEqual(t, first, second)
+	for _, noGit := range []bool{false, true} {
+		for _, via := range []string{"extra", "MCP", "skill", "provider", "telemetry", "legacy model credential", "reserved MCP credential"} {
+			t.Run(fmt.Sprintf("noGit=%t/%s", noGit, via), func(t *testing.T) {
+				input, reader := fixture()
+				if noGit {
+					input.Harness.Spec.Git = nil
+				}
+				switch via {
+				case "extra":
+					input.Harness.Spec.ExtraHTTPSOrigins = append(append([]string(nil), packages...), "https://API.GITHUB.COM:443")
+				case "MCP":
+					input.Root.MCPTools[0].Server.Spec.URL = "https://api.github.com/mcp"
+					input.Root.MCPTools[0].Server.Spec.HeadersFrom = nil
+				case "skill":
+					input.Root.Template.Spec.Skills = []v1alpha3.AgentTemplateSkill{{Name: "review", Source: v1alpha3.ArtifactSource{Git: &v1alpha3.GitArtifact{URL: "https://github.com/o/skills.git", Commit: strings.Repeat("a", 40)}}}}
+				case "provider":
+					input.Root.ResolvedModelConfig.Config.Spec.OpenAI.BaseURL = "https://api.github.com/v1"
+				case "telemetry":
+					t.Setenv("OTEL_TRACES_EXPORTER", "otlp")
+					t.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "https://github.com:443/v1/traces")
+					t.Setenv("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL", "http/protobuf")
+				case "legacy model credential":
+					input.Root.ResolvedModelConfig.Config.Spec.APIKeySecret = "mainloop-git-auth"
+					mock := krttest.NewMock(t, []any{&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "mainloop-git-auth", Namespace: "test"}, Data: map[string][]byte{"api-key": []byte(credentialValue)}}, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "mcp-binding", Namespace: "test"}, Data: map[string][]byte{"authorization": []byte(credentialValue)}}})
+					reader.Secrets = krttest.GetMockCollection[*corev1.Secret](mock)
+				case "reserved MCP credential":
+					input.Root.MCPTools[0].Server.Spec.URL = workspace.ReadProxyOrigin + "/mcp"
+				}
+				_, err := NewCompiler(krt.TestingDummyContext{}, reader).Compile(t.Context(), input)
+				if via == "provider" || via == "legacy model credential" || via == "reserved MCP credential" {
+					require.ErrorContains(t, err, "reserved Git credential")
+				} else {
+					require.ErrorContains(t, err, "direct GitHub authority")
+				}
+			})
+		}
+	}
+	input, reader = fixture()
+	input.Harness.Spec.Git = nil
+	input.Root.MCPTools[0].Server.Spec.URL = workspace.ReadProxyOrigin + "/mcp"
+	input.Root.MCPTools[0].Server.Spec.HeadersFrom = nil
+	_, err = NewCompiler(krt.TestingDummyContext{}, reader).Compile(t.Context(), input)
+	require.ErrorContains(t, err, "unapproved Git proxy origin")
+	input, reader = fixture()
+	input.Harness.Spec.Git = nil
+	coordinator, err := NewCompiler(krt.TestingDummyContext{}, reader).Compile(t.Context(), input)
+	require.NoError(t, err)
+	require.Empty(t, coordinator.GitOrigins)
+	require.NotContains(t, coordinator.EgressDestinations, workspace.ReadProxyOrigin+":80")
+	require.NotContains(t, coordinator.EgressDestinations, workspace.PushProxyOrigin+":80")
 }

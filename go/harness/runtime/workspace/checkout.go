@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	apiworkspace "github.com/kagent-dev/kagent/go/api/workspace"
 )
 
 // placeholderHeader gives the egress gateway an Authorization header to
@@ -41,6 +44,9 @@ type checkout struct {
 	Depth    int
 	// Credential repo-locally configures the placeholder header for Host.
 	Credential bool
+	ReadURL    string
+	PushURL    string
+	Proxy      bool
 }
 
 // gitError is a failed git invocation. Its stderr is shown only after
@@ -86,6 +92,23 @@ func (g *gitRunner) checkout(ctx context.Context, c checkout) error {
 	if g.pathErr != nil {
 		return g.pathErr
 	}
+	var proxyOrigins []string
+	if c.Proxy {
+		if c.Credential || c.ReadURL == "" || c.PushURL == "" {
+			return errors.New("invalid Git proxy transport")
+		}
+		for i, rawURL := range []string{c.ReadURL, c.PushURL} {
+			u, err := url.Parse(rawURL)
+			if err != nil || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+				return errors.New("invalid Git proxy transport")
+			}
+			origin := u.Scheme + "://" + u.Host
+			if origin != apiworkspace.ReadProxyOrigin && (i == 0 || origin != apiworkspace.PushProxyOrigin) {
+				return errors.New("invalid Git proxy transport")
+			}
+			proxyOrigins = append(proxyOrigins, origin)
+		}
+	}
 	for _, name := range []string{c.Ref, c.Branch} {
 		if err := checkRefName(ctx, g, name); err != nil {
 			return err
@@ -116,8 +139,28 @@ func (g *gitRunner) checkout(ctx context.Context, c checkout) error {
 			return err
 		}
 	}
-	if _, err := g.git(ctx, c.Dir, "remote add", "remote", "add", "origin", c.Repo); err != nil {
+	if c.Proxy {
+		for _, origin := range proxyOrigins {
+			// A root origin scopes the inert placeholder to this listener.
+			if _, err := g.git(ctx, c.Dir, "proxy header", "config", "--local", "http."+origin+"/.extraHeader", placeholderHeader); err != nil {
+				return err
+			}
+		}
+		if _, err := g.git(ctx, c.Dir, "proxy redirects", "config", "--local", "http.followRedirects", "false"); err != nil {
+			return err
+		}
+	}
+	readURL := c.ReadURL
+	if readURL == "" {
+		readURL = c.Repo // Explicit standalone checkout, never a proxy fallback.
+	}
+	if _, err := g.git(ctx, c.Dir, "remote add", "remote", "add", "origin", readURL); err != nil {
 		return err
+	}
+	if c.PushURL != "" {
+		if _, err := g.git(ctx, c.Dir, "push URL", "config", "--local", "remote.origin.pushurl", c.PushURL); err != nil {
+			return err
+		}
 	}
 	if err := g.fetchRef(ctx, c, force); err != nil {
 		return err
