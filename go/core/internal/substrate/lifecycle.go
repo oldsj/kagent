@@ -24,6 +24,7 @@ type LifecycleClient interface {
 var _ LifecycleClient = (*Client)(nil)
 
 type ActorBinding struct {
+	ExpectedUID      string
 	Atespace         string
 	Name             string
 	TemplateAtespace string
@@ -83,6 +84,9 @@ func prepareActorTransition(ctx context.Context, actors LifecycleClient, binding
 	}
 	actor, err := actors.GetActor(ctx, binding.Atespace, binding.Name)
 	if status.Code(err) == codes.NotFound {
+		if operation == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_CREATE && binding.ExpectedUID != "" {
+			return nil, fmt.Errorf("bound Actor disappeared; name remains retired: %w", err)
+		}
 		if operation != apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_CREATE && operation != apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_DELETE {
 			return nil, err
 		}
@@ -117,6 +121,12 @@ func ApplyActorTransition(ctx context.Context, actors LifecycleClient, transitio
 		return err
 	}
 	binding, actor := transition.binding, transition.actor
+	if binding.ExpectedUID != "" && actor != nil {
+		current, err := actors.GetActor(ctx, binding.Atespace, binding.Name)
+		if err != nil || !binding.matches(current) {
+			return fmt.Errorf("issued Actor identity unavailable or changed")
+		}
+	}
 	var err error
 	switch transition.operation {
 	case apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_CREATE:
@@ -186,7 +196,7 @@ func ApplyActorTransition(ctx context.Context, actors LifecycleClient, transitio
 }
 
 func (b ActorBinding) matches(actor *ateapipb.Actor) bool {
-	return actor.GetMetadata().GetName() == b.Name && actor.GetMetadata().GetAtespace() == b.Atespace && actor.GetMetadata().GetUid() != "" &&
+	return actor.GetMetadata().GetName() == b.Name && actor.GetMetadata().GetAtespace() == b.Atespace && actor.GetMetadata().GetUid() != "" && (b.ExpectedUID == "" || actor.GetMetadata().GetUid() == b.ExpectedUID) &&
 		actor.GetActorTemplate().GetAtespace() == b.TemplateAtespace && actor.GetActorTemplate().GetName() == b.TemplateName
 }
 
@@ -195,4 +205,36 @@ func (t *ActorTransition) checkResult(actor *ateapipb.Actor, state ateapipb.Acto
 		return fmt.Errorf("actor returned unexpected identity or state")
 	}
 	return nil
+}
+
+// IssueActorCreation creates suspended compute once. The workflow persists its
+// returned UID before installing policy, activating callbacks or resuming.
+func IssueActorCreation(ctx context.Context, actors LifecycleClient, transition *ActorTransition) (string, error) {
+	if transition.operation != apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_CREATE || transition.actor != nil {
+		return "", fmt.Errorf("unissued actor creation required")
+	}
+	b, creation := transition.binding, transition.creation
+	var actor *ateapipb.Actor
+	var err error
+	if creation.Snapshot == nil {
+		actor, err = actors.CreateActor(ctx, b.Atespace, b.Name, b.TemplateAtespace, b.TemplateName)
+	} else {
+		tag := creation.Snapshot.Tag
+		actor, err = actors.CreateActorFromTag(ctx, b.Atespace, b.Name, b.TemplateAtespace, b.TemplateName, tag.Atespace, tag.Name)
+	}
+	if err != nil {
+		return "", err
+	}
+	if err := transition.checkResult(actor, ateapipb.ActorState_ACTOR_STATE_SUSPENDED); err != nil {
+		return "", err
+	}
+	if snapshot := creation.Snapshot; snapshot != nil {
+		observed := actor.GetStatus().GetExternalSnapshot()
+		if !proto.Equal(actor.GetSourceTag(), snapshot.Tag) || observed.GetSnapshotUri() != snapshot.URI || observed.GetContentScope() != snapshot.ContentScope {
+			return "", fmt.Errorf("restored Actor does not match retained DATA checkpoint")
+		}
+	}
+	transition.actor = actor
+	transition.binding.ExpectedUID = actor.GetMetadata().GetUid()
+	return actor.GetMetadata().GetUid(), nil
 }

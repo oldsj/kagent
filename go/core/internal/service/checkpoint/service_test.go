@@ -8,10 +8,10 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/google/uuid"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 	"github.com/kagent-dev/kagent/go/core/internal/database"
 	"github.com/kagent-dev/kagent/go/core/internal/service/serviceerrors"
-	"github.com/kagent-dev/kagent/go/core/internal/substrate"
 	"github.com/kagent-dev/kagent/go/core/pkg/auth"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
@@ -269,7 +269,7 @@ func TestCreateTagsRecordedSnapshotBoundary(t *testing.T) {
 	if checkpoint.GetHeadTaskId() != "task-1" || checkpoint.GetHistorySequence() != 7 || checkpoint.GetState().String() != "CHECKPOINT_STATE_READY" {
 		t.Fatalf("unexpected checkpoint: %+v", checkpoint)
 	}
-	if tags.created.GetSourceActor().GetName() != substrate.ActorName(checkpoint.GetSessionId()) ||
+	if tags.created.GetSourceActor().GetName() != "session-"+checkpoint.GetSessionId()+"-0123456789abcdef" ||
 		store.snapshot.URI != "s3://tags/checkpoint" || store.tagUID != "tag-uid" {
 		t.Fatalf("tag does not retain recorded snapshot: %+v", tags.created)
 	}
@@ -435,4 +435,12 @@ func TestConcurrentCreateRetainsOneTag(t *testing.T) {
 	require.Equal(t, 1, tags.createCalls)
 	require.Equal(t, 0, tags.deleteCalls)
 	require.Equal(t, "s3://tags/checkpoint", store.snapshot.URI)
+}
+
+func (s *testStore) GetRuntimeGeneration(_ context.Context, id string) (*database.RuntimeGeneration, error) {
+	parsed, err := uuid.Parse(id)
+	if err != nil {
+		return nil, err
+	}
+	return &database.RuntimeGeneration{SessionID: parsed, Atespace: "team-a", ActorName: "session-" + id + "-0123456789abcdef", ActorUID: "actor-uid", Phase: "active"}, nil
 }

@@ -12,7 +12,13 @@ import (
 // Client persists control-plane state in PostgreSQL. Callers define the narrow
 // interfaces they need; SQL rows and protobuf encoding stay inside the store.
 type Client struct {
-	db *pgxpool.Pool
+	db transactionalDB
+}
+
+type transactionalDB interface {
+	dbExecutor
+	Begin(context.Context) (pgx.Tx, error)
+	BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error)
 }
 
 // NewClient wraps an existing PostgreSQL pool without connecting or migrating. The caller

@@ -16,6 +16,11 @@ import (
 )
 
 type workflowStore interface {
+	AllocateRuntimeGeneration(context.Context, database.RuntimeGeneration) (*database.RuntimeGeneration, bool, error)
+	GetRuntimeGeneration(context.Context, string) (*database.RuntimeGeneration, error)
+	AdvanceRuntimeGeneration(context.Context, uuid.UUID, string, string, string) error
+	RevokeRuntimeGeneration(context.Context, string) error
+	SessionGenerationEligible(context.Context, string) (bool, error)
 	ClaimSessionQuiescence(context.Context) (*database.SessionQuiescence, error)
 	FinishSessionQuiescence(context.Context, *database.SessionQuiescence, *database.SessionTaskSnapshot) error
 	GetSessionForRuntime(context.Context, string, string) (*apiv1alpha1.Session, error)
@@ -36,13 +41,23 @@ type actorClient interface {
 // ActorWorkflow runs the imperative Substrate operations behind Session
 // lifecycle RPCs. Only the claiming caller issues lifecycle mutations; others
 // observe current completion or receive a pending/superseded-operation error.
-type ActorWorkflow struct {
-	store  workflowStore
-	actors actorClient
+type runtimeCredentials interface {
+	Namespace() string
+	Ensure(context.Context, database.RuntimeGeneration, string) error
+	Delete(context.Context, database.RuntimeGeneration) error
 }
 
-func NewActorWorkflow(store workflowStore, actors actorClient) *ActorWorkflow {
-	return &ActorWorkflow{store: store, actors: actors}
+var _ runtimeCredentials = (*substrate.RuntimeCredentialIssuer)(nil)
+
+type ActorWorkflow struct {
+	credentials    runtimeCredentials
+	callbackOrigin string
+	store          workflowStore
+	actors         actorClient
+}
+
+func NewActorWorkflow(store workflowStore, actors actorClient, credentials runtimeCredentials, callbackOrigin string) *ActorWorkflow {
+	return &ActorWorkflow{store: store, actors: actors, credentials: credentials, callbackOrigin: callbackOrigin}
 }
 
 // Pause checkpoints the runtime on its current worker without changing the
@@ -52,7 +67,11 @@ func (w *ActorWorkflow) Pause(ctx context.Context, session *apiv1alpha1.Session)
 	if err != nil {
 		return fmt.Errorf("load prepared revision: %w", err)
 	}
-	atespace, name := revision.ActorTemplateAtespace, substrate.ActorName(session.GetId())
+	generation, err := w.store.GetRuntimeGeneration(ctx, session.GetId())
+	if err != nil || generation.Phase != "active" {
+		return fmt.Errorf("runtime generation unavailable")
+	}
+	atespace, name := generation.Atespace, generation.ActorName
 	current, err := w.actors.GetActor(ctx, atespace, name)
 	if err != nil {
 		return err
@@ -78,7 +97,11 @@ func (w *ActorWorkflow) Quiesce(ctx context.Context, session *apiv1alpha1.Sessio
 	if err != nil {
 		return nil, fmt.Errorf("load prepared revision: %w", err)
 	}
-	atespace, name := revision.ActorTemplateAtespace, substrate.ActorName(session.GetId())
+	generation, err := w.store.GetRuntimeGeneration(ctx, session.GetId())
+	if err != nil || generation.Phase != "active" {
+		return nil, fmt.Errorf("runtime generation unavailable")
+	}
+	atespace, name := generation.Atespace, generation.ActorName
 	current, err := w.actors.GetActor(ctx, atespace, name)
 	if err != nil {
 		return nil, err
@@ -102,7 +125,7 @@ func (w *ActorWorkflow) Quiesce(ctx context.Context, session *apiv1alpha1.Sessio
 		return nil, fmt.Errorf("suspend Actor %s/%s returned no snapshot", atespace, name)
 	}
 	scope := snapshot.GetContentScope()
-	if scope != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL && scope != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
+	if scope != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
 		return nil, fmt.Errorf("actor %s/%s returned invalid snapshot content scope %s", atespace, name, scope)
 	}
 	return &database.SessionTaskSnapshot{
@@ -174,25 +197,95 @@ func (w *ActorWorkflow) execute(ctx context.Context, operation *database.Session
 		tagName = "checkpoint-" + operation.SourceCheckpointID.String()
 	}
 
-	binding := substrate.ActorBinding{Atespace: revision.ActorTemplateAtespace, Name: substrate.ActorName(session.Id),
+	var generation *database.RuntimeGeneration
+	var originalToken string
+	if kind == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_CREATE {
+		candidate, token, candidateErr := substrate.NewRuntimeGeneration(sessionID, revision.ActorTemplateAtespace, w.credentials.Namespace())
+		if candidateErr != nil {
+			return nil, candidateErr
+		}
+		credentials, validationErr := egress.SessionCredentials(session.GetAgent().GetNamespace(), session.GetCredentials(), revision.EgressDestinations, revision.Credentials)
+		if validationErr != nil {
+			return w.failPreparation(ctx, operation, validationErr)
+		}
+		if _, validationErr = substrate.RuntimeEgressPolicy(candidate, w.callbackOrigin, revision.EgressDestinations, credentials); validationErr != nil {
+			return w.failPreparation(ctx, operation, validationErr)
+		}
+		var allocated bool
+		generation, allocated, err = w.store.AllocateRuntimeGeneration(ctx, candidate)
+		if allocated {
+			originalToken = token
+		}
+	} else {
+		generation, err = w.store.GetRuntimeGeneration(ctx, sessionID)
+	}
+	if errors.Is(err, database.ErrNotFound) && kind == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_DELETE {
+		eligible, eligibilityErr := w.store.SessionGenerationEligible(ctx, sessionID)
+		if eligibilityErr != nil || !eligible {
+			return nil, fmt.Errorf("unledgered Session deletion requires fresh issuance provenance")
+		}
+		// No ledger means this fresh Session has never issued runtime effects.
+		executorID := uuid.New()
+		claimed, claimErr := w.store.ClaimSessionOperation(ctx, sessionID, operation.ID, executorID)
+		if claimErr != nil {
+			return nil, claimErr
+		}
+		if !claimed {
+			return nil, database.ErrConflict
+		}
+		result, finishErr := w.store.FinishSessionOperation(ctx, sessionID, operation.ID, executorID, "", "", "")
+		if finishErr != nil {
+			return nil, errors.Join(finishErr, w.store.ReleaseRuntimeOperation(context.WithoutCancel(ctx), sessionID, operation.ID, executorID))
+		}
+		return result, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("runtime generation unavailable: %w", err)
+	}
+	if generation.Phase == "revoked" && kind != apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_DELETE {
+		return nil, database.ErrFailedPrecondition
+	}
+	if generation.Phase == "actor-issued" {
+		return nil, fmt.Errorf("actor issuance outcome unknown; original generation held")
+	}
+	if kind != apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_CREATE && kind != apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_DELETE && generation.Phase != "active" {
+		return nil, database.ErrFailedPrecondition
+	}
+	binding := substrate.ActorBinding{ExpectedUID: generation.ActorUID, Atespace: generation.Atespace, Name: generation.ActorName,
 		TemplateAtespace: revision.ActorTemplateAtespace, TemplateName: revision.ActorTemplateName}
 	var creation *substrate.ActorCreation
-	if kind == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_CREATE {
+	var runtimePolicy *ateapipb.EgressPolicy
+	if kind == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_CREATE || kind == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_RESUME {
 		credentials, err := egress.SessionCredentials(session.GetAgent().GetNamespace(), session.GetCredentials(), revision.EgressDestinations, revision.Credentials)
 		if err != nil {
 			return w.failPreparation(ctx, operation, err)
 		}
-		policy, err := substrate.ActorEgressPolicy(binding.Atespace, revision.EgressDestinations, credentials)
+		policy, err := substrate.RuntimeEgressPolicy(*generation, w.callbackOrigin, revision.EgressDestinations, credentials)
 		if err != nil {
 			return w.failPreparation(ctx, operation, err)
 		}
-		creation = &substrate.ActorCreation{EgressPolicy: policy}
-		if snapshot != nil {
-			creation.Snapshot = &substrate.ActorSnapshot{Tag: &ateapipb.ObjectRef{Atespace: snapshot.Atespace, Name: tagName}, URI: snapshot.URI, ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA}
+		runtimePolicy = policy
+		if kind == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_CREATE {
+			creation = &substrate.ActorCreation{EgressPolicy: policy}
+			if snapshot != nil {
+				creation.Snapshot = &substrate.ActorSnapshot{Tag: &ateapipb.ObjectRef{Atespace: snapshot.Atespace, Name: tagName}, URI: snapshot.URI, ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA}
+			}
 		}
 	}
+	if kind == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_CREATE {
+		if err := w.credentials.Ensure(ctx, *generation, originalToken); err != nil {
+			return nil, err
+		}
+		if generation.Phase == "allocated" {
+			if err := w.store.AdvanceRuntimeGeneration(ctx, generation.ID, "allocated", "secret-issued", ""); err != nil {
+				return nil, err
+			}
+			generation.Phase = "secret-issued"
+		}
+	}
+
 	prepare := substrate.PrepareActorTransition
-	if operation.ExecutorID != uuid.Nil {
+	if operation.ExecutorID != uuid.Nil && generation.ActorUID != "" {
 		prepare = substrate.PrepareActorRetry
 	}
 	transition, err := prepare(ctx, w.actors, binding, kind, creation)
@@ -227,8 +320,58 @@ func (w *ActorWorkflow) execute(ctx context.Context, operation *database.Session
 		defer cancel()
 		err = errors.Join(err, w.store.ReleaseRuntimeOperation(finishCtx, sessionID, operation.ID, executorID))
 	}()
+	if kind == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_DELETE {
+		if err := w.store.RevokeRuntimeGeneration(ctx, sessionID); err != nil {
+			return nil, err
+		}
+	}
+	if kind == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_CREATE {
+		if generation.Phase == "secret-issued" {
+			// Only a newly committed issuance transition authorizes creation.
+			// A stale phase or uncertain write reply must hold without issuing.
+			if err := w.store.AdvanceRuntimeGeneration(ctx, generation.ID, "secret-issued", "actor-issued", ""); err != nil {
+				return nil, err
+			}
+			uid, err := substrate.IssueActorCreation(ctx, w.actors, transition)
+			if err != nil {
+				return nil, fmt.Errorf("actor issuance uncertain; generation held: %w", err)
+			}
+			if err := w.store.AdvanceRuntimeGeneration(ctx, generation.ID, "actor-issued", "bound", uid); err != nil {
+				return nil, err
+			}
+			generation.ActorUID, generation.Phase = uid, "bound"
+		}
+		if generation.Phase != "bound" && generation.Phase != "active" {
+			return nil, database.ErrFailedPrecondition
+		}
+		if err := w.actors.EnsureActorEgressPolicy(ctx, binding.Atespace, binding.Name, creation.EgressPolicy); err != nil {
+			return nil, err
+		}
+		if generation.Phase == "bound" {
+			if err := w.store.AdvanceRuntimeGeneration(ctx, generation.ID, "bound", "active", generation.ActorUID); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if kind == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_RESUME {
+		if err := w.credentials.Ensure(ctx, *generation, ""); err != nil {
+			return nil, err
+		}
+		if err := w.actors.EnsureActorEgressPolicy(ctx, generation.Atespace, generation.ActorName, runtimePolicy); err != nil {
+			return nil, err
+		}
+		current, err := w.store.GetRuntimeGeneration(ctx, sessionID)
+		if err != nil || current.ID != generation.ID || current.Phase != "active" || current.ActorUID != generation.ActorUID {
+			return nil, fmt.Errorf("runtime capability changed before resume")
+		}
+	}
 	if err := substrate.ApplyActorTransition(ctx, w.actors, transition); err != nil {
 		return nil, fmt.Errorf("lifecycle operation %s remains pending: %w", operation.ID, err)
+	}
+	if kind == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_DELETE {
+		if err := w.credentials.Delete(ctx, *generation); err != nil {
+			return nil, err
+		}
 	}
 	var authority string
 	if kind == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_CREATE {
@@ -272,7 +415,8 @@ func operationOutcome(operation *database.SessionOperation) (*apiv1alpha1.Sessio
 // templates alone also match an externally replaced actor, which we must not
 // adopt or checkpoint as this session's runtime.
 func (w *ActorWorkflow) verifyActor(ctx context.Context, session *apiv1alpha1.Session, revision *database.RuntimeRevision, actor *ateapipb.Actor) error {
-	if !validActorIdentity(actor, revision, substrate.ActorName(session.Id)) {
+	generation, err := w.store.GetRuntimeGeneration(ctx, session.Id)
+	if err != nil || generation.Phase != "active" || actor.GetMetadata().GetUid() != generation.ActorUID || !validActorIdentity(actor, revision, generation.ActorName) {
 		return fmt.Errorf("runtime actor identity or template changed")
 	}
 	if _, err := w.store.GetSessionForRuntime(ctx, session.Id, actor.GetMetadata().GetUid()); err != nil {

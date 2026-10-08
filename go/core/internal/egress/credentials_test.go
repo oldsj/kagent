@@ -39,3 +39,16 @@ func TestCanonicalCredentials(t *testing.T) {
 	_, err = CanonicalCredentials([]Credential{base, other})
 	require.ErrorContains(t, err, "conflicting credentials")
 }
+
+func TestRuntimeInjectionReferencesAreReserved(t *testing.T) {
+	for _, binding := range []Credential{
+		{Hostname: "echo.example", Header: "X-Kagent-Runtime-Token", URI: "ate-secret://k8s.io/default/team/auth/token"},
+		{Hostname: "echo.example", Header: "authorization", URI: "ate-secret://k8s.io/default/team/kagent-runtime-issued/token"},
+		{Hostname: "echo.example", Header: "authorization", URI: "ate-secret://k8s.io/default/team/%6bagent-runtime-issued/token"},
+	} {
+		_, err := CanonicalCredentials([]Credential{binding})
+		if err == nil {
+			t.Fatal("accepted a reserved runtime injection binding")
+		}
+	}
+}

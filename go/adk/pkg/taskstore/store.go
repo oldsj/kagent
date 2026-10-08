@@ -4,9 +4,9 @@ package taskstore
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -21,6 +21,9 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
+
+const RuntimeTokenHeader = "x-kagent-runtime-token"
+const RuntimeTokenPlaceholder = "gateway-injection-required"
 
 type Store struct {
 	client       *controllerclient.Client
@@ -38,12 +41,18 @@ func (s *Store) sessionID() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read runtime identity: %w", err)
 	}
-	id, ok := strings.CutPrefix(strings.TrimSpace(string(identity)), "session-")
-	if !ok {
-		return "", fmt.Errorf("unexpected runtime actor name")
+	name := strings.TrimSpace(string(identity))
+	if len(name) != 61 || !strings.HasPrefix(name, "session-") || name[44] != '-' {
+		return "", fmt.Errorf("unexpected runtime generation name")
 	}
-	if _, err := uuid.Parse(id); err != nil {
-		return "", fmt.Errorf("invalid runtime session identity: %w", err)
+	id := name[8:44]
+	parsed, err := uuid.Parse(id)
+	if err != nil || parsed.String() != id {
+		return "", fmt.Errorf("invalid runtime session hint")
+	}
+	suffix, err := hex.DecodeString(name[45:])
+	if err != nil || len(suffix) != 8 || hex.EncodeToString(suffix) != name[45:] {
+		return "", fmt.Errorf("invalid runtime generation hint")
 	}
 	return id, nil
 }
@@ -56,18 +65,10 @@ func (s *Store) callContext(ctx context.Context) (context.Context, context.Cance
 	md.Delete("x-user-id")
 	md.Delete("x-agent-name")
 	md.Delete("x-share-token")
-	// Temporary identity transport until Substrate injects actor credentials (#1660).
-	// Reread on every call because restore rebinds these files to the new actor.
-	var identity []string
-	for _, field := range []string{"atespace", "name", "uid"} {
-		value, err := os.ReadFile(filepath.Join(filepath.Dir(s.identityPath), field))
-		if err != nil {
-			cancel()
-			return nil, nil, fmt.Errorf("read runtime identity %s: %w", field, err)
-		}
-		identity = append(identity, strings.TrimSpace(string(value)))
-	}
-	md.Set(apia2a.InsecureRuntimeIdentityHeader, strings.Join(identity, "/"))
+	// The gateway replaces this nonsecret placeholder. Unsigned projection
+	// files supply routing hints only and are never proof of runtime authority.
+	md.Delete(apia2a.InsecureRuntimeIdentityHeader)
+	md.Set(RuntimeTokenHeader, RuntimeTokenPlaceholder)
 	return metadata.NewOutgoingContext(ctx, md), cancel, nil
 }
 
