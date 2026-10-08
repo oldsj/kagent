@@ -256,6 +256,31 @@ creates nothing. Sessions without a workspace behave as before. A Harness with
 `spec.git` requires a harness image built with this bootstrap: the adapter
 configuration rejects unknown fields, so an older image fails at startup.
 
+With `readProxyOrigin` configured, the shared Git policy accepts only HTTPS
+GitHub owner/repository identity. It derives a normalized `/owner/repository.git`
+path under the exact trusted read listener and optional distinct push listener.
+Escaped separators, traversal, extra components and alternate authorities are
+rejected. Session and TaskStore workspace identity and durable marker `repo`
+remain the caller's canonical HTTPS repository. Proxy origins are never accepted
+as workspace identity.
+
+The checkout sets `remote.origin.url` to the derived read URL and
+`remote.origin.pushurl` to the push URL, or the same read URL when push is absent.
+It writes the inert Authorization placeholder for each exact listener in local
+Git config before fetching and disables redirects. Missing capabilities leave
+only that placeholder; the listener must deny the request. A read-only profile
+routes push attempts to the read listener, which must refuse receive-pack. No
+failure selects direct GitHub. Existing direct standalone/development checkout
+is selected only when both compiled proxy fields are absent.
+
+Executor construction validates config and the native CLI version without
+reading the workspace or fetching Git. Reference-only Session creation can
+therefore finish READY before Git values exist. Creation leaves the Actor
+SUSPENDED, and READY Resume alone is a no-op. An owned Suspend/Resume sequence
+can warm compute without a turn; GetSession's current RUNNING association is
+the subsequent identity observation. Capability publication and installed
+runtime qualification remain the caller's responsibility.
+
 The Codex and Claude adapters wrap their runner with a bootstrapper. Before each turn it
 checks for the done marker `/data/.kagent/workspace-bootstrap.done`. When it is absent
 it reads the workspace through the runtime-authenticated `TaskStoreService.GetWorkspace`

@@ -113,3 +113,48 @@ func TestDuplicateCleartextMCPOrigins(t *testing.T) {
 	})
 	require.Error(t, err)
 }
+
+func TestGitPurposeRules(t *testing.T) {
+	const read = "http://mainloop-git-read.mainloop.svc.cluster.local"
+	const push = "http://mainloop-git-push.mainloop.svc.cluster.local"
+	rules := []CredentialRule{
+		{Namespace: "kagent", SecretNamePattern: "mainloop-git-read-*", Key: "authorization", Header: "authorization", Origin: read, Purpose: "git-read"},
+		{Namespace: "kagent", SecretNamePattern: "mainloop-git-push-*", Key: "authorization", Header: "authorization", Origin: push, Purpose: "git-push"},
+	}
+	p, err := New(Config{Namespace: "kagent", Agents: []string{"mainloop-main"}, Credentials: rules})
+	require.NoError(t, err)
+	agent := &api.ResourceReference{Namespace: "kagent", Name: "mainloop-main"}
+	for i, rule := range rules {
+		c := &api.SessionCredential{Origin: rule.Origin, Header: "Authorization", SecretRef: &api.SecretKeyReference{Name: rule.SecretNamePattern[:len(rule.SecretNamePattern)-1] + "issuance", Key: "authorization"}}
+		require.NoError(t, p.CheckCreateSession(t.Context(), agent, []*api.SessionCredential{c}))
+		for _, bad := range []string{rules[1-i].Origin, rule.Origin + ":80", rule.Origin + "/"} {
+			c.Origin = bad
+			require.Error(t, p.CheckCreateSession(t.Context(), agent, []*api.SessionCredential{c}))
+		}
+		for name, mutate := range map[string]func(*CredentialRule){
+			"purpose": func(r *CredentialRule) { r.Purpose = "mcp" }, "swapped origin": func(r *CredentialRule) { r.Origin = rules[1-i].Origin },
+			"broad pattern": func(r *CredentialRule) { r.SecretNamePattern = "mainloop-*" }, "key": func(r *CredentialRule) { r.Key = "token" },
+			"header": func(r *CredentialRule) { r.Header = "Authorization" }, "namespace": func(r *CredentialRule) { r.Namespace = "other" },
+			"port": func(r *CredentialRule) { r.Origin += ":80" }, "slash": func(r *CredentialRule) { r.Origin += "/" },
+			"alias": func(r *CredentialRule) { r.Origin = "http://mainloop-git-read.mainloop" }, "unknown purpose": func(r *CredentialRule) { r.Purpose = "model" },
+		} {
+			t.Run(rule.Purpose+"/"+name, func(t *testing.T) {
+				bad := rule
+				mutate(&bad)
+				_, err := New(Config{Namespace: "kagent", Agents: []string{"mainloop-main"}, Credentials: []CredentialRule{bad}})
+				require.Error(t, err)
+			})
+		}
+	}
+	for _, origin := range []string{read, push, read + ":80", push + ":8003"} {
+		_, err := New(Config{Namespace: "kagent", Agents: []string{"mainloop-main"}, CleartextMCPOrigins: []string{origin}})
+		require.Error(t, err)
+	}
+	for _, origin := range []string{"https://mainloop-git-read.mainloop.svc.cluster.local", "https://MAINLOOP-git-push.mainloop.svc.cluster.local.:8443"} {
+		bad := rules[0]
+		bad.Purpose = "mcp"
+		bad.Origin = origin
+		_, err := New(Config{Namespace: "kagent", Agents: []string{"mainloop-main"}, Credentials: []CredentialRule{bad}})
+		require.Error(t, err)
+	}
+}

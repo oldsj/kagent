@@ -119,6 +119,9 @@ type ClaudeHarness struct{}
 // credential; the runtime never sees it.
 //
 // +kubebuilder:validation:XValidation:rule="!has(self.credentialSecretRef) || self.origins.size() == 1",message="credentialSecretRef requires exactly one origin because the gateway holds one credential per host and header"
+// +kubebuilder:validation:XValidation:rule="!has(self.pushProxyOrigin) || has(self.readProxyOrigin)",message="pushProxyOrigin requires readProxyOrigin"
+// +kubebuilder:validation:XValidation:rule="!has(self.readProxyOrigin) || (self.origins.size() == 1 && self.origins[0] == 'github.com')",message="Git proxies require the single canonical github.com origin"
+// +kubebuilder:validation:XValidation:rule="!has(self.readProxyOrigin) || !has(self.credentialSecretRef)",message="Git proxies cannot use credentialSecretRef"
 type HarnessGit struct {
 	// Origins lists the HTTPS Git hosts sessions may clone from, for example
 	// github.com. Each is an exact DNS name without scheme, port, or path.
@@ -129,6 +132,20 @@ type HarnessGit struct {
 	// +listType=set
 	// +required
 	Origins []string `json:"origins"`
+
+	// ReadProxyOrigin routes canonical GitHub checkouts through the trusted read
+	// listener. Authorization comes from per-Session references, never a GitHub
+	// credential. Omitted retains standalone direct Git behavior.
+	// +kubebuilder:validation:Enum="http://mainloop-git-read.mainloop.svc.cluster.local"
+	// +optional
+	ReadProxyOrigin *string `json:"readProxyOrigin,omitempty"`
+
+	// PushProxyOrigin routes publication through the separate trusted push
+	// listener. Omitted leaves receive-pack on the read listener, which denies it.
+	// A transport origin does not grant publication authority.
+	// +kubebuilder:validation:Enum="http://mainloop-git-push.mainloop.svc.cluster.local"
+	// +optional
+	PushProxyOrigin *string `json:"pushProxyOrigin,omitempty"`
 
 	// CredentialSecretRef names a key in a same-namespace Secret holding the
 	// complete Authorization header value for the origin, for example

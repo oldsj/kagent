@@ -62,3 +62,36 @@ func TestSessionCredentialWireContract(t *testing.T) {
 }
 
 const sessionCredentialWireHex = "3a640a2e687474703a2f2f6d61696e6c6f6f702d6d63702e6d61696e6c6f6f702e7376632e636c75737465722e6c6f63616c120d417574686f72697a6174696f6e1a230a156d61696e6c6f6f702d6167656e742d746f6b656e73120a62696e64696e672d6964"
+
+func TestGitReferencesRemainLazyAndSeparate(t *testing.T) {
+	destinations := []string{"http://mainloop-mcp.mainloop.svc.cluster.local:80", "http://mainloop-git-read.mainloop.svc.cluster.local:80", "http://mainloop-git-push.mainloop.svc.cluster.local:80", "https://api.openai.com:443"}
+	refs := []*apiv1alpha1.SessionCredential{
+		{Origin: "http://mainloop-mcp.mainloop.svc.cluster.local", Header: "Authorization", SecretRef: &apiv1alpha1.SecretKeyReference{Name: "mainloop-mcp-binding-missing", Key: "authorization"}},
+		{Origin: "http://mainloop-git-read.mainloop.svc.cluster.local", Header: "Authorization", SecretRef: &apiv1alpha1.SecretKeyReference{Name: "mainloop-git-read-missing", Key: "authorization"}},
+		{Origin: "http://mainloop-git-push.mainloop.svc.cluster.local", Header: "Authorization", SecretRef: &apiv1alpha1.SecretKeyReference{Name: "mainloop-git-push-missing", Key: "authorization"}},
+	}
+	provider := egress.Credential{Hostname: "api.openai.com", Header: "authorization", Prefix: "Bearer ", URI: "ate-secret://k8s.io/default/kagent/model/key"}
+	got, err := egress.SessionCredentials("kagent", refs, destinations, []egress.Credential{provider})
+	require.NoError(t, err)
+	require.Len(t, got, 4)
+	for _, binding := range got {
+		if binding.Hostname != "api.openai.com" {
+			require.Empty(t, binding.Prefix)
+			require.Contains(t, binding.URI, "/authorization")
+		}
+	}
+	refs = append(refs, &apiv1alpha1.SessionCredential{Origin: "https://api.openai.com", Header: "x-extra", SecretRef: &apiv1alpha1.SecretKeyReference{Name: "extra", Key: "key"}})
+	_, err = egress.SessionCredentials("kagent", refs, destinations, []egress.Credential{provider})
+	require.NoError(t, err, "max four retained")
+	refs = append(refs, proto.CloneOf(refs[0]))
+	_, err = egress.SessionCredentials("kagent", refs, destinations, nil)
+	require.Error(t, err)
+	refs = refs[:3]
+	refs[1].Header = egress.RuntimeTokenHeader
+	_, err = egress.SessionCredentials("kagent", refs, destinations, nil)
+	require.Error(t, err)
+	refs[1].Header = "Authorization"
+	refs[2].Origin = refs[1].Origin
+	_, err = egress.SessionCredentials("kagent", refs, destinations, nil)
+	require.Error(t, err, "host/header read/push collision")
+}

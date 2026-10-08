@@ -134,6 +134,22 @@ spec:
                     minItems: 1
                     type: array
                     x-kubernetes-list-type: set
+                  pushProxyOrigin:
+                    description: |-
+                      PushProxyOrigin routes publication through the separate trusted push
+                      listener. Omitted leaves receive-pack on the read listener, which denies it.
+                      A transport origin does not grant publication authority.
+                    enum:
+                    - http://mainloop-git-push.mainloop.svc.cluster.local
+                    type: string
+                  readProxyOrigin:
+                    description: |-
+                      ReadProxyOrigin routes canonical GitHub checkouts through the trusted read
+                      listener. Authorization comes from per-Session references, never a GitHub
+                      credential. Omitted retains standalone direct Git behavior.
+                    enum:
+                    - http://mainloop-git-read.mainloop.svc.cluster.local
+                    type: string
                 required:
                 - origins
                 type: object
@@ -142,6 +158,13 @@ spec:
                     the gateway holds one credential per host and header
                   rule: '!has(self.credentialSecretRef) || self.origins.size() ==
                     1'
+                - message: pushProxyOrigin requires readProxyOrigin
+                  rule: '!has(self.pushProxyOrigin) || has(self.readProxyOrigin)'
+                - message: Git proxies require the single canonical github.com origin
+                  rule: '!has(self.readProxyOrigin) || (self.origins.size() == 1 &&
+                    self.origins[0] == ''github.com'')'
+                - message: Git proxies cannot use credentialSecretRef
+                  rule: '!has(self.readProxyOrigin) || !has(self.credentialSecretRef)'
               kagent:
                 description: KagentHarness configures the kagent runtime adapter.
                 properties:

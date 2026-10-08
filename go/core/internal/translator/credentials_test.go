@@ -1,9 +1,11 @@
 package translator
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/kagent-dev/kagent/go/api/v1alpha3"
+	"github.com/kagent-dev/kagent/go/api/workspace"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -170,5 +172,38 @@ func TestModelCredentialTargetOllamaCloud(t *testing.T) {
 			require.Equal(t, tt.wantName, name)
 			require.Equal(t, tt.wantEndpoint, endpoint)
 		})
+	}
+}
+
+func TestCompileCredentialsRejectsInheritedGitAuthority(t *testing.T) {
+	for _, proxy := range []bool{false, true} {
+		for _, via := range []string{"model", "shared model", "shared MCP", "Git stanza"} {
+			t.Run(fmt.Sprintf("proxy=%t/%s", proxy, via), func(t *testing.T) {
+				input := credentialInput(v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderOpenAI, APIKeySecret: "model", APIKeySecretKey: "key"})
+				input.Harness.Spec.Claude = &v1alpha3.ClaudeHarness{}
+				if proxy {
+					input.Harness.Spec.Git = &v1alpha3.HarnessGit{Origins: []string{"github.com"}, ReadProxyOrigin: new(workspace.ReadProxyOrigin)}
+				}
+				switch via {
+				case "model":
+					input.Root.ResolvedModelConfig.Config.Spec.APIKeySecret = "mainloop-git-auth"
+				case "shared model":
+					child := credentialInput(v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderOpenAI, APIKeySecret: "mainloop-git-auth", APIKeySecretKey: "key", OpenAI: &v1alpha3.OpenAIConfig{BaseURL: "https://child.example.com/v1"}}).Root
+					input.Root.Shared = []AgentInputBinding{{Agent: child}}
+				case "shared MCP":
+					child := credentialInput(v1alpha3.ModelConfigSpec{}).Root
+					child.ResolvedModelConfig = nil
+					child.MCPTools = []ResolvedMCPTool{{Server: &v1alpha3.RemoteMCPServer{ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: "tools"}, Spec: v1alpha3.RemoteMCPServerSpec{URL: "https://mcp.example.com/mcp", HeadersFrom: []v1alpha3.ValueRef{{Name: "Authorization", ValueFrom: &v1alpha3.ValueSource{Type: v1alpha3.SecretValueSource, Name: "mainloop-git-auth", Key: "key"}}}}}}}
+					input.Root.Shared = []AgentInputBinding{{Agent: child}}
+				case "Git stanza":
+					if !proxy {
+						return
+					}
+					input.Harness.Spec.Git.CredentialSecretRef = &v1alpha3.SecretKeyReference{Name: "mainloop-git-auth", Key: "authorization"}
+				}
+				_, _, err := CompileCredentials(input, nil, nil)
+				require.Error(t, err)
+			})
+		}
 	}
 }

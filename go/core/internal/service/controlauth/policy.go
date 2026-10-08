@@ -14,6 +14,7 @@ import (
 	a2apb "github.com/a2aproject/a2a-go/v2/a2apb/v1"
 	"github.com/kagent-dev/kagent/go/api/authorization"
 	api "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
+	"github.com/kagent-dev/kagent/go/api/workspace"
 	"github.com/kagent-dev/kagent/go/core/pkg/auth"
 	"k8s.io/apimachinery/pkg/util/validation"
 )
@@ -54,7 +55,7 @@ func New(config Config) (*Policy, error) {
 		}
 	}
 	for i, origin := range config.CleartextMCPOrigins {
-		if !validCleartextMCPOrigin(origin) {
+		if !validCleartextMCPOrigin(origin) || reservedGitOrigin(origin) {
 			return nil, errors.New("cleartext MCP allowlist requires exact HTTP origins on svc.cluster.local hosts")
 		}
 		if slices.Contains(config.CleartextMCPOrigins[:i], origin) {
@@ -64,8 +65,24 @@ func New(config Config) (*Policy, error) {
 	for _, rule := range config.Credentials {
 		origin, err := url.Parse(rule.Origin)
 		_, patternErr := path.Match(rule.SecretNamePattern, "probe")
-		if rule.Namespace != config.Namespace || rule.SecretNamePattern == "" || patternErr != nil || rule.Key == "" || rule.Purpose != "mcp" || rule.Header != "authorization" || err != nil || (origin.Scheme != "https" && (origin.Scheme != "http" || !slices.Contains(config.CleartextMCPOrigins, rule.Origin))) || origin.Host == "" || origin.User != nil || origin.RawQuery != "" || origin.ForceQuery || origin.Fragment != "" || origin.Path != "" {
+		if rule.Namespace != config.Namespace || rule.SecretNamePattern == "" || patternErr != nil || rule.Key == "" || rule.Header != "authorization" || err != nil || origin.Host == "" || origin.User != nil || origin.RawQuery != "" || origin.ForceQuery || origin.Fragment != "" || origin.Path != "" {
 			return nil, errors.New("invalid approved credential tuple")
+		}
+		switch rule.Purpose {
+		case "git-read":
+			if rule.Origin != workspace.ReadProxyOrigin || rule.SecretNamePattern != "mainloop-git-read-*" || rule.Key != "authorization" {
+				return nil, errors.New("invalid approved Git read tuple")
+			}
+		case "git-push":
+			if rule.Origin != workspace.PushProxyOrigin || rule.SecretNamePattern != "mainloop-git-push-*" || rule.Key != "authorization" {
+				return nil, errors.New("invalid approved Git push tuple")
+			}
+		case "mcp":
+			if reservedGitOrigin(rule.Origin) || (origin.Scheme != "https" && (origin.Scheme != "http" || !slices.Contains(config.CleartextMCPOrigins, rule.Origin))) {
+				return nil, errors.New("invalid approved MCP tuple")
+			}
+		default:
+			return nil, errors.New("invalid credential purpose")
 		}
 	}
 	config.Agents = append([]string(nil), config.Agents...)
@@ -79,6 +96,15 @@ func New(config Config) (*Policy, error) {
 	}
 	config.DevelopmentEnvironmentRegistries = append([]string(nil), config.DevelopmentEnvironmentRegistries...)
 	return &Policy{config: config}, nil
+}
+
+func reservedGitOrigin(origin string) bool {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	host := workspace.NormalizeHost(u.Hostname())
+	return host == "mainloop-git-read.mainloop.svc.cluster.local" || host == "mainloop-git-push.mainloop.svc.cluster.local"
 }
 
 // validCleartextMCPOrigin accepts only canonical, exact in-cluster HTTP origins.

@@ -691,6 +691,16 @@ func (in *HarnessGit) DeepCopyInto(out *HarnessGit) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
+	if in.ReadProxyOrigin != nil {
+		in, out := &in.ReadProxyOrigin, &out.ReadProxyOrigin
+		*out = new(string)
+		**out = **in
+	}
+	if in.PushProxyOrigin != nil {
+		in, out := &in.PushProxyOrigin, &out.PushProxyOrigin
+		*out = new(string)
+		**out = **in
+	}
 	if in.CredentialSecretRef != nil {
 		in, out := &in.CredentialSecretRef, &out.CredentialSecretRef
 		*out = new(SecretKeyReference)

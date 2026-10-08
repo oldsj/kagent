@@ -291,7 +291,7 @@ bindings, each containing `origin`, `header`, and `secret_ref { name, key }`.
 The Secret belongs to the Agent's namespace and contains the complete header
 value, including `Bearer ` for bearer authorization. Session bindings use no
 additional prefix. The controller never reads the Secret value, and the runtime
-receives only a placeholder header configured on its RemoteMCPServer.
+receives only placeholder headers configured for its MCP server or Git transport.
 
 The HTTP(S) origin must already be in the Session's pinned revision egress list.
 Paths, user information, queries, and fragments are rejected. Injection is
@@ -317,3 +317,48 @@ the placeholder. The provider must also grant the actor's atespace access to
 the Agent namespace. The Envoy dataplane skips cleartext credential injection
 in stock Substrate v0.4.0-alpha1. Restrict the destination listener with NetworkPolicy.
 Secret lookup failures surface at the gateway; creation does not read or verify keys.
+
+### Trusted Git transports
+
+Native Claude and Codex Harnesses can select a trusted Git proxy profile:
+
+```yaml
+git:
+  origins: [github.com]
+  readProxyOrigin: http://mainloop-git-read.mainloop.svc.cluster.local
+  pushProxyOrigin: http://mainloop-git-push.mainloop.svc.cluster.local
+```
+
+These are the only accepted proxy origins. Push requires read, and this profile
+excludes `credentialSecretRef`. The canonical repository identity remains HTTPS
+GitHub; the Actor receives only the read and optional push HTTP destinations at
+port 80. Their distinct hostnames separate the gateway's host-wide credential
+effects. Git read and push capabilities are per-Session references containing
+the complete Authorization value. Neither value enters runtime configuration,
+Git config, markers, environments or revision provenance.
+
+The Mainloop service policy admits `git-read` only with Secret name pattern
+`mainloop-git-read-*`, key/header `authorization`, and the exact read origin above.
+`git-push` requires `mainloop-git-push-*` and the exact push origin. Both use the
+configured Agent namespace. Git hosts cannot be classified as MCP or added to
+`cleartextMCPOrigins`. Purpose belongs to the trusted policy and listener; the
+Session credential wire type has no purpose field. Max four bindings, frozen
+creation identity, collision rejection and fork separation still apply.
+
+Both native compilers check the complete origin and credential union, including
+provider, shared MCP, package, skill and telemetry inputs. Proxy and no-Git
+revisions reject direct GitHub host families, legacy `mainloop-git-auth` references
+and revision credentials on either Git proxy host. The six package origins
+remain credential-free. A no-Git coordinator acquires neither Git listener.
+Both proxy fields absent retain the existing standalone/development direct Git
+configuration. Production activation must select the proxy profile on every
+Git-enabled Harness and retire direct revisions deliberately.
+
+Creation and runtime startup need only frozen references, so Git Secrets may be
+unpublished. Logical READY creation leaves the Actor suspended; READY Resume
+alone does not wake it. Existing owned Suspend then Resume provides a non-turn
+warmup, after which GetSession must report the exact active RUNNING association
+before capabilities are published. Failed warmup retains the operation and
+does not justify an early capability or model turn. Local controlled-Actor
+fixtures qualify orchestration; installed Actor startup, provider/cache behavior,
+listener authorization and network isolation require runtime evidence.
