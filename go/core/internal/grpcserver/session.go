@@ -99,3 +99,11 @@ func (s *sessionServer) RevokeSessionShare(ctx context.Context, request *apiv1al
 	}
 	return &apiv1alpha1.RevokeSessionShareResponse{}, nil
 }
+
+func (s *sessionServer) PrepareSessionWorkspace(ctx context.Context, request *apiv1alpha1.PrepareSessionWorkspaceRequest) (*apiv1alpha1.PrepareSessionWorkspaceResponse, error) {
+	receipt, err := s.service.PrepareWorkspace(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	return &apiv1alpha1.PrepareSessionWorkspaceResponse{Receipt: receipt}, nil
+}

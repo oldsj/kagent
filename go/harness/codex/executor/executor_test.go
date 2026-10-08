@@ -11,6 +11,8 @@ import (
 
 	apiworkspace "github.com/kagent-dev/kagent/go/api/workspace"
 	"github.com/kagent-dev/kagent/go/harness/codex/config"
+	"github.com/kagent-dev/kagent/go/harness/codex/internal/adapter"
+	"github.com/kagent-dev/kagent/go/harness/runtime/continuation"
 	"github.com/kagent-dev/kagent/go/harness/runtime/workspace"
 	"github.com/stretchr/testify/require"
 )
@@ -64,4 +66,53 @@ func TestProxyExecutorStartupIsLazy(t *testing.T) {
 		_, err := os.Stat(filepath.Join(data, name))
 		require.True(t, os.IsNotExist(err), name)
 	}
+}
+
+func TestPreparationSetupHasNoNativeHistory(t *testing.T) {
+	data := t.TempDir()
+	cfg := config.Production("fixture-model", "original instructions")
+	cfg.Provider = config.Provider{Name: "openai"}
+	cfg.MCPServers = map[string]config.MCPServer{"mainloop": {URL: "http://mainloop-mcp.mainloop.svc.cluster.local/mcp"}}
+	raw, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	store, err := continuation.New(filepath.Join(data, "adapter"), "codex", validateThreadID)
+	require.NoError(t, err)
+	stateDir := filepath.Join(data, ".kagent")
+	require.NoError(t, os.MkdirAll(stateDir, 0700))
+	installer := &adapter.SetupInstaller{Input: adapter.Input{ConfigJSON: raw, Workspace: filepath.Join(data, "workspace"), DurableDir: data, Environment: nil}, Store: store}
+	configDigest, mcpDigest, err := workspace.ConfigDigests(raw)
+	require.NoError(t, err)
+	setup, err := workspace.SetupDigest("child")
+	require.NoError(t, err)
+	assignment := workspace.Preparation{Provider: "codex", Profile: "child", SetupDigest: setup, ConfigDigest: configDigest, MCPDigest: mcpDigest}
+	runner, hook, err := installer.Setup(t.Context(), assignment, false)
+	require.NoError(t, err)
+	require.NotNil(t, runner)
+	require.Equal(t, "developer_instruction", hook)
+
+	_, started, err := store.Load()
+	require.NoError(t, err)
+	require.False(t, started)
+	_, hook, err = installer.Setup(t.Context(), assignment, true)
+	require.NoError(t, err)
+	require.Equal(t, "developer_instruction", hook)
+	assignment.SetupDigest = strings.Repeat("0", 64)
+	_, _, err = installer.Setup(t.Context(), assignment, true)
+	require.Error(t, err)
+	assignment.SetupDigest = setup
+	path := filepath.Join(data, "codex", "config.toml")
+	original, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, []byte("changed native setup"), 0600))
+	_, _, err = installer.Setup(t.Context(), assignment, true)
+	require.Error(t, err)
+	_, err = New(t.Context(), Config{ConfigJSON: raw, DataDir: data})
+	require.ErrorContains(t, err, "installed Codex configuration differs")
+	actual, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, "changed native setup", string(actual), "restart cannot repair unqualified setup")
+	require.NoError(t, os.WriteFile(path, original, 0600))
+	require.NoError(t, store.Bind("thread-fixture"))
+	_, _, err = installer.Setup(t.Context(), assignment, false)
+	require.Error(t, err)
 }

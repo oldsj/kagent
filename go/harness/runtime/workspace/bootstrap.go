@@ -49,7 +49,9 @@ type Bootstrapper struct {
 	dir      string
 	stateDir string
 
-	mu sync.Mutex
+	setupInstaller SetupInstaller
+	noPreparation  bool
+	mu             sync.Mutex
 	// none caches that the Session asked for no workspace, so later turns of this
 	// process skip the control-plane call. A resumed actor asks again once.
 	none bool
@@ -94,6 +96,9 @@ func New(next Runner, cfg Config) (*Bootstrapper, error) {
 // Run bootstraps the workspace if needed, then runs the turn. A bootstrap
 // failure ends the turn with a vetted message and never reaches the agent.
 func (b *Bootstrapper) Run(ctx context.Context, turn runtime.Turn, sink runtime.EventSink) (runtime.Outcome, error) {
+	if err := b.preparationAdmission(ctx); err != nil {
+		return runtime.Outcome{Failure: &runtime.Failure{Message: "Workspace preparation is incomplete."}}, nil
+	}
 	if failure := b.ensure(ctx); failure != "" {
 		return runtime.Outcome{Failure: &runtime.Failure{Message: failure}}, nil
 	}

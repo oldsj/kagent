@@ -3,8 +3,13 @@ package taskstore
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	a2apb "github.com/a2aproject/a2a-go/v2/a2apb/v1"
@@ -147,4 +152,29 @@ func TestForeignTaskIDsCannotSelectAnotherHistory(t *testing.T) {
 	_, err = service.SettleTask(ctx, &apiv1alpha1.TaskStoreServiceSettleTaskRequest{SessionId: id.String(), TaskId: "foreign-task", Version: 1})
 	require.Error(t, err)
 	require.Equal(t, 2, actors.reads, "each RPC performs an uncached observation")
+}
+
+func TestPreparationCallbackCannotUsePublicOrUnconfiguredAuthority(t *testing.T) {
+	id := uuid.NewString()
+	assignment := &apiv1alpha1.NativeWorkspacePreparation{SessionId: id, ContextId: id, CreateRequestId: "create", ActionId: "create:prepare", RequestDigest: strings.Repeat("a", 64), ExecutionId: uuid.NewString(), ChallengeId: uuid.NewString(), GenerationId: uuid.NewString(), Atespace: "kagent", ActorName: "owned", ActorUid: "owned-uid", PreparedRevision: "original", Workspace: &apiv1alpha1.Workspace{Repo: "https://github.com/owner/repo.git", Ref: strings.Repeat("a", 40), Branch: "feature"}, DevelopmentImage: "fixture/d", Platform: "linux/amd64", PolicyIdentity: "original", PayloadImage: "fixture/r", Provider: "codex", Schema: 1, CliVersion: "1.0", Profile: "child", SetupDigest: strings.Repeat("a", 64), ConfigDigest: strings.Repeat("a", 64), McpDigest: strings.Repeat("a", 64)}
+	request := &apiv1alpha1.TaskStoreServiceCompleteWorkspacePreparationRequest{SessionId: id, Assignment: assignment, ObservedAt: timestamppb.Now()}
+	for _, name := range []string{"public", "missing", "unconfigured"} {
+		t.Run(name, func(t *testing.T) {
+			store := &callbackStore{}
+			service := NewService(store, nil)
+			ctx := t.Context()
+			if name == "public" {
+				ctx = auth.AuthSessionTo(ctx, auth.ControlPlaneSession{})
+			}
+			if name == "unconfigured" {
+				ctx = auth.AuthSessionTo(ctx, runtimeSession{binding: database.RuntimeGeneration{SessionID: uuid.MustParse(id)}})
+			}
+			_, err := service.CompleteWorkspacePreparation(ctx, request)
+			require.Equal(t, codes.PermissionDenied, status.Code(err))
+			require.Zero(t, store.effects)
+		})
+	}
+	request.ProtoReflect().SetUnknown([]byte{0xf8, 0x07, 0x01})
+	_, err := NewService(&callbackStore{}, nil).CompleteWorkspacePreparation(t.Context(), request)
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
 }

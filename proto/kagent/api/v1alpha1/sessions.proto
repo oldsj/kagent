@@ -17,6 +17,7 @@ option go_package = "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1
 // until a client retry completes it. Automatic idle suspension is independent.
 service SessionService {
   rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
+  rpc PrepareSessionWorkspace(PrepareSessionWorkspaceRequest) returns (PrepareSessionWorkspaceResponse);
   rpc GetSession(GetSessionRequest) returns (GetSessionResponse);
   rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
   rpc UpdateSessionName(UpdateSessionNameRequest) returns (UpdateSessionNameResponse);
@@ -73,6 +74,8 @@ message Session {
   // Output only. Present only on authorized GetSession for a freshly observed
   // current active runtime. Never a creation, resume, or fork input.
   RuntimeAssociation runtime_association = 20;
+  // Output only, historical preparation evidence. GET never refreshes it.
+  WorkspacePreparationReceipt workspace_preparation = 21;
 }
 
 // Output only. A bounded observation, not an atomic cross-system grant.
@@ -269,3 +272,51 @@ message RevokeSessionShareRequest {
 }
 
 message RevokeSessionShareResponse {}
+
+// A fixed model-free action over the original owned Create tuple. Repeating a
+// completed action requests a new read-only challenge; uncertain setup never reissues.
+message PrepareSessionWorkspaceRequest {
+  string session_id = 1 [(buf.validate.field).string.uuid = true];
+  string action_id = 2 [(buf.validate.field).string = {min_len: 1, max_len: 128, pattern: "^[A-Za-z0-9:._-]+$"}];
+  string create_request_id = 3 [(buf.validate.field).string = {min_len: 1, max_len: 128}];
+  string generation_id = 4 [(buf.validate.field).string.uuid = true];
+  string actor_uid = 5 [(buf.validate.field).string = {min_len: 1, max_len: 128}];
+  string prepared_revision = 6 [(buf.validate.field).string = {min_len: 1, max_len: 128}];
+  Workspace workspace = 7 [(buf.validate.field).required = true];
+  DevelopmentEnvironment development_environment = 8 [(buf.validate.field).required = true];
+  RuntimeComposition runtime_composition = 9 [(buf.validate.field).required = true];
+  string setup_profile = 10 [(buf.validate.field).string.in = "supervisor", (buf.validate.field).string.in = "child"];
+  string setup_digest = 11 [(buf.validate.field).string = {pattern: "^[a-f0-9]{64}$"}];
+  option (buf.validate.message).cel = {
+    id: "preparation.exact_checkout"
+    message: "preparation requires a full commit SHA and named branch"
+    expression: "this.workspace.ref.matches('^[a-f0-9]{40}$') && this.workspace.branch != ''"
+  };
+}
+
+message PrepareSessionWorkspaceResponse {
+  WorkspacePreparationReceipt receipt = 1;
+}
+
+// Bounded output-only original-action evidence. A pending/uncertain classification
+// or historical=true cannot authorize current native work.
+message WorkspacePreparationReceipt {
+  PrepareSessionWorkspaceRequest original = 1;
+  string request_digest = 2;
+  string execution_id = 3;
+  string context_id = 4;
+  string atespace = 5;
+  string actor_name = 6;
+  string classification = 7;
+  string challenge_id = 8;
+  uint64 observation_sequence = 9;
+  string head = 10;
+  string branch = 11;
+  string transport_digest = 12;
+  string config_digest = 13;
+  string mcp_digest = 14;
+  string native_hook = 15;
+  google.protobuf.Timestamp effect_observed_at = 16;
+  google.protobuf.Timestamp observed_at = 17;
+  bool historical = 18;
+}

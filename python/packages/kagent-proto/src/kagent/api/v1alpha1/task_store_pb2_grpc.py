@@ -47,6 +47,11 @@ class TaskStoreServiceStub:
                 request_serializer=kagent_dot_api_dot_v1alpha1_dot_task__store__pb2.TaskStoreServiceGetWorkspaceRequest.SerializeToString,
                 response_deserializer=kagent_dot_api_dot_v1alpha1_dot_task__store__pb2.TaskStoreServiceGetWorkspaceResponse.FromString,
                 _registered_method=True)
+        self.CompleteWorkspacePreparation = channel.unary_unary(
+                '/kagent.api.v1alpha1.TaskStoreService/CompleteWorkspacePreparation',
+                request_serializer=kagent_dot_api_dot_v1alpha1_dot_task__store__pb2.TaskStoreServiceCompleteWorkspacePreparationRequest.SerializeToString,
+                response_deserializer=kagent_dot_api_dot_v1alpha1_dot_task__store__pb2.TaskStoreServiceCompleteWorkspacePreparationResponse.FromString,
+                _registered_method=True)
 
 
 class TaskStoreServiceServicer:
@@ -98,6 +103,12 @@ class TaskStoreServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def CompleteWorkspacePreparation(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_TaskStoreServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -130,6 +141,11 @@ def add_TaskStoreServiceServicer_to_server(servicer, server):
                     servicer.GetWorkspace,
                     request_deserializer=kagent_dot_api_dot_v1alpha1_dot_task__store__pb2.TaskStoreServiceGetWorkspaceRequest.FromString,
                     response_serializer=kagent_dot_api_dot_v1alpha1_dot_task__store__pb2.TaskStoreServiceGetWorkspaceResponse.SerializeToString,
+            ),
+            'CompleteWorkspacePreparation': grpc.unary_unary_rpc_method_handler(
+                    servicer.CompleteWorkspacePreparation,
+                    request_deserializer=kagent_dot_api_dot_v1alpha1_dot_task__store__pb2.TaskStoreServiceCompleteWorkspacePreparationRequest.FromString,
+                    response_serializer=kagent_dot_api_dot_v1alpha1_dot_task__store__pb2.TaskStoreServiceCompleteWorkspacePreparationResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -297,6 +313,33 @@ class TaskStoreService:
             '/kagent.api.v1alpha1.TaskStoreService/GetWorkspace',
             kagent_dot_api_dot_v1alpha1_dot_task__store__pb2.TaskStoreServiceGetWorkspaceRequest.SerializeToString,
             kagent_dot_api_dot_v1alpha1_dot_task__store__pb2.TaskStoreServiceGetWorkspaceResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def CompleteWorkspacePreparation(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kagent.api.v1alpha1.TaskStoreService/CompleteWorkspacePreparation',
+            kagent_dot_api_dot_v1alpha1_dot_task__store__pb2.TaskStoreServiceCompleteWorkspacePreparationRequest.SerializeToString,
+            kagent_dot_api_dot_v1alpha1_dot_task__store__pb2.TaskStoreServiceCompleteWorkspacePreparationResponse.FromString,
             options,
             channel_credentials,
             insecure,

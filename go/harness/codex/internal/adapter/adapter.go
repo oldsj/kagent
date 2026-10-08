@@ -2,6 +2,7 @@
 package adapter
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -14,6 +15,8 @@ import (
 	"github.com/kagent-dev/kagent/go/harness/codex/config"
 	"github.com/kagent-dev/kagent/go/harness/codex/internal/driver"
 	"github.com/kagent-dev/kagent/go/harness/internal/utils"
+	"github.com/kagent-dev/kagent/go/harness/runtime/continuation"
+	"github.com/kagent-dev/kagent/go/harness/runtime/workspace"
 	"github.com/kagent-dev/kagent/go/pkg/tracing"
 	"github.com/pelletier/go-toml/v2"
 )
@@ -26,10 +29,11 @@ const (
 // Input contains compiler output and Actor-owned locations used to construct
 // the Codex driver.
 type Input struct {
-	ConfigJSON  []byte
-	Workspace   string
-	DurableDir  string
-	Environment []string
+	SetupProfile string
+	ConfigJSON   []byte
+	Workspace    string
+	DurableDir   string
+	Environment  []string
 }
 
 // New validates and materializes Codex-owned state, then constructs its driver.
@@ -37,6 +41,13 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 	cfg, err := config.Parse(input.ConfigJSON)
 	if err != nil {
 		return nil, err
+	}
+	if input.SetupProfile != "" {
+		standing, err := workspace.Standing(input.SetupProfile)
+		if err != nil {
+			return nil, err
+		}
+		cfg.DeveloperInstruction += "\n" + standing
 	}
 	if !filepath.IsAbs(input.Workspace) || !filepath.IsAbs(input.DurableDir) {
 		return nil, fmt.Errorf("workspace and durable directories must be absolute paths")
@@ -356,4 +367,53 @@ func setEnvironment(environment []string, name, value string) []string {
 		}
 	}
 	return append(result, prefix+value)
+}
+
+// SetupInstaller applies the fixed hook using the same native configuration path
+// as normal execution. It never validates/starts a CLI or binds a continuation.
+type SetupInstaller struct {
+	Input Input
+	Store *continuation.Store
+}
+
+func (s *SetupInstaller) Setup(ctx context.Context, input workspace.Preparation, observe bool) (workspace.Runner, string, error) {
+	stateDir := filepath.Join(s.Input.DurableDir, ".kagent")
+	if input.Provider != "codex" {
+		return nil, "", fmt.Errorf("assigned native provider differs")
+	}
+	if observe {
+		if err := workspace.CheckSetup(s.Input.ConfigJSON, stateDir, input, true); err != nil {
+			return nil, "", err
+		}
+		cfg, err := config.Parse(s.Input.ConfigJSON)
+		if err != nil {
+			return nil, "", err
+		}
+		expected, err := renderConfig(cfg, filepath.Join(s.Input.DurableDir, "codex"))
+		actual, readErr := os.ReadFile(filepath.Join(s.Input.DurableDir, "codex", "config.toml"))
+		if err != nil || readErr != nil || !bytes.Equal(expected, actual) {
+			return nil, "", fmt.Errorf("installed Codex configuration differs")
+		}
+		return nil, "developer_instruction", nil
+	}
+	if s.Store == nil {
+		return nil, "", fmt.Errorf("continuation store is required")
+	}
+	if _, started, err := s.Store.Load(); err != nil || started {
+		return nil, "", fmt.Errorf("native history already exists or is malformed")
+	}
+	configDigest, mcpDigest, err := workspace.ConfigDigests(s.Input.ConfigJSON)
+	if err != nil || configDigest != input.ConfigDigest || mcpDigest != input.MCPDigest {
+		return nil, "", fmt.Errorf("assigned compiler configuration differs")
+	}
+	configured := s.Input
+	configured.SetupProfile = input.Profile
+	runner, err := New(ctx, configured)
+	if err != nil {
+		return nil, "", err
+	}
+	if err := workspace.CheckSetup(s.Input.ConfigJSON, stateDir, input, false); err != nil {
+		return nil, "", err
+	}
+	return runner, "developer_instruction", nil
 }

@@ -513,3 +513,40 @@ func validActorIdentity(actor *ateapipb.Actor, revision *database.RuntimeRevisio
 	return metadata.GetName() == name && metadata.GetAtespace() == revision.ActorTemplateAtespace && metadata.GetUid() != "" &&
 		ref.GetAtespace() == revision.ActorTemplateAtespace && ref.GetName() == revision.ActorTemplateName
 }
+
+// InspectPreparation adds fixed template/config verification to the existing
+// current-generation observation, without holding a lock across Actor reads.
+func (w *ActorWorkflow) InspectPreparation(ctx context.Context, session *apiv1alpha1.Session) (*apiv1alpha1.NativeWorkspacePreparation, error) {
+	association, err := w.InspectRuntime(ctx, session)
+	if err != nil || association == nil {
+		return nil, err
+	}
+	reader, ok := w.actors.(interface {
+		GetActorTemplate(context.Context, string, string) (*ateapipb.ActorTemplate, error)
+	})
+	if !ok {
+		return nil, fmt.Errorf("prepared template observation unavailable")
+	}
+	revision, err := w.store.GetRuntimeRevision(ctx, session.GetPreparedRevision())
+	if err != nil {
+		return nil, err
+	}
+	actor, err := w.actors.GetActor(ctx, association.Atespace, association.ActorName)
+	if err != nil || actor.GetMetadata().GetUid() != association.ActorUid {
+		return nil, fmt.Errorf("runtime identity changed")
+	}
+	template, err := reader.GetActorTemplate(ctx, revision.ActorTemplateAtespace, revision.ActorTemplateName)
+	if err != nil {
+		return nil, err
+	}
+	result, err := CheckPreparationRuntime(session, revision, actor, template)
+	if err != nil {
+		return nil, err
+	}
+	current, err := w.InspectRuntime(ctx, session)
+	if err != nil || current == nil || current.GenerationId != association.GenerationId || current.ActorUid != association.ActorUid {
+		return nil, fmt.Errorf("runtime changed around observation")
+	}
+	result.GenerationId = association.GenerationId
+	return result, nil
+}
