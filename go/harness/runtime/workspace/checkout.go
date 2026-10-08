@@ -16,6 +16,7 @@ import (
 	"time"
 
 	apiworkspace "github.com/kagent-dev/kagent/go/api/workspace"
+	"github.com/kagent-dev/kagent/go/pkg/logging"
 )
 
 // placeholderHeader gives the egress gateway an Authorization header to
@@ -163,7 +164,10 @@ func (g *gitRunner) checkout(ctx context.Context, c checkout) error {
 			return err
 		}
 	}
-	if err := g.fetchRef(ctx, c, force); err != nil {
+	// Read once: fetchRef needs it when no ref was requested, and the trunk ref
+	// needs it after the checkout.
+	defaultBranch := g.defaultBranch(ctx, c)
+	if err := g.fetchRef(ctx, c, defaultBranch, force); err != nil {
 		return err
 	}
 	if c.Branch != "" {
@@ -171,29 +175,29 @@ func (g *gitRunner) checkout(ctx context.Context, c checkout) error {
 			return err
 		}
 	}
+	g.fetchDefaultBranch(ctx, c, defaultBranch)
 	return m.markDone(ctx, c)
 }
 
 // fetchRef fetches and checks out c.Ref: a full commit SHA, a branch, or a tag,
-// or the remote's default branch when empty.
-func (g *gitRunner) fetchRef(ctx context.Context, c checkout, force bool) error {
-	depth := "--depth=" + strconv.Itoa(c.Depth)
+// or def, the remote's default branch, when c.Ref is empty.
+func (g *gitRunner) fetchRef(ctx context.Context, c checkout, def string, force bool) error {
 	switch {
 	case fullSHA.MatchString(c.Ref):
-		if _, err := g.git(ctx, c.Dir, "fetch", "fetch", "-q", depth, "--no-tags", "origin", c.Ref); err != nil {
+		if _, err := g.git(ctx, c.Dir, "fetch", fetchArgs(c.Depth, "--no-tags", "origin", c.Ref)...); err != nil {
 			return notFoundOr(err)
 		}
 		_, err := g.git(ctx, c.Dir, "checkout", checkoutArgs(force, "--detach", "FETCH_HEAD")...)
 		return err
 	case c.Ref == "":
-		return g.fetchBranch(ctx, c, g.defaultBranch(ctx, c), force)
+		return g.fetchBranch(ctx, c, def, force)
 	}
 	err := g.fetchBranch(ctx, c, c.Ref, force)
 	if !errors.Is(err, errRefNotFound) {
 		return err
 	}
 	tag := "refs/tags/" + c.Ref
-	if _, err := g.git(ctx, c.Dir, "fetch", "fetch", "-q", depth, "origin", "+"+tag+":"+tag); err != nil {
+	if _, err := g.git(ctx, c.Dir, "fetch", fetchArgs(c.Depth, "origin", "+"+tag+":"+tag)...); err != nil {
 		return notFoundOr(err)
 	}
 	_, err = g.git(ctx, c.Dir, "checkout", checkoutArgs(force, "--detach", tag)...)
@@ -201,17 +205,16 @@ func (g *gitRunner) fetchRef(ctx context.Context, c checkout, force bool) error 
 }
 
 func (g *gitRunner) fetchBranch(ctx context.Context, c checkout, branch string, force bool) error {
-	depth := "--depth=" + strconv.Itoa(c.Depth)
 	if branch == "" {
 		// The remote did not name a default branch; fall back to its HEAD.
-		if _, err := g.git(ctx, c.Dir, "fetch", "fetch", "-q", depth, "--no-tags", "origin", "HEAD"); err != nil {
+		if _, err := g.git(ctx, c.Dir, "fetch", fetchArgs(c.Depth, "--no-tags", "origin", "HEAD")...); err != nil {
 			return notFoundOr(err)
 		}
 		_, err := g.git(ctx, c.Dir, "checkout", checkoutArgs(force, "--detach", "FETCH_HEAD")...)
 		return err
 	}
 	remote := "refs/remotes/origin/" + branch
-	if _, err := g.git(ctx, c.Dir, "fetch", "fetch", "-q", depth, "--no-tags", "origin", "+refs/heads/"+branch+":"+remote); err != nil {
+	if _, err := g.git(ctx, c.Dir, "fetch", fetchArgs(c.Depth, "--no-tags", "origin", "+refs/heads/"+branch+":"+remote)...); err != nil {
 		return notFoundOr(err)
 	}
 	if _, err := g.git(ctx, c.Dir, "checkout", checkoutArgs(force, "-B", branch, remote)...); err != nil {
@@ -237,6 +240,37 @@ func (g *gitRunner) defaultBranch(ctx context.Context, c checkout) string {
 	return ""
 }
 
+// fetchDefaultBranch makes the remote's default branch available as
+// refs/remotes/origin/<def>, with refs/remotes/origin/HEAD pointing at it, so
+// tools can diff against the trunk (for example origin/main). It runs after the
+// requested checkout has succeeded, so a failure is logged and never fails the
+// bootstrap.
+//
+// The trunk is fetched with the checkout's depth and the checkout is not
+// deepened for it. Depth zero means full history, so every feature branch has
+// a merge-base with the trunk. A positive depth is shallow: a merge-base exists
+// only when both histories reach the fork point within that depth.
+//
+// A failure is not retried: the done marker is written afterwards, so the
+// workspace keeps without origin/<def> until it is rebuilt.
+func (g *gitRunner) fetchDefaultBranch(ctx context.Context, c checkout, def string) {
+	if def == "" {
+		logging.FromContext(ctx).WarnContext(ctx, "workspace remote has no default branch name; origin/HEAD was not set")
+		return
+	}
+	remote := "refs/remotes/origin/" + def
+	// The requested branch may already be fetched under this name.
+	if _, err := g.git(ctx, c.Dir, "default ref", "rev-parse", "--verify", "--quiet", remote); err != nil {
+		if _, err := g.git(ctx, c.Dir, "fetch default", fetchArgs(c.Depth, "--no-tags", "origin", "+refs/heads/"+def+":"+remote)...); err != nil {
+			logging.FromContext(ctx).WarnContext(ctx, "workspace default branch was not fetched; origin/HEAD was not set", "branch", def, "error", err)
+			return
+		}
+	}
+	if _, err := g.git(ctx, c.Dir, "default HEAD", "symbolic-ref", "refs/remotes/origin/HEAD", remote); err != nil {
+		logging.FromContext(ctx).WarnContext(ctx, "workspace origin/HEAD was not set", "branch", def, "error", err)
+	}
+}
+
 // checkRefName rejects names git would not accept as a branch, and anything
 // that could be read as an option. The proto already restricts the characters.
 func checkRefName(ctx context.Context, g *gitRunner, name string) error {
@@ -250,6 +284,16 @@ func checkRefName(ctx context.Context, g *gitRunner, name string) error {
 		return &gitError{Step: "check-ref-format", Err: errors.New("invalid ref name")}
 	}
 	return nil
+}
+
+// fetchArgs builds a quiet `git fetch` with the given depth. Zero means full
+// history, so the --depth flag is omitted: git rejects --depth=0.
+func fetchArgs(depth int, args ...string) []string {
+	base := []string{"fetch", "-q"}
+	if depth > 0 {
+		base = append(base, "--depth="+strconv.Itoa(depth))
+	}
+	return append(base, args...)
 }
 
 // checkoutArgs builds a quiet `git checkout`. force (-f) discards untracked

@@ -25,7 +25,9 @@ type Request struct {
 	Repo   string
 	Ref    string
 	Branch string
-	// Depth is the shallow-clone depth; zero means apiworkspace.DefaultDepth.
+	// Depth is the shallow-clone depth. Zero means full history, so feature
+	// branches keep a merge-base with the default branch. A positive value is
+	// shallow. It is never mapped to apiworkspace.DefaultDepth here.
 	Depth int
 }
 
@@ -133,6 +135,10 @@ func (b *Bootstrapper) ensure(ctx context.Context) string {
 }
 
 func (b *Bootstrapper) bootstrap(ctx context.Context, request Request) string {
+	// Zero means full history, so a negative value must not fall through to it.
+	if request.Depth < 0 {
+		return "Workspace bootstrap failed: the clone depth cannot be negative."
+	}
 	host, err := apiworkspace.RepoHost(request.Repo)
 	if err != nil {
 		return "Workspace bootstrap failed: the repository URL is invalid."
@@ -151,9 +157,6 @@ func (b *Bootstrapper) bootstrap(ctx context.Context, request Request) string {
 		Dir: b.dir, StateDir: b.stateDir, Repo: request.Repo, Host: host, Ref: request.Ref, Branch: request.Branch,
 		Depth: request.Depth, Credential: b.policy.Credential,
 		ReadURL: readURL, PushURL: pushURL, Proxy: b.policy.ReadProxyOrigin != nil,
-	}
-	if spec.Depth <= 0 {
-		spec.Depth = apiworkspace.DefaultDepth
 	}
 	if err := b.git.checkout(ctx, spec); err != nil {
 		return failureMessage(request, err)
