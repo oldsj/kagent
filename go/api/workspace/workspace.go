@@ -14,7 +14,10 @@ import (
 )
 
 const (
-	// DefaultDepth is the shallow-clone depth used when a request names none.
+	// DefaultDepth is kept for API compatibility and is no longer applied by the
+	// runtime. A request that names no depth (zero) clones full history, so
+	// feature branches keep a merge-base with the default branch. A positive
+	// depth is shallow.
 	DefaultDepth = 1
 	// MaxDepth bounds shallow clones so a typo cannot request unbounded history.
 	MaxDepth = 1000
