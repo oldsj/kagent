@@ -178,3 +178,52 @@ func TestPreparationCallbackCannotUsePublicOrUnconfiguredAuthority(t *testing.T)
 	_, err := NewService(&callbackStore{}, nil).CompleteWorkspacePreparation(t.Context(), request)
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
 }
+
+type preparationGateStore struct {
+	*callbackStore
+	required bool
+	assigned int
+}
+
+func (s *preparationGateStore) WithRuntimeGeneration(_ context.Context, _ database.RuntimeGeneration, fn func(database.RuntimeTaskStore) error) error {
+	return fn(s)
+}
+func (s *preparationGateStore) GetSessionForRuntime(ctx context.Context, id, uid string) (*apiv1alpha1.Session, error) {
+	session, err := s.callbackStore.GetSessionForRuntime(ctx, id, uid)
+	if err != nil {
+		return nil, err
+	}
+	session.Creator = auth.MainloopService
+	session.Workspace = &apiv1alpha1.Workspace{Repo: "https://github.com/owner/repo.git"}
+	session.DevelopmentEnvironment = &apiv1alpha1.DevelopmentEnvironment{Image: "fixture"}
+	return session, nil
+}
+func (s *preparationGateStore) WorkspacePreparationRequired(context.Context, *apiv1alpha1.Session) (bool, error) {
+	return s.required, nil
+}
+func (s *preparationGateStore) AssignWorkspacePreparation(context.Context, string) (*apiv1alpha1.NativeWorkspacePreparation, bool, error) {
+	s.assigned++
+	return nil, true, nil
+}
+
+func TestGetWorkspaceRequiresPreparationOnlyWhenStoreAdmissionDoes(t *testing.T) {
+	for name, required := range map[string]bool{"direct Git": false, "enforcing proxies": true} {
+		t.Run(name, func(t *testing.T) {
+			id := uuid.New()
+			binding := database.RuntimeGeneration{ID: uuid.New(), SessionID: id, Atespace: "team-a", ActorName: "session-" + id.String() + "-0123456789abcdef", ActorUID: "uid-a", Phase: "active"}
+			store := &preparationGateStore{callbackStore: &callbackStore{binding: binding}, required: required}
+			service := NewService(store, &callbackActors{binding: binding, uid: binding.ActorUID})
+			ctx := auth.AuthSessionTo(t.Context(), runtimeSession{binding: binding})
+			result, err := service.GetWorkspace(ctx, &apiv1alpha1.TaskStoreServiceGetWorkspaceRequest{SessionId: id.String()})
+			require.NoError(t, err)
+			require.Equal(t, "https://github.com/owner/repo.git", result.GetWorkspace().GetRepo())
+			require.Equal(t, required, result.GetPreparationRequired())
+			require.Equal(t, required, result.GetPreparationReady())
+			if required {
+				require.Equal(t, 1, store.assigned)
+			} else {
+				require.Zero(t, store.assigned, "direct-Git Sessions never issue a preparation")
+			}
+		})
+	}
+}

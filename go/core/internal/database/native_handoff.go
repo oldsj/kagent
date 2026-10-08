@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,6 +21,40 @@ import (
 // Session. Standalone Sessions and Git-free coordinators retain their lifecycle.
 func RequiresWorkspacePreparation(session *api.Session) bool {
 	return session.GetCreator() == auth.MainloopService && session.GetDevelopmentEnvironment() != nil && session.GetWorkspace() != nil
+}
+
+// UsesEnforcingGitProxies reports whether a revision's effective egress reaches
+// Git through both Mainloop proxies, the only configuration preparation accepts.
+// The compiler adds both origins only for a proxy-mode Git policy; extra proxy
+// destinations on a direct-Git revision fail closed into enforcement.
+func UsesEnforcingGitProxies(destinations []string) bool {
+	return slices.Contains(destinations, apiworkspace.ReadProxyOrigin+":80") && slices.Contains(destinations, apiworkspace.PushProxyOrigin+":80")
+}
+
+// RequiresPreparedAdmission gates task admission on a confirmed preparation.
+// Direct-Git Sessions keep pre-preparation admission until their Harness
+// switches to the enforcing proxies; the revision is server-held and immutable.
+func RequiresPreparedAdmission(session *api.Session, revisionDestinations []string) bool {
+	return RequiresWorkspacePreparation(session) && UsesEnforcingGitProxies(revisionDestinations)
+}
+
+// requiresPreparedAdmission reads the Session's pinned revision egress. A missing
+// revision is an error, never an exemption.
+func requiresPreparedAdmission(ctx context.Context, db dbExecutor, session *api.Session) (bool, error) {
+	if !RequiresWorkspacePreparation(session) {
+		return false, nil
+	}
+	destinations, err := queryOne(ctx, db, `SELECT egress_destinations FROM runtime_revision WHERE revision = $1`, pgx.RowTo[[]string], session.GetPreparedRevision())
+	if err != nil {
+		return false, fmt.Errorf("read prepared revision egress: %w", notFoundOr(err))
+	}
+	return RequiresPreparedAdmission(session, destinations), nil
+}
+
+// WorkspacePreparationRequired reports whether the runtime must hold turns until
+// preparation is confirmed, using the same predicate as store admission.
+func (c *Client) WorkspacePreparationRequired(ctx context.Context, session *api.Session) (bool, error) {
+	return requiresPreparedAdmission(ctx, c.db, session)
 }
 
 type nativePreparationRow struct {
@@ -388,14 +423,16 @@ func (c *Client) CompleteWorkspacePreparation(ctx context.Context, binding Runti
 }
 
 // requireNativeTaskAdmission positively checks owned code preparations. It never
-// imposes the Mainloop-only API on an ordinary standalone or Git-free Session.
+// imposes the Mainloop-only API on an ordinary standalone, Git-free or direct-Git
+// Session.
 func requireNativeTaskAdmission(ctx context.Context, tx pgx.Tx, row sessionRow) error {
 	session, err := toSession(row)
 	if err != nil {
 		return err
 	}
-	if !RequiresWorkspacePreparation(session) {
-		return nil
+	required, err := requiresPreparedAdmission(ctx, tx, session)
+	if err != nil || !required {
+		return err
 	}
 	saved, err := readNativePreparation(ctx, tx, row.ID.String())
 	// Confirmed setup belongs to the captured runtime generation, not a completed

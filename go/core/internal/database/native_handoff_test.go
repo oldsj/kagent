@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	api "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
+	apiworkspace "github.com/kagent-dev/kagent/go/api/workspace"
 	"github.com/kagent-dev/kagent/go/core/internal/dbtest"
 	"github.com/kagent-dev/kagent/go/core/pkg/migrations"
 	"github.com/kagent-dev/kagent/go/harness/runtime/workspace"
@@ -22,6 +23,13 @@ import (
 )
 
 func nativeActionFixture(t *testing.T) (*Client, *Client, *api.Session, *RuntimeGeneration, *api.PrepareSessionWorkspaceRequest, *api.NativeWorkspacePreparation) {
+	t.Helper()
+	return nativeActionFixtureWithEgress(t, []string{apiworkspace.ReadProxyOrigin + ":80", apiworkspace.PushProxyOrigin + ":80"})
+}
+
+// nativeActionFixtureWithEgress pins the composed revision's effective egress,
+// which decides whether its Git uses the enforcing proxies.
+func nativeActionFixtureWithEgress(t *testing.T, destinations []string) (*Client, *Client, *api.Session, *RuntimeGeneration, *api.PrepareSessionWorkspaceRequest, *api.NativeWorkspacePreparation) {
 	t.Helper()
 	client := NewClient(setupTestDB(t))
 	peerPool, err := pgxpool.New(t.Context(), sharedConnStr)
@@ -42,6 +50,7 @@ func nativeActionFixture(t *testing.T) (*Client, *Client, *api.Session, *Runtime
 	variant.SourceSnapshot, err = json.Marshal(EnvironmentRevisionSnapshot{BaseRevision: "base-native", Environment: req.DevelopmentEnvironment, Composition: req.RuntimeComposition})
 	require.NoError(t, err)
 	variant.GitOrigins = []string{"github.com"}
+	variant.EgressDestinations = destinations
 	require.NoError(t, client.RecordRuntimeRevision(t.Context(), variant, false))
 	session, _, err := client.CreateSession(t.Context(), req, "native-create")
 	require.NoError(t, err)
@@ -368,4 +377,64 @@ func TestNativePreparationMigrationReplay(t *testing.T) {
 	}))
 	require.NoError(t, migrations.RunUp(t.Context(), dsn, migrations.BuiltinSources(false)))
 	require.NoError(t, migrations.VerifyMigrated(t.Context(), dsn, migrations.BuiltinSources(false)))
+}
+
+func TestUsesEnforcingGitProxies(t *testing.T) {
+	read, push := apiworkspace.ReadProxyOrigin+":80", apiworkspace.PushProxyOrigin+":80"
+	for name, tc := range map[string]struct {
+		destinations []string
+		want         bool
+	}{
+		"none":         {nil, false},
+		"direct Git":   {[]string{"https://github.com:443"}, false},
+		"read only":    {[]string{read}, false},
+		"push only":    {[]string{push}, false},
+		"both proxies": {[]string{"http://mainloop-mcp.mainloop.svc.cluster.local:80", read, push}, true},
+		"bare proxies": {[]string{apiworkspace.ReadProxyOrigin, apiworkspace.PushProxyOrigin}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.Equal(t, tc.want, UsesEnforcingGitProxies(tc.destinations))
+		})
+	}
+}
+
+func TestNativeAdmissionRequiresPreparationOnlyForProxyGit(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		destinations []string
+		required     bool
+	}{
+		{"direct Git", []string{"https://github.com:443"}, false},
+		{"read proxy only", []string{apiworkspace.ReadProxyOrigin + ":80"}, false},
+		{"enforcing proxies", []string{apiworkspace.ReadProxyOrigin + ":80", apiworkspace.PushProxyOrigin + ":80"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, session := nativeSessionWithEgress(t, tc.destinations)
+			require.True(t, RequiresWorkspacePreparation(session), "fixture is a Mainloop D + workspace Session")
+			required, err := c.WorkspacePreparationRequired(t.Context(), session)
+			require.NoError(t, err)
+			require.Equal(t, tc.required, required)
+			err = c.ReserveSessionDispatch(t.Context(), session.Id, uuid.New(), "")
+			if tc.required {
+				require.ErrorIs(t, err, ErrFailedPrecondition, "proxy-mode admission waits for confirmed preparation")
+			} else {
+				require.NoError(t, err, "direct-Git admission behaves as before preparation")
+			}
+		})
+	}
+}
+
+func TestNativeAdmissionRejectsMissingRevision(t *testing.T) {
+	c, session := nativeSessionWithEgress(t, []string{apiworkspace.ReadProxyOrigin + ":80", apiworkspace.PushProxyOrigin + ":80"})
+	missing := proto.CloneOf(session)
+	missing.PreparedRevision = "absent-revision"
+	_, err := c.WorkspacePreparationRequired(t.Context(), missing)
+	require.ErrorIs(t, err, ErrNotFound)
+}
+
+// nativeSessionWithEgress keeps only the store and Session of a native fixture.
+func nativeSessionWithEgress(t *testing.T, destinations []string) (*Client, *api.Session) {
+	t.Helper()
+	c, _, session, _, _, _ := nativeActionFixtureWithEgress(t, destinations) //nolint:dogsled // admission needs only the Session
+	return c, session
 }
