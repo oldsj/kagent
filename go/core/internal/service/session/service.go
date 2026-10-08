@@ -190,6 +190,16 @@ func (s *Service) Get(ctx context.Context, id string) (*apiv1alpha1.Session, err
 	if _, shared := auth.ShareContextFrom(ctx); shared {
 		return session, nil
 	}
+	if store, ok := s.store.(nativePreparationStore); ok {
+		receipt, err := store.GetWorkspacePreparationReceipt(ctx, id)
+		if err != nil {
+			return nil, serviceerrors.NewInternal("Failed to read workspace preparation", nil)
+		}
+		if receipt != nil {
+			session = proto.CloneOf(session)
+			session.WorkspacePreparation = receipt
+		}
+	}
 	reader, ok := s.workflow.(runtimeAssociationReader)
 	if !ok {
 		return session, nil
@@ -246,11 +256,12 @@ func (s *Service) getAuthorized(ctx context.Context, id string, verb auth.Verb) 
 // Never carry an earlier observation through cached reads or lifecycle inputs,
 // and never attach a new observation to an object owned by the store.
 func withoutRuntimeAssociation(session *apiv1alpha1.Session) *apiv1alpha1.Session {
-	if session.GetRuntimeAssociation() == nil {
+	if session.GetRuntimeAssociation() == nil && session.GetWorkspacePreparation() == nil {
 		return session
 	}
 	result := proto.CloneOf(session)
 	result.RuntimeAssociation = nil
+	result.WorkspacePreparation = nil
 	return result
 }
 

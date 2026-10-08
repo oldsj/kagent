@@ -156,8 +156,10 @@ type Session struct {
 	// Output only. Present only on authorized GetSession for a freshly observed
 	// current active runtime. Never a creation, resume, or fork input.
 	RuntimeAssociation *RuntimeAssociation `protobuf:"bytes,20,opt,name=runtime_association,json=runtimeAssociation,proto3" json:"runtime_association,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// Output only, historical preparation evidence. GET never refreshes it.
+	WorkspacePreparation *WorkspacePreparationReceipt `protobuf:"bytes,21,opt,name=workspace_preparation,json=workspacePreparation,proto3" json:"workspace_preparation,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *Session) Reset() {
@@ -305,6 +307,13 @@ func (x *Session) GetRuntimeComposition() *RuntimeComposition {
 func (x *Session) GetRuntimeAssociation() *RuntimeAssociation {
 	if x != nil {
 		return x.RuntimeAssociation
+	}
+	return nil
+}
+
+func (x *Session) GetWorkspacePreparation() *WorkspacePreparationReceipt {
+	if x != nil {
+		return x.WorkspacePreparation
 	}
 	return nil
 }
@@ -1719,6 +1728,358 @@ func (*RevokeSessionShareResponse) Descriptor() ([]byte, []int) {
 	return file_kagent_api_v1alpha1_sessions_proto_rawDescGZIP(), []int{27}
 }
 
+// A fixed model-free action over the original owned Create tuple. Repeating a
+// completed action requests a new read-only challenge; uncertain setup never reissues.
+type PrepareSessionWorkspaceRequest struct {
+	state                  protoimpl.MessageState  `protogen:"open.v1"`
+	SessionId              string                  `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	ActionId               string                  `protobuf:"bytes,2,opt,name=action_id,json=actionId,proto3" json:"action_id,omitempty"`
+	CreateRequestId        string                  `protobuf:"bytes,3,opt,name=create_request_id,json=createRequestId,proto3" json:"create_request_id,omitempty"`
+	GenerationId           string                  `protobuf:"bytes,4,opt,name=generation_id,json=generationId,proto3" json:"generation_id,omitempty"`
+	ActorUid               string                  `protobuf:"bytes,5,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	PreparedRevision       string                  `protobuf:"bytes,6,opt,name=prepared_revision,json=preparedRevision,proto3" json:"prepared_revision,omitempty"`
+	Workspace              *Workspace              `protobuf:"bytes,7,opt,name=workspace,proto3" json:"workspace,omitempty"`
+	DevelopmentEnvironment *DevelopmentEnvironment `protobuf:"bytes,8,opt,name=development_environment,json=developmentEnvironment,proto3" json:"development_environment,omitempty"`
+	RuntimeComposition     *RuntimeComposition     `protobuf:"bytes,9,opt,name=runtime_composition,json=runtimeComposition,proto3" json:"runtime_composition,omitempty"`
+	SetupProfile           string                  `protobuf:"bytes,10,opt,name=setup_profile,json=setupProfile,proto3" json:"setup_profile,omitempty"`
+	SetupDigest            string                  `protobuf:"bytes,11,opt,name=setup_digest,json=setupDigest,proto3" json:"setup_digest,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
+}
+
+func (x *PrepareSessionWorkspaceRequest) Reset() {
+	*x = PrepareSessionWorkspaceRequest{}
+	mi := &file_kagent_api_v1alpha1_sessions_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PrepareSessionWorkspaceRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PrepareSessionWorkspaceRequest) ProtoMessage() {}
+
+func (x *PrepareSessionWorkspaceRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kagent_api_v1alpha1_sessions_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PrepareSessionWorkspaceRequest.ProtoReflect.Descriptor instead.
+func (*PrepareSessionWorkspaceRequest) Descriptor() ([]byte, []int) {
+	return file_kagent_api_v1alpha1_sessions_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *PrepareSessionWorkspaceRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *PrepareSessionWorkspaceRequest) GetActionId() string {
+	if x != nil {
+		return x.ActionId
+	}
+	return ""
+}
+
+func (x *PrepareSessionWorkspaceRequest) GetCreateRequestId() string {
+	if x != nil {
+		return x.CreateRequestId
+	}
+	return ""
+}
+
+func (x *PrepareSessionWorkspaceRequest) GetGenerationId() string {
+	if x != nil {
+		return x.GenerationId
+	}
+	return ""
+}
+
+func (x *PrepareSessionWorkspaceRequest) GetActorUid() string {
+	if x != nil {
+		return x.ActorUid
+	}
+	return ""
+}
+
+func (x *PrepareSessionWorkspaceRequest) GetPreparedRevision() string {
+	if x != nil {
+		return x.PreparedRevision
+	}
+	return ""
+}
+
+func (x *PrepareSessionWorkspaceRequest) GetWorkspace() *Workspace {
+	if x != nil {
+		return x.Workspace
+	}
+	return nil
+}
+
+func (x *PrepareSessionWorkspaceRequest) GetDevelopmentEnvironment() *DevelopmentEnvironment {
+	if x != nil {
+		return x.DevelopmentEnvironment
+	}
+	return nil
+}
+
+func (x *PrepareSessionWorkspaceRequest) GetRuntimeComposition() *RuntimeComposition {
+	if x != nil {
+		return x.RuntimeComposition
+	}
+	return nil
+}
+
+func (x *PrepareSessionWorkspaceRequest) GetSetupProfile() string {
+	if x != nil {
+		return x.SetupProfile
+	}
+	return ""
+}
+
+func (x *PrepareSessionWorkspaceRequest) GetSetupDigest() string {
+	if x != nil {
+		return x.SetupDigest
+	}
+	return ""
+}
+
+type PrepareSessionWorkspaceResponse struct {
+	state         protoimpl.MessageState       `protogen:"open.v1"`
+	Receipt       *WorkspacePreparationReceipt `protobuf:"bytes,1,opt,name=receipt,proto3" json:"receipt,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PrepareSessionWorkspaceResponse) Reset() {
+	*x = PrepareSessionWorkspaceResponse{}
+	mi := &file_kagent_api_v1alpha1_sessions_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PrepareSessionWorkspaceResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PrepareSessionWorkspaceResponse) ProtoMessage() {}
+
+func (x *PrepareSessionWorkspaceResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_kagent_api_v1alpha1_sessions_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PrepareSessionWorkspaceResponse.ProtoReflect.Descriptor instead.
+func (*PrepareSessionWorkspaceResponse) Descriptor() ([]byte, []int) {
+	return file_kagent_api_v1alpha1_sessions_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *PrepareSessionWorkspaceResponse) GetReceipt() *WorkspacePreparationReceipt {
+	if x != nil {
+		return x.Receipt
+	}
+	return nil
+}
+
+// Bounded output-only original-action evidence. A pending/uncertain classification
+// or historical=true cannot authorize current native work.
+type WorkspacePreparationReceipt struct {
+	state               protoimpl.MessageState          `protogen:"open.v1"`
+	Original            *PrepareSessionWorkspaceRequest `protobuf:"bytes,1,opt,name=original,proto3" json:"original,omitempty"`
+	RequestDigest       string                          `protobuf:"bytes,2,opt,name=request_digest,json=requestDigest,proto3" json:"request_digest,omitempty"`
+	ExecutionId         string                          `protobuf:"bytes,3,opt,name=execution_id,json=executionId,proto3" json:"execution_id,omitempty"`
+	ContextId           string                          `protobuf:"bytes,4,opt,name=context_id,json=contextId,proto3" json:"context_id,omitempty"`
+	Atespace            string                          `protobuf:"bytes,5,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	ActorName           string                          `protobuf:"bytes,6,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	Classification      string                          `protobuf:"bytes,7,opt,name=classification,proto3" json:"classification,omitempty"`
+	ChallengeId         string                          `protobuf:"bytes,8,opt,name=challenge_id,json=challengeId,proto3" json:"challenge_id,omitempty"`
+	ObservationSequence uint64                          `protobuf:"varint,9,opt,name=observation_sequence,json=observationSequence,proto3" json:"observation_sequence,omitempty"`
+	Head                string                          `protobuf:"bytes,10,opt,name=head,proto3" json:"head,omitempty"`
+	Branch              string                          `protobuf:"bytes,11,opt,name=branch,proto3" json:"branch,omitempty"`
+	TransportDigest     string                          `protobuf:"bytes,12,opt,name=transport_digest,json=transportDigest,proto3" json:"transport_digest,omitempty"`
+	ConfigDigest        string                          `protobuf:"bytes,13,opt,name=config_digest,json=configDigest,proto3" json:"config_digest,omitempty"`
+	McpDigest           string                          `protobuf:"bytes,14,opt,name=mcp_digest,json=mcpDigest,proto3" json:"mcp_digest,omitempty"`
+	NativeHook          string                          `protobuf:"bytes,15,opt,name=native_hook,json=nativeHook,proto3" json:"native_hook,omitempty"`
+	EffectObservedAt    *timestamppb.Timestamp          `protobuf:"bytes,16,opt,name=effect_observed_at,json=effectObservedAt,proto3" json:"effect_observed_at,omitempty"`
+	ObservedAt          *timestamppb.Timestamp          `protobuf:"bytes,17,opt,name=observed_at,json=observedAt,proto3" json:"observed_at,omitempty"`
+	Historical          bool                            `protobuf:"varint,18,opt,name=historical,proto3" json:"historical,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *WorkspacePreparationReceipt) Reset() {
+	*x = WorkspacePreparationReceipt{}
+	mi := &file_kagent_api_v1alpha1_sessions_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WorkspacePreparationReceipt) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WorkspacePreparationReceipt) ProtoMessage() {}
+
+func (x *WorkspacePreparationReceipt) ProtoReflect() protoreflect.Message {
+	mi := &file_kagent_api_v1alpha1_sessions_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WorkspacePreparationReceipt.ProtoReflect.Descriptor instead.
+func (*WorkspacePreparationReceipt) Descriptor() ([]byte, []int) {
+	return file_kagent_api_v1alpha1_sessions_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *WorkspacePreparationReceipt) GetOriginal() *PrepareSessionWorkspaceRequest {
+	if x != nil {
+		return x.Original
+	}
+	return nil
+}
+
+func (x *WorkspacePreparationReceipt) GetRequestDigest() string {
+	if x != nil {
+		return x.RequestDigest
+	}
+	return ""
+}
+
+func (x *WorkspacePreparationReceipt) GetExecutionId() string {
+	if x != nil {
+		return x.ExecutionId
+	}
+	return ""
+}
+
+func (x *WorkspacePreparationReceipt) GetContextId() string {
+	if x != nil {
+		return x.ContextId
+	}
+	return ""
+}
+
+func (x *WorkspacePreparationReceipt) GetAtespace() string {
+	if x != nil {
+		return x.Atespace
+	}
+	return ""
+}
+
+func (x *WorkspacePreparationReceipt) GetActorName() string {
+	if x != nil {
+		return x.ActorName
+	}
+	return ""
+}
+
+func (x *WorkspacePreparationReceipt) GetClassification() string {
+	if x != nil {
+		return x.Classification
+	}
+	return ""
+}
+
+func (x *WorkspacePreparationReceipt) GetChallengeId() string {
+	if x != nil {
+		return x.ChallengeId
+	}
+	return ""
+}
+
+func (x *WorkspacePreparationReceipt) GetObservationSequence() uint64 {
+	if x != nil {
+		return x.ObservationSequence
+	}
+	return 0
+}
+
+func (x *WorkspacePreparationReceipt) GetHead() string {
+	if x != nil {
+		return x.Head
+	}
+	return ""
+}
+
+func (x *WorkspacePreparationReceipt) GetBranch() string {
+	if x != nil {
+		return x.Branch
+	}
+	return ""
+}
+
+func (x *WorkspacePreparationReceipt) GetTransportDigest() string {
+	if x != nil {
+		return x.TransportDigest
+	}
+	return ""
+}
+
+func (x *WorkspacePreparationReceipt) GetConfigDigest() string {
+	if x != nil {
+		return x.ConfigDigest
+	}
+	return ""
+}
+
+func (x *WorkspacePreparationReceipt) GetMcpDigest() string {
+	if x != nil {
+		return x.McpDigest
+	}
+	return ""
+}
+
+func (x *WorkspacePreparationReceipt) GetNativeHook() string {
+	if x != nil {
+		return x.NativeHook
+	}
+	return ""
+}
+
+func (x *WorkspacePreparationReceipt) GetEffectObservedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.EffectObservedAt
+	}
+	return nil
+}
+
+func (x *WorkspacePreparationReceipt) GetObservedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ObservedAt
+	}
+	return nil
+}
+
+func (x *WorkspacePreparationReceipt) GetHistorical() bool {
+	if x != nil {
+		return x.Historical
+	}
+	return false
+}
+
 var File_kagent_api_v1alpha1_sessions_proto protoreflect.FileDescriptor
 
 const file_kagent_api_v1alpha1_sessions_proto_rawDesc = "" +
@@ -1726,7 +2087,7 @@ const file_kagent_api_v1alpha1_sessions_proto_rawDesc = "" +
 	"\"kagent/api/v1alpha1/sessions.proto\x12\x13kagent.api.v1alpha1\x1a\x1bbuf/validate/validate.proto\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a kagent/api/v1alpha1/common.proto\x1a!kagent/api/v1alpha1/runtime.proto\";\n" +
 	"\aFailure\x12\x16\n" +
 	"\x06reason\x18\x01 \x01(\tR\x06reason\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\xf7\a\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xde\b\n" +
 	"\aSession\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x18\n" +
 	"\acreator\x18\x02 \x01(\tR\acreator\x12<\n" +
@@ -1748,7 +2109,8 @@ const file_kagent_api_v1alpha1_sessions_proto_rawDesc = "" +
 	"\vcredentials\x18\x11 \x03(\v2&.kagent.api.v1alpha1.SessionCredentialR\vcredentials\x12d\n" +
 	"\x17development_environment\x18\x12 \x01(\v2+.kagent.api.v1alpha1.DevelopmentEnvironmentR\x16developmentEnvironment\x12X\n" +
 	"\x13runtime_composition\x18\x13 \x01(\v2'.kagent.api.v1alpha1.RuntimeCompositionR\x12runtimeComposition\x12X\n" +
-	"\x13runtime_association\x18\x14 \x01(\v2'.kagent.api.v1alpha1.RuntimeAssociationR\x12runtimeAssociationJ\x04\b\x03\x10\x04J\x04\b\x04\x10\x05J\x04\b\f\x10\rR\aharnessR\x0eagent_templateR\x06labels\"\xce\x01\n" +
+	"\x13runtime_association\x18\x14 \x01(\v2'.kagent.api.v1alpha1.RuntimeAssociationR\x12runtimeAssociation\x12e\n" +
+	"\x15workspace_preparation\x18\x15 \x01(\v20.kagent.api.v1alpha1.WorkspacePreparationReceiptR\x14workspacePreparationJ\x04\b\x03\x10\x04J\x04\b\x04\x10\x05J\x04\b\f\x10\rR\aharnessR\x0eagent_templateR\x06labels\"\xce\x01\n" +
 	"\x12RuntimeAssociation\x12#\n" +
 	"\rgeneration_id\x18\x01 \x01(\tR\fgenerationId\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
@@ -1851,13 +2213,62 @@ const file_kagent_api_v1alpha1_sessions_proto_rawDesc = "" +
 	"\x04page\x18\x02 \x01(\v2!.kagent.api.v1alpha1.PageResponseR\x04page\"@\n" +
 	"\x19RevokeSessionShareRequest\x12#\n" +
 	"\bshare_id\x18\x01 \x01(\tB\b\xbaH\x05r\x03\xb0\x01\x01R\ashareId\"\x1c\n" +
-	"\x1aRevokeSessionShareResponse*\x93\x01\n" +
+	"\x1aRevokeSessionShareResponse\"\x8a\a\n" +
+	"\x1ePrepareSessionWorkspaceRequest\x12'\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tB\b\xbaH\x05r\x03\xb0\x01\x01R\tsessionId\x12;\n" +
+	"\taction_id\x18\x02 \x01(\tB\x1e\xbaH\x1br\x19\x10\x01\x18\x80\x012\x12^[A-Za-z0-9:._-]+$R\bactionId\x126\n" +
+	"\x11create_request_id\x18\x03 \x01(\tB\n" +
+	"\xbaH\ar\x05\x10\x01\x18\x80\x01R\x0fcreateRequestId\x12-\n" +
+	"\rgeneration_id\x18\x04 \x01(\tB\b\xbaH\x05r\x03\xb0\x01\x01R\fgenerationId\x12'\n" +
+	"\tactor_uid\x18\x05 \x01(\tB\n" +
+	"\xbaH\ar\x05\x10\x01\x18\x80\x01R\bactorUid\x127\n" +
+	"\x11prepared_revision\x18\x06 \x01(\tB\n" +
+	"\xbaH\ar\x05\x10\x01\x18\x80\x01R\x10preparedRevision\x12D\n" +
+	"\tworkspace\x18\a \x01(\v2\x1e.kagent.api.v1alpha1.WorkspaceB\x06\xbaH\x03\xc8\x01\x01R\tworkspace\x12l\n" +
+	"\x17development_environment\x18\b \x01(\v2+.kagent.api.v1alpha1.DevelopmentEnvironmentB\x06\xbaH\x03\xc8\x01\x01R\x16developmentEnvironment\x12`\n" +
+	"\x13runtime_composition\x18\t \x01(\v2'.kagent.api.v1alpha1.RuntimeCompositionB\x06\xbaH\x03\xc8\x01\x01R\x12runtimeComposition\x12=\n" +
+	"\rsetup_profile\x18\n" +
+	" \x01(\tB\x18\xbaH\x15r\x13R\n" +
+	"supervisorR\x05childR\fsetupProfile\x128\n" +
+	"\fsetup_digest\x18\v \x01(\tB\x15\xbaH\x12r\x102\x0e^[a-f0-9]{64}$R\vsetupDigest:\xa9\x01\xbaH\xa5\x01\x1a\xa2\x01\n" +
+	"\x1apreparation.exact_checkout\x127preparation requires a full commit SHA and named branch\x1aKthis.workspace.ref.matches('^[a-f0-9]{40}$') && this.workspace.branch != ''\"m\n" +
+	"\x1fPrepareSessionWorkspaceResponse\x12J\n" +
+	"\areceipt\x18\x01 \x01(\v20.kagent.api.v1alpha1.WorkspacePreparationReceiptR\areceipt\"\xf3\x05\n" +
+	"\x1bWorkspacePreparationReceipt\x12O\n" +
+	"\boriginal\x18\x01 \x01(\v23.kagent.api.v1alpha1.PrepareSessionWorkspaceRequestR\boriginal\x12%\n" +
+	"\x0erequest_digest\x18\x02 \x01(\tR\rrequestDigest\x12!\n" +
+	"\fexecution_id\x18\x03 \x01(\tR\vexecutionId\x12\x1d\n" +
+	"\n" +
+	"context_id\x18\x04 \x01(\tR\tcontextId\x12\x1a\n" +
+	"\batespace\x18\x05 \x01(\tR\batespace\x12\x1d\n" +
+	"\n" +
+	"actor_name\x18\x06 \x01(\tR\tactorName\x12&\n" +
+	"\x0eclassification\x18\a \x01(\tR\x0eclassification\x12!\n" +
+	"\fchallenge_id\x18\b \x01(\tR\vchallengeId\x121\n" +
+	"\x14observation_sequence\x18\t \x01(\x04R\x13observationSequence\x12\x12\n" +
+	"\x04head\x18\n" +
+	" \x01(\tR\x04head\x12\x16\n" +
+	"\x06branch\x18\v \x01(\tR\x06branch\x12)\n" +
+	"\x10transport_digest\x18\f \x01(\tR\x0ftransportDigest\x12#\n" +
+	"\rconfig_digest\x18\r \x01(\tR\fconfigDigest\x12\x1d\n" +
+	"\n" +
+	"mcp_digest\x18\x0e \x01(\tR\tmcpDigest\x12\x1f\n" +
+	"\vnative_hook\x18\x0f \x01(\tR\n" +
+	"nativeHook\x12H\n" +
+	"\x12effect_observed_at\x18\x10 \x01(\v2\x1a.google.protobuf.TimestampR\x10effectObservedAt\x12;\n" +
+	"\vobserved_at\x18\x11 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"observedAt\x12\x1e\n" +
+	"\n" +
+	"historical\x18\x12 \x01(\bR\n" +
+	"historical*\x93\x01\n" +
 	"\x16SessionSharePermission\x12(\n" +
 	"$SESSION_SHARE_PERMISSION_UNSPECIFIED\x10\x00\x12&\n" +
 	"\"SESSION_SHARE_PERMISSION_READ_ONLY\x10\x01\x12'\n" +
-	"#SESSION_SHARE_PERMISSION_READ_WRITE\x10\x022\xcd\b\n" +
+	"#SESSION_SHARE_PERMISSION_READ_WRITE\x10\x022\xd4\t\n" +
 	"\x0eSessionService\x12f\n" +
-	"\rCreateSession\x12).kagent.api.v1alpha1.CreateSessionRequest\x1a*.kagent.api.v1alpha1.CreateSessionResponse\x12]\n" +
+	"\rCreateSession\x12).kagent.api.v1alpha1.CreateSessionRequest\x1a*.kagent.api.v1alpha1.CreateSessionResponse\x12\x84\x01\n" +
+	"\x17PrepareSessionWorkspace\x123.kagent.api.v1alpha1.PrepareSessionWorkspaceRequest\x1a4.kagent.api.v1alpha1.PrepareSessionWorkspaceResponse\x12]\n" +
 	"\n" +
 	"GetSession\x12&.kagent.api.v1alpha1.GetSessionRequest\x1a'.kagent.api.v1alpha1.GetSessionResponse\x12c\n" +
 	"\fListSessions\x12(.kagent.api.v1alpha1.ListSessionsRequest\x1a).kagent.api.v1alpha1.ListSessionsResponse\x12r\n" +
@@ -1882,107 +2293,120 @@ func file_kagent_api_v1alpha1_sessions_proto_rawDescGZIP() []byte {
 }
 
 var file_kagent_api_v1alpha1_sessions_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_kagent_api_v1alpha1_sessions_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
+var file_kagent_api_v1alpha1_sessions_proto_msgTypes = make([]protoimpl.MessageInfo, 31)
 var file_kagent_api_v1alpha1_sessions_proto_goTypes = []any{
-	(SessionSharePermission)(0),        // 0: kagent.api.v1alpha1.SessionSharePermission
-	(*Failure)(nil),                    // 1: kagent.api.v1alpha1.Failure
-	(*Session)(nil),                    // 2: kagent.api.v1alpha1.Session
-	(*RuntimeAssociation)(nil),         // 3: kagent.api.v1alpha1.RuntimeAssociation
-	(*SecretKeyReference)(nil),         // 4: kagent.api.v1alpha1.SecretKeyReference
-	(*SessionCredential)(nil),          // 5: kagent.api.v1alpha1.SessionCredential
-	(*DevelopmentEnvironment)(nil),     // 6: kagent.api.v1alpha1.DevelopmentEnvironment
-	(*RuntimeComposition)(nil),         // 7: kagent.api.v1alpha1.RuntimeComposition
-	(*CreateSessionRequest)(nil),       // 8: kagent.api.v1alpha1.CreateSessionRequest
-	(*CreateSessionResponse)(nil),      // 9: kagent.api.v1alpha1.CreateSessionResponse
-	(*GetSessionRequest)(nil),          // 10: kagent.api.v1alpha1.GetSessionRequest
-	(*GetSessionResponse)(nil),         // 11: kagent.api.v1alpha1.GetSessionResponse
-	(*ListSessionsRequest)(nil),        // 12: kagent.api.v1alpha1.ListSessionsRequest
-	(*ListSessionsResponse)(nil),       // 13: kagent.api.v1alpha1.ListSessionsResponse
-	(*UpdateSessionNameRequest)(nil),   // 14: kagent.api.v1alpha1.UpdateSessionNameRequest
-	(*UpdateSessionNameResponse)(nil),  // 15: kagent.api.v1alpha1.UpdateSessionNameResponse
-	(*SuspendSessionRequest)(nil),      // 16: kagent.api.v1alpha1.SuspendSessionRequest
-	(*SuspendSessionResponse)(nil),     // 17: kagent.api.v1alpha1.SuspendSessionResponse
-	(*ResumeSessionRequest)(nil),       // 18: kagent.api.v1alpha1.ResumeSessionRequest
-	(*ResumeSessionResponse)(nil),      // 19: kagent.api.v1alpha1.ResumeSessionResponse
-	(*DeleteSessionRequest)(nil),       // 20: kagent.api.v1alpha1.DeleteSessionRequest
-	(*DeleteSessionResponse)(nil),      // 21: kagent.api.v1alpha1.DeleteSessionResponse
-	(*SessionShare)(nil),               // 22: kagent.api.v1alpha1.SessionShare
-	(*CreateSessionShareRequest)(nil),  // 23: kagent.api.v1alpha1.CreateSessionShareRequest
-	(*CreateSessionShareResponse)(nil), // 24: kagent.api.v1alpha1.CreateSessionShareResponse
-	(*ListSessionSharesRequest)(nil),   // 25: kagent.api.v1alpha1.ListSessionSharesRequest
-	(*ListSessionSharesResponse)(nil),  // 26: kagent.api.v1alpha1.ListSessionSharesResponse
-	(*RevokeSessionShareRequest)(nil),  // 27: kagent.api.v1alpha1.RevokeSessionShareRequest
-	(*RevokeSessionShareResponse)(nil), // 28: kagent.api.v1alpha1.RevokeSessionShareResponse
-	(*ResourceReference)(nil),          // 29: kagent.api.v1alpha1.ResourceReference
-	(RuntimeState)(0),                  // 30: kagent.api.v1alpha1.RuntimeState
-	(RuntimeOperation)(0),              // 31: kagent.api.v1alpha1.RuntimeOperation
-	(*timestamppb.Timestamp)(nil),      // 32: google.protobuf.Timestamp
-	(*Workspace)(nil),                  // 33: kagent.api.v1alpha1.Workspace
-	(*PageRequest)(nil),                // 34: kagent.api.v1alpha1.PageRequest
-	(*PageResponse)(nil),               // 35: kagent.api.v1alpha1.PageResponse
-	(*durationpb.Duration)(nil),        // 36: google.protobuf.Duration
+	(SessionSharePermission)(0),             // 0: kagent.api.v1alpha1.SessionSharePermission
+	(*Failure)(nil),                         // 1: kagent.api.v1alpha1.Failure
+	(*Session)(nil),                         // 2: kagent.api.v1alpha1.Session
+	(*RuntimeAssociation)(nil),              // 3: kagent.api.v1alpha1.RuntimeAssociation
+	(*SecretKeyReference)(nil),              // 4: kagent.api.v1alpha1.SecretKeyReference
+	(*SessionCredential)(nil),               // 5: kagent.api.v1alpha1.SessionCredential
+	(*DevelopmentEnvironment)(nil),          // 6: kagent.api.v1alpha1.DevelopmentEnvironment
+	(*RuntimeComposition)(nil),              // 7: kagent.api.v1alpha1.RuntimeComposition
+	(*CreateSessionRequest)(nil),            // 8: kagent.api.v1alpha1.CreateSessionRequest
+	(*CreateSessionResponse)(nil),           // 9: kagent.api.v1alpha1.CreateSessionResponse
+	(*GetSessionRequest)(nil),               // 10: kagent.api.v1alpha1.GetSessionRequest
+	(*GetSessionResponse)(nil),              // 11: kagent.api.v1alpha1.GetSessionResponse
+	(*ListSessionsRequest)(nil),             // 12: kagent.api.v1alpha1.ListSessionsRequest
+	(*ListSessionsResponse)(nil),            // 13: kagent.api.v1alpha1.ListSessionsResponse
+	(*UpdateSessionNameRequest)(nil),        // 14: kagent.api.v1alpha1.UpdateSessionNameRequest
+	(*UpdateSessionNameResponse)(nil),       // 15: kagent.api.v1alpha1.UpdateSessionNameResponse
+	(*SuspendSessionRequest)(nil),           // 16: kagent.api.v1alpha1.SuspendSessionRequest
+	(*SuspendSessionResponse)(nil),          // 17: kagent.api.v1alpha1.SuspendSessionResponse
+	(*ResumeSessionRequest)(nil),            // 18: kagent.api.v1alpha1.ResumeSessionRequest
+	(*ResumeSessionResponse)(nil),           // 19: kagent.api.v1alpha1.ResumeSessionResponse
+	(*DeleteSessionRequest)(nil),            // 20: kagent.api.v1alpha1.DeleteSessionRequest
+	(*DeleteSessionResponse)(nil),           // 21: kagent.api.v1alpha1.DeleteSessionResponse
+	(*SessionShare)(nil),                    // 22: kagent.api.v1alpha1.SessionShare
+	(*CreateSessionShareRequest)(nil),       // 23: kagent.api.v1alpha1.CreateSessionShareRequest
+	(*CreateSessionShareResponse)(nil),      // 24: kagent.api.v1alpha1.CreateSessionShareResponse
+	(*ListSessionSharesRequest)(nil),        // 25: kagent.api.v1alpha1.ListSessionSharesRequest
+	(*ListSessionSharesResponse)(nil),       // 26: kagent.api.v1alpha1.ListSessionSharesResponse
+	(*RevokeSessionShareRequest)(nil),       // 27: kagent.api.v1alpha1.RevokeSessionShareRequest
+	(*RevokeSessionShareResponse)(nil),      // 28: kagent.api.v1alpha1.RevokeSessionShareResponse
+	(*PrepareSessionWorkspaceRequest)(nil),  // 29: kagent.api.v1alpha1.PrepareSessionWorkspaceRequest
+	(*PrepareSessionWorkspaceResponse)(nil), // 30: kagent.api.v1alpha1.PrepareSessionWorkspaceResponse
+	(*WorkspacePreparationReceipt)(nil),     // 31: kagent.api.v1alpha1.WorkspacePreparationReceipt
+	(*ResourceReference)(nil),               // 32: kagent.api.v1alpha1.ResourceReference
+	(RuntimeState)(0),                       // 33: kagent.api.v1alpha1.RuntimeState
+	(RuntimeOperation)(0),                   // 34: kagent.api.v1alpha1.RuntimeOperation
+	(*timestamppb.Timestamp)(nil),           // 35: google.protobuf.Timestamp
+	(*Workspace)(nil),                       // 36: kagent.api.v1alpha1.Workspace
+	(*PageRequest)(nil),                     // 37: kagent.api.v1alpha1.PageRequest
+	(*PageResponse)(nil),                    // 38: kagent.api.v1alpha1.PageResponse
+	(*durationpb.Duration)(nil),             // 39: google.protobuf.Duration
 }
 var file_kagent_api_v1alpha1_sessions_proto_depIdxs = []int32{
-	29, // 0: kagent.api.v1alpha1.Session.agent:type_name -> kagent.api.v1alpha1.ResourceReference
-	30, // 1: kagent.api.v1alpha1.Session.state:type_name -> kagent.api.v1alpha1.RuntimeState
-	31, // 2: kagent.api.v1alpha1.Session.operation:type_name -> kagent.api.v1alpha1.RuntimeOperation
+	32, // 0: kagent.api.v1alpha1.Session.agent:type_name -> kagent.api.v1alpha1.ResourceReference
+	33, // 1: kagent.api.v1alpha1.Session.state:type_name -> kagent.api.v1alpha1.RuntimeState
+	34, // 2: kagent.api.v1alpha1.Session.operation:type_name -> kagent.api.v1alpha1.RuntimeOperation
 	1,  // 3: kagent.api.v1alpha1.Session.failure:type_name -> kagent.api.v1alpha1.Failure
-	32, // 4: kagent.api.v1alpha1.Session.created_at:type_name -> google.protobuf.Timestamp
-	32, // 5: kagent.api.v1alpha1.Session.updated_at:type_name -> google.protobuf.Timestamp
-	33, // 6: kagent.api.v1alpha1.Session.workspace:type_name -> kagent.api.v1alpha1.Workspace
+	35, // 4: kagent.api.v1alpha1.Session.created_at:type_name -> google.protobuf.Timestamp
+	35, // 5: kagent.api.v1alpha1.Session.updated_at:type_name -> google.protobuf.Timestamp
+	36, // 6: kagent.api.v1alpha1.Session.workspace:type_name -> kagent.api.v1alpha1.Workspace
 	5,  // 7: kagent.api.v1alpha1.Session.credentials:type_name -> kagent.api.v1alpha1.SessionCredential
 	6,  // 8: kagent.api.v1alpha1.Session.development_environment:type_name -> kagent.api.v1alpha1.DevelopmentEnvironment
 	7,  // 9: kagent.api.v1alpha1.Session.runtime_composition:type_name -> kagent.api.v1alpha1.RuntimeComposition
 	3,  // 10: kagent.api.v1alpha1.Session.runtime_association:type_name -> kagent.api.v1alpha1.RuntimeAssociation
-	4,  // 11: kagent.api.v1alpha1.SessionCredential.secret_ref:type_name -> kagent.api.v1alpha1.SecretKeyReference
-	29, // 12: kagent.api.v1alpha1.CreateSessionRequest.agent:type_name -> kagent.api.v1alpha1.ResourceReference
-	33, // 13: kagent.api.v1alpha1.CreateSessionRequest.workspace:type_name -> kagent.api.v1alpha1.Workspace
-	5,  // 14: kagent.api.v1alpha1.CreateSessionRequest.credentials:type_name -> kagent.api.v1alpha1.SessionCredential
-	6,  // 15: kagent.api.v1alpha1.CreateSessionRequest.development_environment:type_name -> kagent.api.v1alpha1.DevelopmentEnvironment
-	2,  // 16: kagent.api.v1alpha1.CreateSessionResponse.session:type_name -> kagent.api.v1alpha1.Session
-	2,  // 17: kagent.api.v1alpha1.GetSessionResponse.session:type_name -> kagent.api.v1alpha1.Session
-	34, // 18: kagent.api.v1alpha1.ListSessionsRequest.page:type_name -> kagent.api.v1alpha1.PageRequest
-	29, // 19: kagent.api.v1alpha1.ListSessionsRequest.agent:type_name -> kagent.api.v1alpha1.ResourceReference
-	2,  // 20: kagent.api.v1alpha1.ListSessionsResponse.sessions:type_name -> kagent.api.v1alpha1.Session
-	35, // 21: kagent.api.v1alpha1.ListSessionsResponse.page:type_name -> kagent.api.v1alpha1.PageResponse
-	2,  // 22: kagent.api.v1alpha1.UpdateSessionNameResponse.session:type_name -> kagent.api.v1alpha1.Session
-	2,  // 23: kagent.api.v1alpha1.SuspendSessionResponse.session:type_name -> kagent.api.v1alpha1.Session
-	2,  // 24: kagent.api.v1alpha1.ResumeSessionResponse.session:type_name -> kagent.api.v1alpha1.Session
-	2,  // 25: kagent.api.v1alpha1.DeleteSessionResponse.session:type_name -> kagent.api.v1alpha1.Session
-	0,  // 26: kagent.api.v1alpha1.SessionShare.permission:type_name -> kagent.api.v1alpha1.SessionSharePermission
-	32, // 27: kagent.api.v1alpha1.SessionShare.created_at:type_name -> google.protobuf.Timestamp
-	32, // 28: kagent.api.v1alpha1.SessionShare.expires_at:type_name -> google.protobuf.Timestamp
-	0,  // 29: kagent.api.v1alpha1.CreateSessionShareRequest.permission:type_name -> kagent.api.v1alpha1.SessionSharePermission
-	36, // 30: kagent.api.v1alpha1.CreateSessionShareRequest.ttl:type_name -> google.protobuf.Duration
-	22, // 31: kagent.api.v1alpha1.CreateSessionShareResponse.share:type_name -> kagent.api.v1alpha1.SessionShare
-	34, // 32: kagent.api.v1alpha1.ListSessionSharesRequest.page:type_name -> kagent.api.v1alpha1.PageRequest
-	22, // 33: kagent.api.v1alpha1.ListSessionSharesResponse.shares:type_name -> kagent.api.v1alpha1.SessionShare
-	35, // 34: kagent.api.v1alpha1.ListSessionSharesResponse.page:type_name -> kagent.api.v1alpha1.PageResponse
-	8,  // 35: kagent.api.v1alpha1.SessionService.CreateSession:input_type -> kagent.api.v1alpha1.CreateSessionRequest
-	10, // 36: kagent.api.v1alpha1.SessionService.GetSession:input_type -> kagent.api.v1alpha1.GetSessionRequest
-	12, // 37: kagent.api.v1alpha1.SessionService.ListSessions:input_type -> kagent.api.v1alpha1.ListSessionsRequest
-	14, // 38: kagent.api.v1alpha1.SessionService.UpdateSessionName:input_type -> kagent.api.v1alpha1.UpdateSessionNameRequest
-	16, // 39: kagent.api.v1alpha1.SessionService.SuspendSession:input_type -> kagent.api.v1alpha1.SuspendSessionRequest
-	18, // 40: kagent.api.v1alpha1.SessionService.ResumeSession:input_type -> kagent.api.v1alpha1.ResumeSessionRequest
-	20, // 41: kagent.api.v1alpha1.SessionService.DeleteSession:input_type -> kagent.api.v1alpha1.DeleteSessionRequest
-	23, // 42: kagent.api.v1alpha1.SessionService.CreateSessionShare:input_type -> kagent.api.v1alpha1.CreateSessionShareRequest
-	25, // 43: kagent.api.v1alpha1.SessionService.ListSessionShares:input_type -> kagent.api.v1alpha1.ListSessionSharesRequest
-	27, // 44: kagent.api.v1alpha1.SessionService.RevokeSessionShare:input_type -> kagent.api.v1alpha1.RevokeSessionShareRequest
-	9,  // 45: kagent.api.v1alpha1.SessionService.CreateSession:output_type -> kagent.api.v1alpha1.CreateSessionResponse
-	11, // 46: kagent.api.v1alpha1.SessionService.GetSession:output_type -> kagent.api.v1alpha1.GetSessionResponse
-	13, // 47: kagent.api.v1alpha1.SessionService.ListSessions:output_type -> kagent.api.v1alpha1.ListSessionsResponse
-	15, // 48: kagent.api.v1alpha1.SessionService.UpdateSessionName:output_type -> kagent.api.v1alpha1.UpdateSessionNameResponse
-	17, // 49: kagent.api.v1alpha1.SessionService.SuspendSession:output_type -> kagent.api.v1alpha1.SuspendSessionResponse
-	19, // 50: kagent.api.v1alpha1.SessionService.ResumeSession:output_type -> kagent.api.v1alpha1.ResumeSessionResponse
-	21, // 51: kagent.api.v1alpha1.SessionService.DeleteSession:output_type -> kagent.api.v1alpha1.DeleteSessionResponse
-	24, // 52: kagent.api.v1alpha1.SessionService.CreateSessionShare:output_type -> kagent.api.v1alpha1.CreateSessionShareResponse
-	26, // 53: kagent.api.v1alpha1.SessionService.ListSessionShares:output_type -> kagent.api.v1alpha1.ListSessionSharesResponse
-	28, // 54: kagent.api.v1alpha1.SessionService.RevokeSessionShare:output_type -> kagent.api.v1alpha1.RevokeSessionShareResponse
-	45, // [45:55] is the sub-list for method output_type
-	35, // [35:45] is the sub-list for method input_type
-	35, // [35:35] is the sub-list for extension type_name
-	35, // [35:35] is the sub-list for extension extendee
-	0,  // [0:35] is the sub-list for field type_name
+	31, // 11: kagent.api.v1alpha1.Session.workspace_preparation:type_name -> kagent.api.v1alpha1.WorkspacePreparationReceipt
+	4,  // 12: kagent.api.v1alpha1.SessionCredential.secret_ref:type_name -> kagent.api.v1alpha1.SecretKeyReference
+	32, // 13: kagent.api.v1alpha1.CreateSessionRequest.agent:type_name -> kagent.api.v1alpha1.ResourceReference
+	36, // 14: kagent.api.v1alpha1.CreateSessionRequest.workspace:type_name -> kagent.api.v1alpha1.Workspace
+	5,  // 15: kagent.api.v1alpha1.CreateSessionRequest.credentials:type_name -> kagent.api.v1alpha1.SessionCredential
+	6,  // 16: kagent.api.v1alpha1.CreateSessionRequest.development_environment:type_name -> kagent.api.v1alpha1.DevelopmentEnvironment
+	2,  // 17: kagent.api.v1alpha1.CreateSessionResponse.session:type_name -> kagent.api.v1alpha1.Session
+	2,  // 18: kagent.api.v1alpha1.GetSessionResponse.session:type_name -> kagent.api.v1alpha1.Session
+	37, // 19: kagent.api.v1alpha1.ListSessionsRequest.page:type_name -> kagent.api.v1alpha1.PageRequest
+	32, // 20: kagent.api.v1alpha1.ListSessionsRequest.agent:type_name -> kagent.api.v1alpha1.ResourceReference
+	2,  // 21: kagent.api.v1alpha1.ListSessionsResponse.sessions:type_name -> kagent.api.v1alpha1.Session
+	38, // 22: kagent.api.v1alpha1.ListSessionsResponse.page:type_name -> kagent.api.v1alpha1.PageResponse
+	2,  // 23: kagent.api.v1alpha1.UpdateSessionNameResponse.session:type_name -> kagent.api.v1alpha1.Session
+	2,  // 24: kagent.api.v1alpha1.SuspendSessionResponse.session:type_name -> kagent.api.v1alpha1.Session
+	2,  // 25: kagent.api.v1alpha1.ResumeSessionResponse.session:type_name -> kagent.api.v1alpha1.Session
+	2,  // 26: kagent.api.v1alpha1.DeleteSessionResponse.session:type_name -> kagent.api.v1alpha1.Session
+	0,  // 27: kagent.api.v1alpha1.SessionShare.permission:type_name -> kagent.api.v1alpha1.SessionSharePermission
+	35, // 28: kagent.api.v1alpha1.SessionShare.created_at:type_name -> google.protobuf.Timestamp
+	35, // 29: kagent.api.v1alpha1.SessionShare.expires_at:type_name -> google.protobuf.Timestamp
+	0,  // 30: kagent.api.v1alpha1.CreateSessionShareRequest.permission:type_name -> kagent.api.v1alpha1.SessionSharePermission
+	39, // 31: kagent.api.v1alpha1.CreateSessionShareRequest.ttl:type_name -> google.protobuf.Duration
+	22, // 32: kagent.api.v1alpha1.CreateSessionShareResponse.share:type_name -> kagent.api.v1alpha1.SessionShare
+	37, // 33: kagent.api.v1alpha1.ListSessionSharesRequest.page:type_name -> kagent.api.v1alpha1.PageRequest
+	22, // 34: kagent.api.v1alpha1.ListSessionSharesResponse.shares:type_name -> kagent.api.v1alpha1.SessionShare
+	38, // 35: kagent.api.v1alpha1.ListSessionSharesResponse.page:type_name -> kagent.api.v1alpha1.PageResponse
+	36, // 36: kagent.api.v1alpha1.PrepareSessionWorkspaceRequest.workspace:type_name -> kagent.api.v1alpha1.Workspace
+	6,  // 37: kagent.api.v1alpha1.PrepareSessionWorkspaceRequest.development_environment:type_name -> kagent.api.v1alpha1.DevelopmentEnvironment
+	7,  // 38: kagent.api.v1alpha1.PrepareSessionWorkspaceRequest.runtime_composition:type_name -> kagent.api.v1alpha1.RuntimeComposition
+	31, // 39: kagent.api.v1alpha1.PrepareSessionWorkspaceResponse.receipt:type_name -> kagent.api.v1alpha1.WorkspacePreparationReceipt
+	29, // 40: kagent.api.v1alpha1.WorkspacePreparationReceipt.original:type_name -> kagent.api.v1alpha1.PrepareSessionWorkspaceRequest
+	35, // 41: kagent.api.v1alpha1.WorkspacePreparationReceipt.effect_observed_at:type_name -> google.protobuf.Timestamp
+	35, // 42: kagent.api.v1alpha1.WorkspacePreparationReceipt.observed_at:type_name -> google.protobuf.Timestamp
+	8,  // 43: kagent.api.v1alpha1.SessionService.CreateSession:input_type -> kagent.api.v1alpha1.CreateSessionRequest
+	29, // 44: kagent.api.v1alpha1.SessionService.PrepareSessionWorkspace:input_type -> kagent.api.v1alpha1.PrepareSessionWorkspaceRequest
+	10, // 45: kagent.api.v1alpha1.SessionService.GetSession:input_type -> kagent.api.v1alpha1.GetSessionRequest
+	12, // 46: kagent.api.v1alpha1.SessionService.ListSessions:input_type -> kagent.api.v1alpha1.ListSessionsRequest
+	14, // 47: kagent.api.v1alpha1.SessionService.UpdateSessionName:input_type -> kagent.api.v1alpha1.UpdateSessionNameRequest
+	16, // 48: kagent.api.v1alpha1.SessionService.SuspendSession:input_type -> kagent.api.v1alpha1.SuspendSessionRequest
+	18, // 49: kagent.api.v1alpha1.SessionService.ResumeSession:input_type -> kagent.api.v1alpha1.ResumeSessionRequest
+	20, // 50: kagent.api.v1alpha1.SessionService.DeleteSession:input_type -> kagent.api.v1alpha1.DeleteSessionRequest
+	23, // 51: kagent.api.v1alpha1.SessionService.CreateSessionShare:input_type -> kagent.api.v1alpha1.CreateSessionShareRequest
+	25, // 52: kagent.api.v1alpha1.SessionService.ListSessionShares:input_type -> kagent.api.v1alpha1.ListSessionSharesRequest
+	27, // 53: kagent.api.v1alpha1.SessionService.RevokeSessionShare:input_type -> kagent.api.v1alpha1.RevokeSessionShareRequest
+	9,  // 54: kagent.api.v1alpha1.SessionService.CreateSession:output_type -> kagent.api.v1alpha1.CreateSessionResponse
+	30, // 55: kagent.api.v1alpha1.SessionService.PrepareSessionWorkspace:output_type -> kagent.api.v1alpha1.PrepareSessionWorkspaceResponse
+	11, // 56: kagent.api.v1alpha1.SessionService.GetSession:output_type -> kagent.api.v1alpha1.GetSessionResponse
+	13, // 57: kagent.api.v1alpha1.SessionService.ListSessions:output_type -> kagent.api.v1alpha1.ListSessionsResponse
+	15, // 58: kagent.api.v1alpha1.SessionService.UpdateSessionName:output_type -> kagent.api.v1alpha1.UpdateSessionNameResponse
+	17, // 59: kagent.api.v1alpha1.SessionService.SuspendSession:output_type -> kagent.api.v1alpha1.SuspendSessionResponse
+	19, // 60: kagent.api.v1alpha1.SessionService.ResumeSession:output_type -> kagent.api.v1alpha1.ResumeSessionResponse
+	21, // 61: kagent.api.v1alpha1.SessionService.DeleteSession:output_type -> kagent.api.v1alpha1.DeleteSessionResponse
+	24, // 62: kagent.api.v1alpha1.SessionService.CreateSessionShare:output_type -> kagent.api.v1alpha1.CreateSessionShareResponse
+	26, // 63: kagent.api.v1alpha1.SessionService.ListSessionShares:output_type -> kagent.api.v1alpha1.ListSessionSharesResponse
+	28, // 64: kagent.api.v1alpha1.SessionService.RevokeSessionShare:output_type -> kagent.api.v1alpha1.RevokeSessionShareResponse
+	54, // [54:65] is the sub-list for method output_type
+	43, // [43:54] is the sub-list for method input_type
+	43, // [43:43] is the sub-list for extension type_name
+	43, // [43:43] is the sub-list for extension extendee
+	0,  // [0:43] is the sub-list for field type_name
 }
 
 func init() { file_kagent_api_v1alpha1_sessions_proto_init() }
@@ -1998,7 +2422,7 @@ func file_kagent_api_v1alpha1_sessions_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kagent_api_v1alpha1_sessions_proto_rawDesc), len(file_kagent_api_v1alpha1_sessions_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   28,
+			NumMessages:   31,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

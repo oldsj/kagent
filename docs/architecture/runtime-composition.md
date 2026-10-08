@@ -23,6 +23,8 @@ Preparation creates an immutable template and records its revision before reserv
 
 Request-ID retries retain the originally selected payload even after catalog updates. Checkpoint forks retain the source Session's exact composition. Garbage collection retains composition variants while their base definition is active; Sessions and checkpoints retain their selected revision afterward. This conservative policy also protects the interval between preparation and reservation. A different image pair creates a new revision; a Full snapshot never receives a replacement pair.
 
+Mainloop code Sessions with an explicit development environment and Git workspace also require [native workspace preparation](native-workspace-preparation.md) before task admission. `PrepareSessionWorkspace` binds the original Create request, D/R selection, prepared revision, active runtime generation and Actor UID. The runtime checks out the exact source and installs a separately digested fixed role overlay without starting a native turn. This action does not select a replacement image or change the compiled revision. Standalone Sessions and Git-free coordinators retain their existing task behavior.
+
 ## Payload packaging
 
 `go/harness/runtime/payload/runtime-lock.json` is the shared CLI version and per-architecture artifact checksum source for both legacy Dockerfiles and payload builds. The payload includes static Go launch/harness binaries, untouched vendor CLI bytes, private musl libraries, Bash, Git and ripgrep helpers, and a checksummed manifest. Dynamic vendor CLIs run through the bundled musl loader; rewriting the Claude executable's ELF layout breaks its embedded Bun payload. Other dynamic helpers use the private payload interpreter and library path.

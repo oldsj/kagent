@@ -3,6 +3,7 @@ package workspace
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -272,9 +273,9 @@ func (g *gitRunner) run(ctx context.Context, step string, args ...string) (strin
 	cmd := exec.CommandContext(ctx, g.path, args...)
 	cmd.Env = g.environment
 	cmd.WaitDelay = 5 * time.Second
-	var stdout bytes.Buffer
+	stdout := &boundedBuffer{limit: 16 << 10}
 	stderr := &boundedBuffer{limit: maxStderr}
-	cmd.Stdout, cmd.Stderr = &stdout, stderr
+	cmd.Stdout, cmd.Stderr = stdout, stderr
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() != nil {
 			return "", ctx.Err()
@@ -303,4 +304,63 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 		b.Buffer.Write(p[:min(room, len(p))])
 	}
 	return len(p), nil
+}
+
+// TransportDigest measures the fixed repository-local transport configuration.
+// It contains only canonical URLs and inert placeholders, never credential values.
+func TransportDigest(policy apiworkspace.Git, repo string) (string, error) {
+	read, push, err := policy.Transport(repo)
+	if err != nil {
+		return "", err
+	}
+	expected := map[string]string{"remote.origin.url": read, "remote.origin.pushurl": push, "http.followredirects": "false", "http." + apiworkspace.ReadProxyOrigin + "/.extraheader": placeholderHeader, "http." + apiworkspace.PushProxyOrigin + "/.extraheader": placeholderHeader}
+	data, err := json.Marshal(expected)
+	return Digest(data), err
+}
+
+func (b *Bootstrapper) observe(ctx context.Context, request Request) (string, string, string, error) {
+	info, err := os.Lstat(filepath.Join(b.dir, ".git"))
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return "", "", "", errors.New("workspace Git directory is not owned")
+	}
+	read, push, err := b.policy.Transport(request.Repo)
+	if err != nil || b.policy.ReadProxyOrigin == nil || b.policy.PushProxyOrigin == nil {
+		return "", "", "", errors.New("preparation requires fixed proxy transport")
+	}
+	head, err := b.git.git(ctx, b.dir, "observe HEAD", "rev-parse", "--verify", "HEAD")
+	if err != nil || strings.TrimSpace(head) != request.Ref {
+		return "", "", "", errors.New("workspace HEAD differs")
+	}
+	branch, err := b.git.git(ctx, b.dir, "observe branch", "symbolic-ref", "--short", "HEAD")
+	if err != nil || strings.TrimSpace(branch) != request.Branch {
+		return "", "", "", errors.New("workspace branch differs")
+	}
+	config, err := b.git.git(ctx, b.dir, "observe transport", "config", "--local", "--null", "--list")
+	if err != nil {
+		return "", "", "", err
+	}
+	required := map[string]string{"remote.origin.url": read, "remote.origin.pushurl": push, "http.followredirects": "false", "http." + apiworkspace.ReadProxyOrigin + "/.extraheader": placeholderHeader, "http." + apiworkspace.PushProxyOrigin + "/.extraheader": placeholderHeader}
+	allowed := map[string]string{"core.repositoryformatversion": "0", "core.filemode": "true", "core.bare": "false", "core.logallrefupdates": "true", "remote.origin.fetch": "+refs/heads/*:refs/remotes/origin/*"}
+	seen := map[string]bool{}
+	for item := range strings.SplitSeq(strings.TrimSuffix(config, "\x00"), "\x00") {
+		key, value, ok := strings.Cut(item, "\n")
+		if !ok || seen[key] {
+			return "", "", "", errors.New("duplicate or malformed workspace Git config")
+		}
+		expected, exists := required[key]
+		if !exists {
+			expected, exists = allowed[key]
+		}
+		if !exists || value != expected {
+			return "", "", "", errors.New("workspace Git transport differs")
+		}
+		seen[key] = true
+	}
+	for key := range required {
+		if !seen[key] {
+			return "", "", "", errors.New("workspace Git transport is incomplete")
+		}
+	}
+	digest, err := TransportDigest(b.policy, request.Repo)
+	return strings.TrimSpace(head), strings.TrimSpace(branch), digest, err
 }

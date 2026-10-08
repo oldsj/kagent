@@ -2,6 +2,7 @@ package grpcserver
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -201,5 +202,34 @@ func TestSessionCredentialRequestValidation(t *testing.T) {
 				t.Fatalf("valid=%v, error=%v", tc.valid, err)
 			}
 		})
+	}
+}
+
+func TestPreparationRequestIntrinsicValidation(t *testing.T) {
+	base := &apiv1alpha1.PrepareSessionWorkspaceRequest{SessionId: "11111111-1111-4111-8111-111111111111", ActionId: "create:prepare", CreateRequestId: "create", GenerationId: "11111111-1111-4111-8111-111111111111", ActorUid: "owned", PreparedRevision: "original", Workspace: &apiv1alpha1.Workspace{Repo: "https://github.com/owner/repo.git", Ref: strings.Repeat("a", 40), Branch: "feature"}, DevelopmentEnvironment: &apiv1alpha1.DevelopmentEnvironment{Image: "fixture.test/d@sha256:" + strings.Repeat("a", 64), Platform: "linux/amd64", PolicyIdentity: "v1"}, RuntimeComposition: &apiv1alpha1.RuntimeComposition{}, SetupProfile: "child", SetupDigest: strings.Repeat("a", 64)}
+	if err := protovalidate.Validate(base); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"Session", "action", "generation", "HEAD", "branch", "profile", "digest"} {
+		request := proto.CloneOf(base)
+		switch field {
+		case "Session":
+			request.SessionId = "wrong"
+		case "action":
+			request.ActionId = strings.Repeat("a", 129)
+		case "generation":
+			request.GenerationId = "wrong"
+		case "HEAD":
+			request.Workspace.Ref = "main"
+		case "branch":
+			request.Workspace.Branch = ""
+		case "profile":
+			request.SetupProfile = "arbitrary"
+		case "digest":
+			request.SetupDigest = strings.Repeat("a", 16)
+		}
+		if err := protovalidate.Validate(request); err == nil {
+			t.Errorf("accepted invalid %s", field)
+		}
 	}
 }

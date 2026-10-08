@@ -4,8 +4,16 @@ package dbtest
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"os"
+	"strconv"
+	"strings"
+
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/kagent-dev/kagent/go/core/pkg/migrations"
 	testcontainers "github.com/testcontainers/testcontainers-go"
@@ -16,6 +24,11 @@ import (
 // Start starts a pgvector Postgres container and returns the connection string
 // and a cleanup function. Callers are responsible for calling cleanup when done.
 func Start(ctx context.Context) (connStr string, cleanup func(), err error) {
+	// This explicit test-only opt-in never changes the normal container path.
+	//nolint:forbidigo // Test fixture selection is intentionally process-local.
+	if raw := os.Getenv("KAGENT_TEST_LOCAL_POSTGRES_URL"); raw != "" {
+		return startLocal(ctx, raw)
+	}
 	pgContainer, err := tcpostgres.Run(ctx,
 		"pgvector/pgvector:pg18-trixie",
 		tcpostgres.WithDatabase("kagent_test"),
@@ -74,4 +87,59 @@ func MigrateT(t *testing.T, connStr string, vectorEnabled bool) {
 	if err := Migrate(connStr, vectorEnabled); err != nil {
 		t.Fatalf("dbtest.MigrateT: %v", err)
 	}
+}
+
+// localURL permits only the owned, loopback fixture and its explicit base DB.
+// No host resolution, implicit libpq environment, SSL options or production URL.
+func localURL(raw string) (*url.URL, error) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "postgres" || u.Hostname() != "127.0.0.1" || u.Path != "/kagent_fixture" || u.Fragment != "" || u.User == nil || u.User.Username() != "postgres" {
+		return nil, fmt.Errorf("local test fixture must be an explicit loopback kagent_fixture URL")
+	}
+	port, err := strconv.Atoi(u.Port())
+	password, hasPassword := u.User.Password()
+	if err != nil || port < 1024 || port > 65535 || !hasPassword || password != "kagent" || u.RawQuery != "sslmode=disable" {
+		return nil, fmt.Errorf("unexpected local test fixture options")
+	}
+	return u, nil
+}
+
+func startLocal(ctx context.Context, raw string) (string, func(), error) {
+	base, err := localURL(raw)
+	if err != nil {
+		return "", nil, err
+	}
+	conn, err := pgx.Connect(ctx, base.String())
+	if err != nil {
+		return "", nil, fmt.Errorf("connect owned local fixture: %w", err)
+	}
+	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
+	name := "kagent_test_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	if _, err := conn.Exec(ctx, "CREATE DATABASE "+pgx.Identifier{name}.Sanitize()); err != nil {
+		return "", nil, err
+	}
+	var oid uint32
+	if err := conn.QueryRow(ctx, "SELECT oid FROM pg_database WHERE datname = $1", name).Scan(&oid); err != nil {
+		return "", nil, err
+	}
+	base.Path = "/" + name
+	fmt.Printf("owned local PostgreSQL scratch: %s oid=%d\n", name, oid)
+	cleanup := func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		admin, err := pgx.Connect(cleanupCtx, raw)
+		if err != nil {
+			fmt.Printf("local fixture scratch cleanup unavailable: %s\n", name)
+			return
+		}
+		defer func() { _ = admin.Close(cleanupCtx) }()
+		var current uint32
+		if err := admin.QueryRow(cleanupCtx, "SELECT oid FROM pg_database WHERE datname = $1", name).Scan(&current); err != nil || current != oid {
+			return
+		}
+		if _, err := admin.Exec(cleanupCtx, "DROP DATABASE "+pgx.Identifier{name}.Sanitize()+" WITH (FORCE)"); err != nil {
+			fmt.Printf("local fixture scratch cleanup failed: %s\n", name)
+		}
+	}
+	return base.String(), cleanup, nil
 }

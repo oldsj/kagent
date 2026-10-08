@@ -9,6 +9,9 @@ import (
 	"errors"
 	"fmt"
 
+	"buf.build/go/protovalidate"
+	sessionsvc "github.com/kagent-dev/kagent/go/core/internal/service/session"
+
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2apb/v1/pbconv"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -19,6 +22,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 type Store interface {
@@ -219,7 +223,21 @@ func (s *Service) getWorkspaceOperation(ctx context.Context, input *apiv1alpha1.
 	if err != nil {
 		return nil, err
 	}
-	return &apiv1alpha1.TaskStoreServiceGetWorkspaceResponse{Workspace: session.GetWorkspace()}, nil
+	result := &apiv1alpha1.TaskStoreServiceGetWorkspaceResponse{Workspace: session.GetWorkspace(), PreparationRequired: database.RequiresWorkspacePreparation(session)}
+	if result.PreparationRequired {
+		store, ok := s.store.(interface {
+			AssignWorkspacePreparation(context.Context, string) (*apiv1alpha1.NativeWorkspacePreparation, bool, error)
+		})
+		if !ok {
+			return nil, status.Error(codes.FailedPrecondition, "workspace assignment unavailable")
+		}
+		assignment, ready, err := store.AssignWorkspacePreparation(ctx, session.Id)
+		if err != nil {
+			return nil, storageError(err)
+		}
+		result.Preparation, result.PreparationReady = assignment, ready
+	}
+	return result, nil
 }
 
 func (s *Service) CreateTask(ctx context.Context, input *apiv1alpha1.TaskStoreServiceCreateTaskRequest) (*apiv1alpha1.TaskStoreServiceCreateTaskResponse, error) {
@@ -256,4 +274,66 @@ func (s *Service) GetWorkspace(ctx context.Context, input *apiv1alpha1.TaskStore
 	return runtimeCall(ctx, s, input.GetSessionId(), func(inner *Service) (*apiv1alpha1.TaskStoreServiceGetWorkspaceResponse, error) {
 		return inner.getWorkspaceOperation(ctx, input)
 	})
+}
+
+type preparationAuthority interface {
+	GetSessionByID(context.Context, string) (*apiv1alpha1.Session, error)
+	GetRuntimeRevision(context.Context, string) (*database.RuntimeRevision, error)
+	CompleteWorkspacePreparation(context.Context, database.RuntimeGeneration, bool, *apiv1alpha1.TaskStoreServiceCompleteWorkspacePreparationRequest) error
+}
+
+// CompleteWorkspacePreparation uses the same authenticated runtime generation.
+// A previously authenticated in-flight result may settle only its own historical
+// action after revocation. New credentials still require active-generation auth.
+func (s *Service) CompleteWorkspacePreparation(ctx context.Context, input *apiv1alpha1.TaskStoreServiceCompleteWorkspacePreparationRequest) (*apiv1alpha1.TaskStoreServiceCompleteWorkspacePreparationResponse, error) {
+	if input == nil || protovalidate.Validate(input) != nil || proto.Size(input) > 16384 || unknownPreparationResult(input) {
+		return nil, status.Error(codes.InvalidArgument, "invalid preparation result")
+	}
+	principal, _ := auth.AuthSessionFrom(ctx)
+	identity, ok := principal.(runtimeSession)
+	store, stored := s.authority.(preparationAuthority)
+	if !ok || !stored || s.actors == nil || identity.binding.SessionID.String() != input.SessionId || input.GetAssignment().GetSessionId() != input.SessionId {
+		return nil, status.Error(codes.PermissionDenied, "invalid runtime authority")
+	}
+	session, err := store.GetSessionByID(ctx, input.SessionId)
+	if err != nil {
+		return nil, storageError(err)
+	}
+	revision, err := store.GetRuntimeRevision(ctx, session.PreparedRevision)
+	if err != nil {
+		return nil, storageError(err)
+	}
+	current := false
+	actor, actorErr := s.actors.GetActor(ctx, identity.binding.Atespace, identity.binding.ActorName)
+	reader, supported := s.actors.(interface {
+		GetActorTemplate(context.Context, string, string) (*ateapipb.ActorTemplate, error)
+	})
+	if actorErr == nil && supported && actor.GetMetadata().GetUid() == identity.binding.ActorUID {
+		template, err := reader.GetActorTemplate(ctx, revision.ActorTemplateAtespace, revision.ActorTemplateName)
+		if err == nil {
+			prepared, err := sessionsvc.CheckPreparationRuntime(session, revision, actor, template)
+			if err == nil {
+				original := proto.CloneOf(input.Assignment)
+				// Compare only original immutable prepared/runtime fields, never adopt callback assertions.
+				original.CreateRequestId, original.ActionId, original.RequestDigest, original.ExecutionId, original.ChallengeId, original.Sequence, original.Profile, original.SetupDigest, original.GenerationId = "", "", "", "", "", 0, "", "", ""
+				current = proto.Equal(prepared, original)
+			}
+		}
+	}
+
+	if err := store.CompleteWorkspacePreparation(ctx, identity.binding, current, input); err != nil {
+		return nil, storageError(err)
+	}
+	return &apiv1alpha1.TaskStoreServiceCompleteWorkspacePreparationResponse{}, nil
+}
+
+func unknownPreparationResult(input proto.Message) bool {
+	unknown := len(input.ProtoReflect().GetUnknown()) != 0
+	input.ProtoReflect().Range(func(field protoreflect.FieldDescriptor, value protoreflect.Value) bool {
+		if field.Message() != nil && unknownPreparationResult(value.Message().Interface()) {
+			unknown = true
+		}
+		return !unknown
+	})
+	return unknown
 }

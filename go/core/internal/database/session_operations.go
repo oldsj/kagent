@@ -84,7 +84,7 @@ func beginSessionOperation(ctx context.Context, tx pgx.Tx, row sessionRow, kind 
 }
 
 // admitAgentLifecycle runs under the same row lock as task and checkpoint
-// admission. Common transitions have no knowledge of these agent-only records.
+// admission, including the exact assigned native preparation. Common transitions have no knowledge of these agent-only records.
 func admitAgentLifecycle(ctx context.Context, tx pgx.Tx, row sessionRow, kind apiv1alpha1.RuntimeOperation) error {
 	if err := requireSettledRuntime(ctx, tx, row.HistoryID, ""); err != nil {
 		return err

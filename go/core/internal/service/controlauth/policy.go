@@ -256,7 +256,7 @@ func (p *Policy) CheckCreateSession(ctx context.Context, agent *api.ResourceRefe
 // CheckMethod is used before decoding/dispatch on both gRPC transports.
 func CheckMethod(method string) error {
 	switch method {
-	case api.SessionService_CreateSession_FullMethodName, api.SessionService_GetSession_FullMethodName, api.SessionService_ListSessions_FullMethodName, api.SessionService_SuspendSession_FullMethodName, api.SessionService_ResumeSession_FullMethodName, api.SessionService_DeleteSession_FullMethodName, api.AgentService_GetAgent_FullMethodName,
+	case api.SessionService_PrepareSessionWorkspace_FullMethodName, api.SessionService_CreateSession_FullMethodName, api.SessionService_GetSession_FullMethodName, api.SessionService_ListSessions_FullMethodName, api.SessionService_SuspendSession_FullMethodName, api.SessionService_ResumeSession_FullMethodName, api.SessionService_DeleteSession_FullMethodName, api.AgentService_GetAgent_FullMethodName,
 		a2apb.A2AService_SendStreamingMessage_FullMethodName, a2apb.A2AService_GetTask_FullMethodName, a2apb.A2AService_ListTasks_FullMethodName, a2apb.A2AService_CancelTask_FullMethodName, a2apb.A2AService_SubscribeToTask_FullMethodName, a2apb.A2AService_GetExtendedAgentCard_FullMethodName:
 		return nil
 	default:

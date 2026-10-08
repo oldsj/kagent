@@ -249,3 +249,32 @@ func (s *Store) GetWorkspace(ctx context.Context) (*apiv1alpha1.Workspace, error
 	}
 	return response.GetWorkspace(), nil
 }
+
+// GetWorkspacePreparation reads/claims only the assigned Session-owned action.
+func (s *Store) GetWorkspacePreparation(ctx context.Context) (*apiv1alpha1.TaskStoreServiceGetWorkspaceResponse, error) {
+	id, err := s.sessionID()
+	if err != nil {
+		return nil, err
+	}
+	var response *apiv1alpha1.TaskStoreServiceGetWorkspaceResponse
+	err = s.retry(ctx, func(ctx context.Context) error {
+		var err error
+		response, err = s.client.TaskStoreService().GetWorkspace(ctx, &apiv1alpha1.TaskStoreServiceGetWorkspaceRequest{SessionId: id})
+		return err
+	})
+	return response, err
+}
+
+func (s *Store) CompleteWorkspacePreparation(ctx context.Context, request *apiv1alpha1.TaskStoreServiceCompleteWorkspacePreparationRequest) error {
+	id, err := s.sessionID()
+	if err != nil {
+		return err
+	}
+	if request.GetSessionId() != id {
+		return fmt.Errorf("preparation belongs to another Session")
+	}
+	return s.retry(ctx, func(ctx context.Context) error {
+		_, err := s.client.TaskStoreService().CompleteWorkspacePreparation(ctx, request)
+		return err
+	})
+}

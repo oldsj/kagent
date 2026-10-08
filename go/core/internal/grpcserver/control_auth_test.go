@@ -270,3 +270,13 @@ func TestReflectionServiceTokenIsolation(t *testing.T) {
 		})
 	}
 }
+
+func TestPreparationMethodScopeIsExplicit(t *testing.T) {
+	policies := DefaultMethodPolicies()
+	require.Equal(t, pkgauth.AccessUpdate, policies[api.SessionService_PrepareSessionWorkspace_FullMethodName])
+	require.Equal(t, pkgauth.AccessRead, policies[api.SessionService_GetSession_FullMethodName])
+	require.Equal(t, pkgauth.AccessRuntime, policies[api.TaskStoreService_CompleteWorkspacePreparation_FullMethodName])
+	require.NoError(t, controlauth.CheckMethod(api.SessionService_PrepareSessionWorkspace_FullMethodName))
+	require.Error(t, controlauth.CheckMethod(api.TaskStoreService_CompleteWorkspacePreparation_FullMethodName))
+	require.Error(t, controlauth.CheckMethod("/kagent.api.v1alpha1.SessionService/FuturePreparation"))
+}

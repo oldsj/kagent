@@ -74,6 +74,8 @@ func DefaultMethodPolicies() MethodPolicies {
 		apiv1alpha1.SandboxTemplateService_CreateSandboxTemplate_FullMethodName: auth.AccessCreate,
 		apiv1alpha1.SandboxTemplateService_DeleteSandboxTemplate_FullMethodName: auth.AccessDelete,
 	}
+	policies[apiv1alpha1.SessionService_PrepareSessionWorkspace_FullMethodName] = auth.AccessUpdate
+	policies[apiv1alpha1.TaskStoreService_CompleteWorkspacePreparation_FullMethodName] = auth.AccessRuntime
 	policies[apiv1alpha1.SessionService_CreateSession_FullMethodName] = auth.AccessCreate
 	policies[apiv1alpha1.SessionService_GetSession_FullMethodName] = auth.AccessRead
 	policies[apiv1alpha1.SessionService_ListSessions_FullMethodName] = auth.AccessRead

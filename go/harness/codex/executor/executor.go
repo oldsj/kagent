@@ -31,9 +31,21 @@ type Config struct {
 
 // New validates the configuration and Codex installation, then returns the executor.
 func New(ctx context.Context, cfg Config) (a2asrv.AgentExecutor, error) {
-	runner, err := adapter.New(ctx, adapter.Input{
+	restored, err := workspace.RestoreSetup(cfg.ConfigJSON, cfg.DataDir+"/.kagent")
+	if err != nil {
+		return nil, err
+	}
+	input := adapter.Input{
 		ConfigJSON: cfg.ConfigJSON, Workspace: cfg.DataDir + "/workspace", DurableDir: cfg.DataDir, Environment: cfg.Environment,
-	})
+	}
+	if restored != nil {
+		input.SetupProfile, restored.Provider = restored.Profile, "codex"
+		// Verify before normal startup materialization can replace a changed file.
+		if _, _, err := (&adapter.SetupInstaller{Input: input}).Setup(ctx, *restored, true); err != nil {
+			return nil, err
+		}
+	}
+	runner, err := adapter.New(ctx, input)
 	if err != nil {
 		return nil, fmt.Errorf("configure Codex Harness: %w", err)
 	}
@@ -59,12 +71,15 @@ func New(ctx context.Context, cfg Config) (a2asrv.AgentExecutor, error) {
 		if cfg.Workspace == nil {
 			return nil, fmt.Errorf("configuration enables git but no workspace source was provided")
 		}
-		turns, err = workspace.New(runner, workspace.Config{
+		bootstrap, bootstrapErr := workspace.New(runner, workspace.Config{
 			Dir: cfg.DataDir + "/workspace", StateDir: cfg.DataDir + "/.kagent", Policy: *parsed.Git, Source: cfg.Workspace, Environment: cfg.Environment,
 		})
-		if err != nil {
-			return nil, err
+		if bootstrapErr != nil {
+			return nil, bootstrapErr
 		}
+		input.SetupProfile = ""
+		bootstrap.ServePreparations(ctx, &adapter.SetupInstaller{Input: input, Store: store})
+		turns = bootstrap
 	}
 	executor, err := runtimea2a.New(turns, store, parsed.RuntimeTelemetry)
 	if err != nil {

@@ -33,12 +33,20 @@ type Config struct {
 // New validates the configuration and Claude installation, then returns the
 // executor and the resource to close on shutdown.
 func New(ctx context.Context, cfg Config) (a2asrv.AgentExecutor, io.Closer, error) {
-	runner, err := adapter.New(ctx, adapter.Input{
+	restored, err := workspace.RestoreSetup(cfg.ConfigJSON, cfg.DataDir+"/.kagent")
+	if err != nil {
+		return nil, nil, err
+	}
+	input := adapter.Input{
 		ConfigJSON: cfg.ConfigJSON,
 		Workspace:  cfg.DataDir + "/workspace", DurableDir: cfg.DataDir,
 		EphemeralDir: "/tmp/kagent-claude",
 		Environment:  cfg.Environment,
-	})
+	}
+	if restored != nil {
+		input.SetupProfile, restored.Provider = restored.Profile, "claude"
+	}
+	runner, err := adapter.New(ctx, input)
 	if err != nil {
 		return nil, nil, fmt.Errorf("configure Claude Harness: %w", err)
 	}
@@ -63,25 +71,31 @@ func New(ctx context.Context, cfg Config) (a2asrv.AgentExecutor, io.Closer, erro
 		return nil, nil, err
 	}
 	var turns runtimea2a.Runner = runner
+	var closer io.Closer = runner
 	if parsed.Git != nil {
 		if cfg.Workspace == nil {
 			_ = runner.Close()
 			return nil, nil, fmt.Errorf("configuration enables git but no workspace source was provided")
 		}
-		turns, err = workspace.New(runner, workspace.Config{
+		bootstrap, bootstrapErr := workspace.New(runner, workspace.Config{
 			Dir: cfg.DataDir + "/workspace", StateDir: cfg.DataDir + "/.kagent", Policy: *parsed.Git, Source: cfg.Workspace, Environment: cfg.Environment,
 		})
-		if err != nil {
+		if bootstrapErr != nil {
 			_ = runner.Close()
-			return nil, nil, err
+			return nil, nil, bootstrapErr
 		}
+		input.SetupProfile = ""
+		installer := &adapter.SetupInstaller{Input: input, Store: store, Runner: runner}
+		bootstrap.ServePreparations(ctx, installer)
+		closer = installer
+		turns = bootstrap
 	}
 	executor, err := runtimea2a.New(turns, store, parsed.RuntimeTelemetry)
 	if err != nil {
-		_ = runner.Close()
+		_ = closer.Close()
 		return nil, nil, err
 	}
-	return executor, runner, nil
+	return executor, closer, nil
 }
 
 func validateSessionID(id string) error {

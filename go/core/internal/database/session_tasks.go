@@ -46,6 +46,9 @@ func (c *Client) ReserveSessionDispatch(ctx context.Context, sessionID string, d
 				return ErrMessageAccepted
 			}
 		}
+		if err := requireNativeTaskAdmission(ctx, tx, session); err != nil {
+			return err
+		}
 		if session.State != "RUNTIME_STATE_READY" || session.Operation != "RUNTIME_OPERATION_NONE" {
 			return ErrConflict
 		}
@@ -183,6 +186,9 @@ func (c *Client) writeRuntimeTask(ctx context.Context, sessionID string, expecte
 			if stored.Status.State.Terminal() {
 				return fmt.Errorf("a terminal task cannot be updated: %w", ErrFailedPrecondition)
 			}
+		}
+		if err := requireNativeTaskAdmission(ctx, tx, session); err != nil {
+			return err
 		}
 		if session.State != "RUNTIME_STATE_READY" || session.Operation != "RUNTIME_OPERATION_NONE" {
 			return fmt.Errorf("session cannot accept runtime updates during a lifecycle operation: %w", ErrConflict)
@@ -814,6 +820,8 @@ func requireSettledRuntime(ctx context.Context, db dbExecutor, historyID uuid.UU
 		    AND (NOT published OR (quiescence_pending AND quiescence_executor_id IS NOT NULL)))
 		    OR EXISTS (SELECT 1 FROM session WHERE history_id = $1 AND dispatch_expires_at > clock_timestamp()
 		        AND ($2::text = '' OR dispatch_id::text <> $2))
+ OR EXISTS (SELECT 1 FROM session_native_preparation n JOIN session s ON s.id = n.session_id
+ WHERE s.history_id = $1 AND n.phase IN ('pending', 'uncertain'))
 	`, pgx.RowTo[bool], historyID, dispatchID)
 	if err != nil {
 		return err
