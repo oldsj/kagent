@@ -287,7 +287,9 @@ it reads the workspace through the runtime-authenticated `TaskStoreService.GetWo
 call, which resolves only the calling Session. It then clones into `/data/workspace`:
 
 - `ref` may be a branch, a tag, or a full commit SHA; an empty ref selects the remote
-  default branch. `depth` defaults to 1. A non-empty `branch` is created or reset from
+  default branch. `depth` 0, which an omitted depth sends, clones full history, so a
+  feature branch keeps a merge-base with `origin/<default>`. A positive `depth` is
+  shallow and may have no merge-base. A non-empty `branch` is created or reset from
   the checked-out ref.
 - When the Harness has a credential, a placeholder `Authorization` header is written to
   the repository-local `http.https://<host>/.extraHeader`. It is never written to global

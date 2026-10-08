@@ -209,6 +209,43 @@ func TestProxyReadOnlyAndRedirectsFailClosed(t *testing.T) {
 		})
 	}
 }
+
+// Mainloop sends depth 0 for full history. The bootstrap must pass that through
+// rather than applying the shallow default, and a negative depth must fail
+// closed instead of falling through to full history.
+func TestProxyDepthPolicyThroughBootstrap(t *testing.T) {
+	f := newGitProxyFixture(t)
+	f.available.Store(true)
+	// dev holds three commits: the two on main plus dev-only.
+	for _, test := range []struct {
+		name      string
+		depth     int
+		wantCount string
+		shallow   string
+	}{
+		{name: "depth 0 is full history", depth: 0, wantCount: "3", shallow: "false"},
+		{name: "depth 1 is shallow", depth: 1, wantCount: "1", shallow: "true"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			b, _, next := proxyBootstrapper(t, f, false, &Request{Repo: "https://github.com/Owner/Repo", Ref: "dev", Depth: test.depth})
+			out, err := b.Run(t.Context(), runtime.Turn{}, nil)
+			require.NoError(t, err)
+			require.Nil(t, out.Failure)
+			require.Equal(t, 1, next.calls)
+			require.Equal(t, test.shallow, run(t, b.dir, "rev-parse", "--is-shallow-repository"))
+			require.Equal(t, test.wantCount, run(t, b.dir, "rev-list", "--count", "HEAD"))
+		})
+	}
+	t.Run("negative depth fails closed", func(t *testing.T) {
+		b, _, next := proxyBootstrapper(t, f, false, &Request{Repo: "https://github.com/Owner/Repo", Ref: "dev", Depth: -1})
+		out, err := b.Run(t.Context(), runtime.Turn{}, nil)
+		require.NoError(t, err)
+		require.NotNil(t, out.Failure)
+		require.Contains(t, out.Failure.Message, "cannot be negative")
+		require.Zero(t, next.calls)
+		require.False(t, bootstrapped(b.stateDir))
+	})
+}
 func TestProxyRefModesUseRealGit(t *testing.T) {
 	f := newGitProxyFixture(t)
 	f.available.Store(true)
