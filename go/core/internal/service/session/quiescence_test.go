@@ -30,7 +30,7 @@ func TestIdleLifecycleDoesNotOwnTaskPublication(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			store, session := lifecycleFixture(t)
 			base := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
-			session, err := NewActorWorkflow(store, base).Create(t.Context(), session)
+			session, err := NewActorWorkflow(store, base, fixtureCredentials{}, "http://kagent-controller.kagent:8083").Create(t.Context(), session)
 			require.NoError(t, err)
 			message := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("hello"))
 			message.ContextID = session.ContextId
@@ -57,7 +57,9 @@ func TestIdleLifecycleDoesNotOwnTaskPublication(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			done := make(chan error, 1)
 			writes := &quiescenceRetryStore{lifecycleTestStore: store, failures: test.finishFailures}
-			go func() { done <- NewActorWorkflow(writes, actors).Start(ctx) }()
+			go func() {
+				done <- NewActorWorkflow(writes, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083").Start(ctx)
+			}()
 			t.Cleanup(func() { cancel(); require.NoError(t, <-done) })
 			select {
 			case <-entered:

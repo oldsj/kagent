@@ -2,48 +2,55 @@ package taskstore
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/url"
-	"strings"
 
-	"github.com/google/uuid"
-	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
+	"github.com/kagent-dev/kagent/go/core/internal/database"
+	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"github.com/kagent-dev/kagent/go/core/pkg/auth"
 )
 
-// Authenticator temporarily trusts an unsigned actor identity header. Replace
-// this with Substrate-issued actor JWT verification when #1660 is available.
-// Session, atespace, and recorded actor UID checks remain in the service.
-type Authenticator struct{}
+type bindingStore interface {
+	GetRuntimeGenerationByDigest(context.Context, []byte) (*database.RuntimeGeneration, error)
+}
+
+// Authenticator accepts a single bounded capability overwritten by the trusted
+// gateway. Actor metadata and control-plane bearer credentials carry no authority.
+type Authenticator struct{ Store bindingStore }
 
 var _ auth.AuthProvider = (*Authenticator)(nil)
 
-func (*Authenticator) Authenticate(_ context.Context, headers http.Header, _ url.Values) (auth.Session, error) {
-	values := headers.Values(apia2a.InsecureRuntimeIdentityHeader)
-	if len(values) != 1 {
-		return nil, fmt.Errorf("one runtime identity header is required")
+func (a *Authenticator) Authenticate(ctx context.Context, headers http.Header, _ url.Values) (auth.Session, error) {
+	for _, forbidden := range []string{"authorization", "x-user-id", "x-agent-name", "x-kagent-insecure-runtime-identity"} {
+		if len(headers.Values(forbidden)) != 0 {
+			return nil, fmt.Errorf("invalid runtime credential combination")
+		}
 	}
-	parts := strings.Split(values[0], "/")
-	if len(parts) != 3 {
-		return nil, fmt.Errorf("runtime identity must be atespace/actor-name/actor-UID")
+	values := headers.Values(egress.RuntimeTokenHeader)
+	if len(values) != 1 || len(values[0]) != 64 {
+		return nil, fmt.Errorf("invalid runtime capability")
 	}
-	id, ok := strings.CutPrefix(parts[1], "session-")
-	if !ok || parts[0] == "" || parts[2] == "" {
-		return nil, fmt.Errorf("incomplete Substrate actor identity")
+	token, err := hex.DecodeString(values[0])
+	if err != nil || len(token) != 32 || hex.EncodeToString(token) != values[0] || a.Store == nil {
+		return nil, fmt.Errorf("invalid runtime capability")
 	}
-	if _, err := uuid.Parse(id); err != nil {
-		return nil, fmt.Errorf("invalid runtime session identity: %w", err)
+	digest := sha256.Sum256([]byte(values[0]))
+	binding, err := a.Store.GetRuntimeGenerationByDigest(ctx, digest[:])
+	if err != nil || binding == nil || binding.Phase != "active" || binding.ActorUID == "" {
+		return nil, fmt.Errorf("invalid runtime capability")
 	}
-	return runtimeSession{sessionID: id, atespace: parts[0], actorUID: parts[2]}, nil
+	return runtimeSession{binding: *binding}, nil
 }
 
 func (*Authenticator) UpstreamAuth(*http.Request, auth.Session, auth.Principal) error {
 	return fmt.Errorf("runtime authentication cannot forward public credentials")
 }
 
-type runtimeSession struct{ sessionID, atespace, actorUID string }
+type runtimeSession struct{ binding database.RuntimeGeneration }
 
 func (s runtimeSession) Principal() auth.Principal {
-	return auth.Principal{Agent: auth.Agent{ID: s.sessionID}}
+	return auth.Principal{Agent: auth.Agent{ID: s.binding.SessionID.String()}}
 }

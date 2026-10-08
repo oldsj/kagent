@@ -172,3 +172,17 @@ func TestActorDeleteStopsRunningCompute(t *testing.T) {
 	require.NoError(t, ApplyActorTransition(t.Context(), actors, transition))
 	require.Empty(t, actors.calls, "a missing Actor already satisfies deletion")
 }
+
+func TestBoundGenerationCannotBeRecreatedOrAdoptReplacement(t *testing.T) {
+	actors := &transitionActors{}
+	binding := ActorBinding{Atespace: "team-a", Name: "session-issued-generation", TemplateAtespace: "team-a", TemplateName: "revision", ExpectedUID: "issued-uid"}
+	creation := &ActorCreation{EgressPolicy: &ateapipb.EgressPolicy{}}
+	// A vanished bound name is a permanent hold even on a creation retry.
+	_, err := PrepareActorRetry(t.Context(), actors, binding, apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_CREATE, creation)
+	require.Error(t, err)
+	require.Empty(t, actors.calls)
+	actors.actor = &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Atespace: binding.Atespace, Name: binding.Name, Uid: "replacement-uid"}, ActorTemplate: &ateapipb.ObjectRef{Atespace: binding.TemplateAtespace, Name: binding.TemplateName}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED}}
+	_, err = PrepareActorRetry(t.Context(), actors, binding, apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_CREATE, creation)
+	require.Error(t, err)
+	require.Empty(t, actors.calls)
+}

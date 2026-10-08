@@ -23,7 +23,7 @@ func TestSessionExpirationRetriesDeletion(t *testing.T) {
 		t.Run(failure, func(t *testing.T) {
 			store, session := lifecycleFixture(t)
 			base := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
-			session, err := NewActorWorkflow(store, base).Create(t.Context(), session)
+			session, err := NewActorWorkflow(store, base, fixtureCredentials{}, "http://kagent-controller.kagent:8083").Create(t.Context(), session)
 			require.NoError(t, err)
 			actors := &expirationActors{retryTestActors: &retryTestActors{lifecycleTestActors: base}}
 			writes := &completionTestStore{lifecycleTestStore: store}
@@ -35,7 +35,7 @@ func TestSessionExpirationRetriesDeletion(t *testing.T) {
 			case "persistence":
 				writes.finishErr = errors.New("database unavailable")
 			}
-			worker, err := NewExpirationWorker(store, NewActorWorkflow(writes, actors), 7*24*time.Hour, time.Minute)
+			worker, err := NewExpirationWorker(store, NewActorWorkflow(writes, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083"), 7*24*time.Hour, time.Minute)
 			require.NoError(t, err)
 			require.Error(t, worker.expire(t.Context(), session.Id, time.Now().Add(worker.idleTTL)))
 			require.ErrorIs(t, store.ReserveSessionDispatch(t.Context(), session.Id, uuid.New(), "next turn"), database.ErrConflict)
@@ -43,7 +43,7 @@ func TestSessionExpirationRetriesDeletion(t *testing.T) {
 			actors.readErr, writes.finishErr = nil, nil
 			// A replacement worker discovers the durable expiration even with
 			// a longer TTL, without a client retry or an in-memory work queue.
-			worker, err = NewExpirationWorker(store, NewActorWorkflow(writes, actors), 30*24*time.Hour, time.Minute)
+			worker, err = NewExpirationWorker(store, NewActorWorkflow(writes, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083"), 30*24*time.Hour, time.Minute)
 			require.NoError(t, err)
 			ids, err := store.ListIdleSessions(t.Context(), time.Time{}, time.Nanosecond, "", 100)
 			require.NoError(t, err)
@@ -79,7 +79,7 @@ func TestSessionExpirationRetainsCheckpointHistory(t *testing.T) {
 	store, source := lifecycleFixture(t)
 	actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
 	_, checkpointID := lifecycleForkFixture(t, store, actors, source)
-	worker, err := NewExpirationWorker(store, NewActorWorkflow(store, actors), time.Hour, time.Minute)
+	worker, err := NewExpirationWorker(store, NewActorWorkflow(store, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083"), time.Hour, time.Minute)
 	require.NoError(t, err)
 	require.NoError(t, worker.expire(t.Context(), source.Id, time.Now().Add(worker.idleTTL)))
 	// A new fork after expiration reconstructs the retained conversation.
@@ -95,7 +95,7 @@ func TestSessionExpirationRetainsCheckpointHistory(t *testing.T) {
 func TestSessionDeleteCompletesIdleDeletion(t *testing.T) {
 	store, session := lifecycleFixture(t)
 	actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
-	workflow := NewActorWorkflow(store, actors)
+	workflow := NewActorWorkflow(store, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083")
 	session, err := workflow.Create(t.Context(), session)
 	require.NoError(t, err)
 	_, err = store.BeginIdleSessionDeletion(t.Context(), session.Id, time.Now(), time.Nanosecond)
@@ -123,10 +123,10 @@ func TestSessionExpirationCountsCompletedSweepDeletionOnce(t *testing.T) {
 	})
 	store, session := lifecycleFixture(t)
 	actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
-	session, err := NewActorWorkflow(store, actors).Create(t.Context(), session)
+	session, err := NewActorWorkflow(store, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083").Create(t.Context(), session)
 	require.NoError(t, err)
 	writes := &completionTestStore{lifecycleTestStore: store, finishErr: errors.New("database unavailable")}
-	worker, err := NewExpirationWorker(store, NewActorWorkflow(writes, actors), time.Hour, time.Minute)
+	worker, err := NewExpirationWorker(store, NewActorWorkflow(writes, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083"), time.Hour, time.Minute)
 	require.NoError(t, err)
 	require.Error(t, worker.expire(t.Context(), session.Id, time.Now().Add(worker.idleTTL)))
 	writes.finishErr = nil
@@ -174,7 +174,7 @@ func TestSessionExpirationConfiguration(t *testing.T) {
 func TestSessionExpirationWorkerDiscoversIdleSessions(t *testing.T) {
 	store, session := lifecycleFixture(t)
 	actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
-	workflow := NewActorWorkflow(store, actors)
+	workflow := NewActorWorkflow(store, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083")
 	session, err := workflow.Create(t.Context(), session)
 	require.NoError(t, err)
 	worker, err := NewExpirationWorker(store, workflow, time.Nanosecond, time.Minute)
@@ -192,7 +192,7 @@ func TestSessionExpirationWorkerDiscoversIdleSessions(t *testing.T) {
 func TestSessionExpirationSerializesRuntimeAttempts(t *testing.T) {
 	store, session := lifecycleFixture(t)
 	actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
-	session, err := NewActorWorkflow(store, actors).Create(t.Context(), session)
+	session, err := NewActorWorkflow(store, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083").Create(t.Context(), session)
 	require.NoError(t, err)
 	entered, release := make(chan struct{}), make(chan struct{})
 	writes := &completionTestStore{lifecycleTestStore: store, afterClaim: func(ctx context.Context) {
@@ -202,9 +202,9 @@ func TestSessionExpirationSerializesRuntimeAttempts(t *testing.T) {
 		case <-ctx.Done():
 		}
 	}}
-	first, err := NewExpirationWorker(store, NewActorWorkflow(writes, actors), time.Hour, time.Minute)
+	first, err := NewExpirationWorker(store, NewActorWorkflow(writes, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083"), time.Hour, time.Minute)
 	require.NoError(t, err)
-	second, err := NewExpirationWorker(store, NewActorWorkflow(store, actors), time.Hour, time.Minute)
+	second, err := NewExpirationWorker(store, NewActorWorkflow(store, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083"), time.Hour, time.Minute)
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)

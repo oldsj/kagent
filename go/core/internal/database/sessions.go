@@ -351,8 +351,8 @@ func insertSessionRecords(ctx context.Context, db pgx.Tx, session *apiv1alpha1.S
 		return sessionRow{}, err
 	}
 	if err := execSQL(ctx, db, `
-		INSERT INTO session (id, context_id, history_id, source_checkpoint_id, pinned_checkpoint_id, data)
-		VALUES ($1, $2, $3, $4, $4, $5)
+		INSERT INTO session (id, context_id, history_id, source_checkpoint_id, pinned_checkpoint_id, data, runtime_generation_eligible)
+		VALUES ($1, $2, $3, $4, $4, $5, true)
 	`, session.Id, session.ContextId, historyID, sourceCheckpointID, data); err != nil {
 		return sessionRow{}, err
 	}

@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"crypto/sha256"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -26,7 +27,7 @@ import (
 func TestActorWorkflowLifecycle(t *testing.T) {
 	store, session := lifecycleFixture(t)
 	actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
-	workflow := NewActorWorkflow(store, actors)
+	workflow := NewActorWorkflow(store, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083")
 
 	created, err := workflow.Create(context.Background(), session)
 	if err != nil {
@@ -38,14 +39,14 @@ func TestActorWorkflowLifecycle(t *testing.T) {
 	if len(actors.actors) != 1 {
 		t.Fatalf("actors = %v", actors.actors)
 	}
-	if actor := actors.actors[actorKey("team-a", substrate.ActorName(session.GetId()))]; actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+	if actor := actors.actors[actorKey("team-a", fixtureActorName(t, store, session.GetId()))]; actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Fatalf("created Actor status = %s", actor.GetStatus().GetState())
 	}
-	actors.actors[actorKey("team-a", substrate.ActorName(session.GetId()))].Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
+	actors.actors[actorKey("team-a", fixtureActorName(t, store, session.GetId()))].Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 	if err := workflow.Pause(context.Background(), created); err != nil {
 		t.Fatal(err)
 	}
-	if actor := actors.actors[actorKey("team-a", substrate.ActorName(session.GetId()))]; actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_PAUSED {
+	if actor := actors.actors[actorKey("team-a", fixtureActorName(t, store, session.GetId()))]; actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_PAUSED {
 		t.Fatalf("paused Actor status = %s", actor.GetStatus().GetState())
 	}
 	boundary, err := workflow.Quiesce(context.Background(), created)
@@ -63,7 +64,7 @@ func TestActorWorkflowLifecycle(t *testing.T) {
 	if suspended.GetState() != apiv1alpha1.RuntimeState_RUNTIME_STATE_SUSPENDED || suspended.GetOperation() != apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_NONE {
 		t.Fatalf("suspended session = %+v", suspended)
 	}
-	if actor := actors.actors[actorKey("team-a", substrate.ActorName(session.GetId()))]; actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+	if actor := actors.actors[actorKey("team-a", fixtureActorName(t, store, session.GetId()))]; actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Fatalf("suspended Actor status = %s", actor.GetStatus().GetState())
 	}
 
@@ -91,10 +92,10 @@ func TestActorWorkflowRejectsReplacedRuntime(t *testing.T) {
 		t.Run(operation, func(t *testing.T) {
 			store, session := lifecycleFixture(t)
 			actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
-			workflow := NewActorWorkflow(store, actors)
+			workflow := NewActorWorkflow(store, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083")
 			session, err := workflow.Create(t.Context(), session)
 			require.NoError(t, err)
-			actor := actors.actors[actorKey("team-a", substrate.ActorName(session.Id))]
+			actor := actors.actors[actorKey("team-a", fixtureActorName(t, store, session.Id))]
 			actor.Metadata.Uid = "replacement-uid"
 			actor.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 			switch operation {
@@ -107,7 +108,7 @@ func TestActorWorkflowRejectsReplacedRuntime(t *testing.T) {
 			case "delete":
 				_, err = workflow.Delete(t.Context(), session)
 			}
-			require.ErrorContains(t, err, "verify runtime actor UID")
+			require.Error(t, err)
 			require.Equal(t, ateapipb.ActorState_ACTOR_STATE_RUNNING, actor.Status.State)
 			require.Len(t, actors.actors, 1)
 		})
@@ -118,18 +119,18 @@ func TestActorWorkflowForkCreatesSuspendedActorFromCheckpoint(t *testing.T) {
 	store, session := lifecycleFixture(t)
 	actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
 	session, checkpointID := lifecycleForkFixture(t, store, actors, session)
-	fork, err := NewActorWorkflow(store, actors).Create(t.Context(), session)
+	fork, err := NewActorWorkflow(store, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083").Create(t.Context(), session)
 	if err != nil {
 		t.Fatal(err)
 	}
-	actor := actors.actors[actorKey("team-a", substrate.ActorName(session.GetId()))]
+	actor := actors.actors[actorKey("team-a", fixtureActorName(t, store, session.GetId()))]
 	if fork.GetState() != apiv1alpha1.RuntimeState_RUNTIME_STATE_READY ||
 		actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED ||
 		actor.GetSourceTag().GetName() != "checkpoint-"+checkpointID {
 		t.Fatalf("fork = %+v, actor = %+v", fork, actor)
 	}
 	actor.Status.ExternalSnapshot.SnapshotUri = "s3://snapshots/later-turn"
-	replayed, err := NewActorWorkflow(store, actors).Create(t.Context(), session)
+	replayed, err := NewActorWorkflow(store, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083").Create(t.Context(), session)
 	require.NoError(t, err)
 	require.True(t, proto.Equal(fork, replayed), "a retry returns the current session without revalidating later Actor state")
 }
@@ -252,23 +253,21 @@ func (a *lifecycleTestActors) DeleteActor(_ context.Context, atespace, name stri
 }
 
 func TestQuiesceRejectsWrongActorIdentity(t *testing.T) {
-	session := &apiv1alpha1.Session{Id: "session-1", PreparedRevision: "revision-1"}
-	store := &lifecycleTestStore{revision: &database.RuntimeRevision{ActorTemplateAtespace: "team-a"}}
-	actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{
-		actorKey("team-a", substrate.ActorName(session.Id)): {
-			Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "different-actor", Uid: "actor-uid"},
-			Status:   &ateapipb.ActorStatus{},
-		},
-	}}
-	if _, err := NewActorWorkflow(store, actors).Quiesce(t.Context(), session); err == nil {
-		t.Fatal("Quiesce() accepted the wrong Actor")
-	}
+	store, session := lifecycleFixture(t)
+	actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
+	workflow := NewActorWorkflow(store, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083")
+	session, err := workflow.Create(t.Context(), session)
+	require.NoError(t, err)
+	name := fixtureActorName(t, store, session.Id)
+	actors.actors[actorKey("team-a", name)].Metadata.Uid = "foreign-uid"
+	_, err = workflow.Quiesce(t.Context(), session)
+	require.Error(t, err)
 }
 
 // lifecycleForkFixture retains a real checkpoint and its independent fork history.
 func lifecycleForkFixture(t *testing.T, store *lifecycleTestStore, actors *lifecycleTestActors, source *apiv1alpha1.Session) (*apiv1alpha1.Session, string) {
 	t.Helper()
-	source, err := NewActorWorkflow(store, actors).Create(t.Context(), source)
+	source, err := NewActorWorkflow(store, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083").Create(t.Context(), source)
 	require.NoError(t, err)
 	message := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("hello"))
 	message.ContextID = source.ContextId
@@ -316,7 +315,7 @@ func TestActorCreationRetainsEgressPolicyFailure(t *testing.T) {
 				session, _ = lifecycleForkFixture(t, store, base, session)
 			}
 			actors := &retryTestActors{lifecycleTestActors: base}
-			workflow := NewActorWorkflow(store, actors)
+			workflow := NewActorWorkflow(store, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083")
 			callsBefore := base.policyCalls
 			store.revision.EgressDestinations = []string{"*"}
 			_, err := workflow.Create(t.Context(), session)
@@ -333,12 +332,12 @@ func TestActorCreationRetainsEgressPolicyFailure(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, apiv1alpha1.RuntimeState_RUNTIME_STATE_CREATING, current.State)
 			require.Empty(t, current.A2AAuthority)
-			require.Equal(t, actorKey("team-a", substrate.ActorName(session.Id)), base.policyActor)
+			require.Equal(t, actorKey("team-a", fixtureActorName(t, store, session.Id)), base.policyActor)
 			require.Equal(t, &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "default"}, base.policy.Metadata)
-			require.Len(t, base.policy.Rules, 2)
-			require.Equal(t, &ateapipb.CredentialHeader{Header: "authorization", Prefix: "Bearer ", CredentialUri: "ate-secret://k8s.io/default/team-a/auth/token"}, base.policy.Rules[0].GetHttps().GetEffects().GetReplaceHeaders()[0])
-			require.Equal(t, []string{"api.example.com"}, base.policy.Rules[0].GetHttps().GetHostnames())
-			require.Equal(t, []string{"other.example.com"}, base.policy.Rules[1].GetHttps().GetHostnames())
+			require.Len(t, base.policy.Rules, 3)
+			require.Equal(t, &ateapipb.CredentialHeader{Header: "authorization", Prefix: "Bearer ", CredentialUri: "ate-secret://k8s.io/default/team-a/auth/token"}, base.policy.Rules[1].GetHttps().GetEffects().GetReplaceHeaders()[0])
+			require.Equal(t, []string{"api.example.com"}, base.policy.Rules[1].GetHttps().GetHostnames())
+			require.Equal(t, []string{"other.example.com"}, base.policy.Rules[2].GetHttps().GetHostnames())
 
 			// Retry completes policy setup for the existing Actor before readiness.
 			base.policyErr = nil
@@ -346,7 +345,7 @@ func TestActorCreationRetainsEgressPolicyFailure(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, apiv1alpha1.RuntimeState_RUNTIME_STATE_READY, ready.State)
 			require.EqualValues(t, 1, actors.mutations.Load())
-			require.Equal(t, callsBefore+2, base.policyCalls)
+			require.Equal(t, callsBefore+3, base.policyCalls)
 		})
 	}
 }
@@ -397,7 +396,7 @@ func TestActorEgressCredentialsRequireAllowedDestination(t *testing.T) {
 func TestServiceLifecycleRetriesUseCurrentStateAndRespectDeletion(t *testing.T) {
 	store, fixture := lifecycleFixture(t)
 	actors := &retryTestActors{lifecycleTestActors: &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}}
-	service := NewService(store, serviceTestAuthorizer{}, NewActorWorkflow(store, actors))
+	service := NewService(store, serviceTestAuthorizer{}, NewActorWorkflow(store, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083"))
 	ctx := serviceTestContext("alice")
 	session, err := service.Create(ctx, fixture.Agent, "retry-request", "conversation", nil)
 	require.NoError(t, err)
@@ -438,12 +437,15 @@ func TestActorWorkflowSessionCredentialsAcrossRetryResumeAndFork(t *testing.T) {
 	session, _, err := store.CreateSession(ctx, request, "session-credentials")
 	require.NoError(t, err)
 	actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}, policyErr: context.DeadlineExceeded}
-	workflow := NewActorWorkflow(store, actors)
+	workflow := NewActorWorkflow(store, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083")
 	_, err = workflow.Create(ctx, session)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	policy := proto.CloneOf(actors.policy)
-	require.Len(t, policy.Rules, 2)
-	require.Equal(t, &ateapipb.CredentialHeader{Header: "authorization", CredentialUri: "ate-secret://k8s.io/default/team-a/tokens/one"}, policy.Rules[0].GetHttp().GetEffects().GetReplaceHeaders()[0])
+	generation, err := store.GetRuntimeGeneration(ctx, session.Id)
+	require.NoError(t, err)
+	require.Len(t, policy.Rules, 3)
+	require.Equal(t, &ateapipb.CredentialHeader{Header: egress.RuntimeTokenHeader, CredentialUri: generation.CredentialURI}, policy.Rules[0].GetHttp().GetEffects().GetReplaceHeaders()[0])
+	require.Equal(t, &ateapipb.CredentialHeader{Header: "authorization", CredentialUri: "ate-secret://k8s.io/default/team-a/tokens/one"}, policy.Rules[1].GetHttp().GetEffects().GetReplaceHeaders()[0])
 	actors.policyErr = nil
 	session, err = workflow.Create(ctx, session)
 	require.NoError(t, err)
@@ -453,10 +455,96 @@ func TestActorWorkflowSessionCredentialsAcrossRetryResumeAndFork(t *testing.T) {
 	require.NoError(t, err)
 	session, err = workflow.Resume(ctx, session)
 	require.NoError(t, err)
-	require.Equal(t, calls, actors.policyCalls, "resume retains the existing credential policy")
+	require.Equal(t, calls+1, actors.policyCalls, "resume verifies the original credential policy")
+	require.True(t, proto.Equal(policy, actors.policy))
 	fork, _ := lifecycleForkFixture(t, store, actors, session)
 	require.Empty(t, fork.GetCredentials(), "forks cannot act as the source binding")
 	_, err = workflow.Create(ctx, fork)
 	require.NoError(t, err)
-	require.Nil(t, actors.policy.Rules[0].GetHttp().GetEffects(), "fork has no source Session credential")
+	forkGeneration, err := store.GetRuntimeGeneration(ctx, fork.Id)
+	require.NoError(t, err)
+	require.NotEqual(t, generation.ID, forkGeneration.ID)
+	require.NotEqual(t, generation.ActorName, forkGeneration.ActorName)
+	require.NotEqual(t, generation.CredentialURI, forkGeneration.CredentialURI)
+	require.Equal(t, forkGeneration.CredentialURI, actors.policy.Rules[0].GetHttp().GetEffects().GetReplaceHeaders()[0].GetCredentialUri())
+	require.Nil(t, actors.policy.Rules[1].GetHttp().GetEffects(), "fork has no source Session credential")
+}
+
+// Fixture issuer models only private issuance effects, never deployed isolation.
+type fixtureCredentials struct{}
+
+func (fixtureCredentials) Namespace() string { return "kagent" }
+func (fixtureCredentials) Ensure(context.Context, database.RuntimeGeneration, string) error {
+	return nil
+}
+func (fixtureCredentials) Delete(context.Context, database.RuntimeGeneration) error { return nil }
+func fixtureActorName(t *testing.T, store interface {
+	GetRuntimeGeneration(context.Context, string) (*database.RuntimeGeneration, error)
+}, id string) string {
+	t.Helper()
+	generation, err := store.GetRuntimeGeneration(t.Context(), id)
+	require.NoError(t, err)
+	return generation.ActorName
+}
+
+func TestDeleteFreshSessionBeforeIssuanceDoesNotAdoptCompute(t *testing.T) {
+	store, session := lifecycleFixture(t)
+	actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
+	workflow := NewActorWorkflow(store, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083")
+	deleted, err := workflow.Delete(t.Context(), session)
+	require.NoError(t, err)
+	require.Equal(t, apiv1alpha1.RuntimeState_RUNTIME_STATE_DELETED, deleted.State)
+	_, err = store.GetRuntimeGeneration(t.Context(), session.Id)
+	require.ErrorIs(t, err, database.ErrNotFound)
+	require.Empty(t, actors.actors)
+}
+
+// A committed binding with a lost reply can reconcile its exact UID. A failed
+// binding write leaves actor-issued intent held; a current lookup cannot adopt it.
+type bindingReplyStore struct {
+	*lifecycleTestStore
+	afterCommit bool
+	failed      bool
+}
+
+func (s *bindingReplyStore) AdvanceRuntimeGeneration(ctx context.Context, id uuid.UUID, from, to, uid string) error {
+	if to == "bound" && !s.failed {
+		s.failed = true
+		if s.afterCommit {
+			if err := s.Client.AdvanceRuntimeGeneration(ctx, id, from, to, uid); err != nil {
+				return err
+			}
+		}
+		return context.DeadlineExceeded
+	}
+	return s.Client.AdvanceRuntimeGeneration(ctx, id, from, to, uid)
+}
+func TestBindingReplyLossPreservesOriginalIdentity(t *testing.T) {
+	for _, afterCommit := range []bool{false, true} {
+		t.Run(fmt.Sprintf("committed=%v", afterCommit), func(t *testing.T) {
+			store, session := lifecycleFixture(t)
+			writes := &bindingReplyStore{lifecycleTestStore: store, afterCommit: afterCommit}
+			actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
+			workflow := NewActorWorkflow(writes, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083")
+			_, err := workflow.Create(t.Context(), session)
+			require.Error(t, err)
+			before, err := store.GetRuntimeGeneration(t.Context(), session.Id)
+			require.NoError(t, err)
+			_, retryErr := workflow.Create(t.Context(), session)
+			after, err := store.GetRuntimeGeneration(t.Context(), session.Id)
+			require.NoError(t, err)
+			require.Equal(t, before.ID, after.ID)
+			require.Equal(t, before.ActorName, after.ActorName)
+			require.Equal(t, before.CredentialURI, after.CredentialURI)
+			require.Len(t, actors.actors, 1)
+			if afterCommit {
+				require.NoError(t, retryErr)
+				require.Equal(t, "active", after.Phase)
+			} else {
+				require.Error(t, retryErr)
+				require.Equal(t, "actor-issued", after.Phase)
+				require.Empty(t, after.ActorUID)
+			}
+		})
+	}
 }

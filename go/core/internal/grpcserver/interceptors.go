@@ -14,6 +14,7 @@ import (
 	a2apb "github.com/a2aproject/a2a-go/v2/a2apb/v1"
 	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	api "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
+	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	authimpl "github.com/kagent-dev/kagent/go/core/internal/httpserver/auth"
 	"github.com/kagent-dev/kagent/go/core/internal/service/controlauth"
 	"github.com/kagent-dev/kagent/go/core/internal/service/serviceerrors"
@@ -29,6 +30,7 @@ import (
 )
 
 var forwardedMetadataKeys = map[string]string{
+	egress.RuntimeTokenHeader:            egress.RuntimeTokenHeader,
 	apia2a.InsecureRuntimeIdentityHeader: apia2a.InsecureRuntimeIdentityHeader,
 	"authorization":                      "Authorization",
 	"x-user-id":                          "X-User-Id",
@@ -61,6 +63,10 @@ func authenticate(ctx context.Context, fullMethod string, authenticator, runtime
 	if !ok {
 		return ctx, status.Error(codes.PermissionDenied, "RPC authorization policy is not configured")
 	}
+	headers := incomingHTTPHeaders(ctx)
+	if access != auth.AccessRuntime && len(headers.Values(egress.RuntimeTokenHeader)) != 0 {
+		return ctx, status.Error(codes.PermissionDenied, "runtime credentials cannot access control APIs")
+	}
 	if access == auth.AccessPublic {
 		if _, serviceToken := authenticator.(*authimpl.ServiceTokenAuthenticator); serviceToken {
 			switch fullMethod {
@@ -78,7 +84,6 @@ func authenticate(ctx context.Context, fullMethod string, authenticator, runtime
 		return ctx, status.Error(codes.Unauthenticated, "authentication is not configured")
 	}
 
-	headers := incomingHTTPHeaders(ctx)
 	session, err := authenticator.Authenticate(ctx, headers, url.Values{})
 	if err != nil || session == nil {
 		return ctx, status.Error(codes.Unauthenticated, "invalid credentials")

@@ -22,11 +22,13 @@ jobs:
     env:
       GOFLAGS: -p=2
       GOMAXPROCS: "2"
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      KUBECONFIG: /dev/null
     steps:
-      - name: Checkout event source
-        # Keep the event default: PR merge candidate, push SHA, or dispatch SHA.
+      - name: Checkout exact source
         uses: actions/checkout@v6
         with:
+          ref: ${{ env.SOURCE_SHA }}
           persist-credentials: false
       - name: Record tested source
         env:
@@ -35,11 +37,11 @@ jobs:
           EVENT_SHA: ${{ github.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          checkout_sha=$(git rev-parse HEAD)
-          printf 'Event: %s\nRef: %s\nEvent SHA: %s\nCheckout SHA: %s\nPR head SHA: %s\n' \
-            "$EVENT_NAME" "$SOURCE_REF" "$EVENT_SHA" "$checkout_sha" "$PR_HEAD_SHA" \
+          checkout_sha=$(git rev-parse --verify HEAD)
+          test "$checkout_sha" = "$SOURCE_SHA"
+          printf 'Event: %s\nRef: %s\nSelected source SHA: %s\nCheckout SHA: %s\nEvent SHA: %s\nPR head SHA: %s\n' \
+            "$EVENT_NAME" "$SOURCE_REF" "$SOURCE_SHA" "$checkout_sha" "$EVENT_SHA" "$PR_HEAD_SHA" \
             | tee -a "$GITHUB_STEP_SUMMARY"
-          test "$checkout_sha" = "$EVENT_SHA"
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
@@ -49,3 +51,28 @@ jobs:
         run: go test ./core/internal/controller/chatgptrefresh -count=1 -timeout=180s
       - name: Vet refresh package
         run: go vet ./core/internal/controller/chatgptrefresh
+      - name: Record bounded offline scope
+        run: |
+          printf '%s\n' \
+            'Runtime tests use isolated testcontainers PostgreSQL and fake Actor/gateway/native effects.' \
+            'Deferred: TestSandboxTemplateCatalog requires local Kubernetes envtest assets; handler/control/runtime tests still run.' \
+            'Deferred: TestPinnedCodexAcceptsGeneratedConfiguration launches the real Codex CLI/app-server; fake native consumer tests still run.' \
+            'No provider credentials, native agents, cluster operations, image publication or rollout.' \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Test runtime capability and policy fixtures
+        run: go test -count=1 ./adk/pkg/taskstore ./core/internal/egress ./core/internal/substrate ./core/internal/service/taskstore
+      - name: Test PostgreSQL lifecycle, callbacks and control authentication
+        # No -short: migration Up/Down, inline SQL, issuance and revocation must run.
+        # Exclude only the unrelated envtest catalog, never runtime identity tests.
+        run: >-
+          go test -race -count=1 -skip '^TestSandboxTemplateCatalog$'
+          ./core/internal/database ./core/pkg/migrations
+          ./core/internal/service/session ./core/internal/service/checkpoint
+          ./core/internal/grpcserver ./core/internal/httpserver/auth ./core/pkg/auth
+      - name: Test fake native consumers
+        # The explicit real-CLI deferral is recorded above; no native agent starts.
+        run: >-
+          go test -count=1 -skip '^TestPinnedCodexAcceptsGeneratedConfiguration$'
+          ./harness/runtime/workspace ./harness/claude/... ./harness/codex/...
+      - name: Build controller and native consumers
+        run: go build ./core/pkg/app ./harness/claude/cmd ./harness/codex/cmd

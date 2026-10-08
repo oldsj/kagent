@@ -45,6 +45,7 @@ import (
 	toolservice "github.com/kagent-dev/kagent/go/core/internal/service/tool"
 	"github.com/kagent-dev/kagent/go/core/internal/substrate"
 	v2translator "github.com/kagent-dev/kagent/go/core/internal/translator"
+	"github.com/kagent-dev/kagent/go/core/internal/utils"
 	"github.com/kagent-dev/kagent/go/core/internal/version"
 	"github.com/kagent-dev/kagent/go/core/pkg/auth"
 	kagentenv "github.com/kagent-dev/kagent/go/core/pkg/env"
@@ -333,8 +334,14 @@ func Run(ctx context.Context, opts Options) error {
 	prompts := prompttemplateservice.NewService(manager.GetClient(), authorizer)
 	system := systemservice.NewService(manager.GetClient(), watchNamespaces, authorizer, actors)
 	memory := memoryservice.NewService(store)
-	sessionWorkflow := sessionsvc.NewActorWorkflow(store, actors)
-	runtimeTasks := taskstore.NewService(store)
+	credentialClient, err := client.New(kubeConfig, client.Options{Scheme: managerScheme})
+	if err != nil {
+		return fmt.Errorf("create runtime credential client: %w", err)
+	}
+	runtimeCredentials := substrate.NewRuntimeCredentialIssuer(credentialClient, resourceNamespace)
+	callbackOrigin := fmt.Sprintf("http://%s.%s:8083", utils.GetControllerName(), resourceNamespace)
+	sessionWorkflow := sessionsvc.NewActorWorkflow(store, actors, runtimeCredentials, callbackOrigin)
+	runtimeTasks := taskstore.NewService(store, actors)
 	if err := manager.Add(sessionWorkflow); err != nil {
 		return fmt.Errorf("register idle session worker: %w", err)
 	}
@@ -427,7 +434,7 @@ func Run(ctx context.Context, opts Options) error {
 		BindAddress:           env(kagentenv.HTTPBindAddress),
 		Reflection:            kagentenv.GRPCReflection.Get(),
 		Authenticator:         authenticator,
-		RuntimeAuthenticator:  &taskstore.Authenticator{},
+		RuntimeAuthenticator:  &taskstore.Authenticator{Store: store},
 		ShareStore:            store,
 		ModelService:          models,
 		ToolService:           tools,

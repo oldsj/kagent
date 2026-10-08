@@ -12,7 +12,6 @@ import (
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 	"github.com/kagent-dev/kagent/go/core/internal/database"
 	"github.com/kagent-dev/kagent/go/core/internal/service/serviceerrors"
-	"github.com/kagent-dev/kagent/go/core/internal/substrate"
 	"github.com/kagent-dev/kagent/go/core/pkg/auth"
 	"golang.org/x/sync/singleflight"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
@@ -26,6 +25,7 @@ const (
 )
 
 type store interface {
+	GetRuntimeGeneration(context.Context, string) (*database.RuntimeGeneration, error)
 	ReserveSessionCheckpoint(context.Context, *apiv1alpha1.Checkpoint, string, string) (*apiv1alpha1.Checkpoint, *database.SessionTaskSnapshot, error)
 	FinalizeSessionCheckpoint(context.Context, string, string, string, string) (*apiv1alpha1.Checkpoint, error)
 	GetSessionCheckpoint(context.Context, string, string) (*apiv1alpha1.Checkpoint, error)
@@ -150,8 +150,15 @@ func (s *Service) create(ctx context.Context, userID, sessionID, requestID, expe
 // CreateTag copies the Actor's current snapshot. Verify both sides of the copy
 // because ate-api also permits Actors to be changed outside kagent.
 func (s *Service) ensureTag(ctx context.Context, checkpoint *apiv1alpha1.Checkpoint, reference *database.SessionTaskSnapshot) (*ateapipb.Tag, error) {
-	actorName := substrate.ActorName(checkpoint.GetSessionId())
+	generation, err := s.store.GetRuntimeGeneration(ctx, checkpoint.GetSessionId())
+	if err != nil || generation.Phase != "active" || generation.ActorUID == "" || reference.ContentScope != "DATA" {
+		return nil, fmt.Errorf("checkpoint requires an active ledger-issued DATA generation")
+	}
+	actorName := generation.ActorName
 	actor, err := s.verifySnapshot(ctx, actorName, reference)
+	if err == nil && (actor.GetMetadata().GetUid() != generation.ActorUID || actor.GetMetadata().GetAtespace() != generation.Atespace) {
+		return nil, fmt.Errorf("checkpoint generation identity changed")
+	}
 	if err != nil {
 		return nil, err
 	}

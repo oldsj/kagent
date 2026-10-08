@@ -259,11 +259,11 @@ func TestInsecureRuntimeIdentityDoesNotAuthorizePublicAPI(t *testing.T) {
 	}
 	_, err := authenticate(ctx, readMethod, public, &taskstore.Authenticator{}, nil, policies)
 	if status.Code(err) != codes.Unauthenticated {
-		t.Fatalf("runtime test mode authorized public API: %v", err)
+		t.Fatalf("runtime credentials authorized public API: %v", err)
 	}
 	_, err = authenticate(ctx, runtimeMethod, public, &taskstore.Authenticator{}, nil, policies)
-	if err != nil {
-		t.Fatalf("explicit runtime test mode rejected identity: %v", err)
+	if status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("unsigned runtime identity authorized storage: %v", err)
 	}
 }
 
@@ -313,5 +313,18 @@ func TestRecoverUnaryInterceptor(t *testing.T) {
 	}
 	if got := status.Convert(err).Message(); got != "internal server error" {
 		t.Fatalf("message = %q", got)
+	}
+}
+
+func TestRuntimeCapabilityMetadataIsForwardedAndDeniedAtControlAPI(t *testing.T) {
+	const header = "x-kagent-runtime-token"
+	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs(header, "one", header, "two"))
+	headers := incomingHTTPHeaders(ctx)
+	if len(headers.Values(header)) != 2 {
+		t.Fatal("runtime header multiplicity was lost")
+	}
+	_, err := authenticate(ctx, readMethod, &testAuthenticator{session: &testSession{}}, nil, nil, MethodPolicies{readMethod: pkgauth.AccessRead})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("control API admitted runtime credentials: %v", err)
 	}
 }

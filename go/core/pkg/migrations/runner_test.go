@@ -205,7 +205,7 @@ func TestBuiltinMigrationsRoundTrip(t *testing.T) {
 	for _, source := range sources {
 		expected := []int64{0, 1}
 		if source.Name == "core" {
-			expected = []int64{0, 1, 2, 3, 4}
+			expected = []int64{0, 1, 2, 3, 4, 5}
 		}
 		if versions := testVersions(t, dsn, source.TrackingTable); !slices.Equal(versions, expected) {
 			t.Fatalf("%s versions = %v, want %v", source.Name, versions, expected)
@@ -213,6 +213,9 @@ func TestBuiltinMigrationsRoundTrip(t *testing.T) {
 	}
 	if !testColumnExists(t, dsn, "session", "deletion_reason") {
 		t.Fatal("session deletion reason is missing")
+	}
+	if !testTableExists(t, dsn, "runtime_generation") || !testColumnExists(t, dsn, "session", "runtime_generation_eligible") {
+		t.Fatal("runtime generation ledger or eligibility marker is missing")
 	}
 	if !testColumnExists(t, dsn, "agent_definition", "session_idle_ttl_seconds") {
 		t.Fatal("Agent idle TTL override is missing")

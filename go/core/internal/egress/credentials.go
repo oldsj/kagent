@@ -11,6 +11,9 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 )
 
+const RuntimeTokenHeader = "x-kagent-runtime-token"
+const RuntimeSecretPrefix = "kagent-runtime-"
+
 // Credential binds a Secret reference to an exact destination and HTTP header.
 // Values are fetched by the gateway and never enter a runtime revision.
 type Credential struct {
@@ -28,6 +31,9 @@ func CanonicalCredentials(bindings []Credential) ([]Credential, error) {
 		c := &result[i]
 		c.Hostname = strings.TrimSuffix(strings.ToLower(c.Hostname), ".")
 		c.Header = strings.ToLower(c.Header)
+		if c.Header == RuntimeTokenHeader {
+			return nil, fmt.Errorf("reserved runtime credential header")
+		}
 		_, ipErr := netip.ParseAddr(c.Hostname)
 		if ipErr == nil || len(validation.IsDNS1123Subdomain(c.Hostname)) != 0 {
 			return nil, fmt.Errorf("credential injection requires an exact DNS hostname, got %q", c.Hostname)
@@ -42,6 +48,9 @@ func CanonicalCredentials(bindings []Credential) ([]Credential, error) {
 		parts := strings.Split(strings.TrimPrefix(u.Path, "/"), "/")
 		if len(parts) != 4 || parts[0] != "default" || len(validation.IsDNS1123Label(parts[1])) != 0 || len(validation.IsDNS1123Subdomain(parts[2])) != 0 || parts[3] == "" || len(validation.IsConfigMapKey(parts[3])) != 0 {
 			return nil, fmt.Errorf("credential URI must identify the default locator, namespace, Secret and key")
+		}
+		if strings.HasPrefix(parts[2], RuntimeSecretPrefix) {
+			return nil, fmt.Errorf("reserved runtime credential reference")
 		}
 	}
 	slices.SortFunc(result, func(a, b Credential) int {

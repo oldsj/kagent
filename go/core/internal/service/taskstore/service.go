@@ -8,10 +8,10 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2apb/v1/pbconv"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 	"github.com/kagent-dev/kagent/go/core/internal/database"
 	"github.com/kagent-dev/kagent/go/core/internal/substrate"
@@ -22,35 +22,61 @@ import (
 )
 
 type Store interface {
-	SettleSessionTask(context.Context, string, string, int64) error
-	GetSessionForRuntime(context.Context, string, string) (*apiv1alpha1.Session, error)
-	CreateRuntimeTask(context.Context, string, []byte, *a2a.Task, string) (int64, error)
-	GetVersionedSessionTask(context.Context, string, string) (*a2a.Task, int64, error)
-	UpdateSessionTask(context.Context, string, int64, []byte, *a2a.Task, a2a.Event, string) (int64, error)
-	ListSessionTasks(context.Context, string, string, a2a.TaskState, *time.Time, int, *int) ([]*a2a.Task, int, error)
+	database.RuntimeTaskStore
+	WithRuntimeGeneration(context.Context, database.RuntimeGeneration, func(database.RuntimeTaskStore) error) error
 }
 
 var _ Store = (*database.Client)(nil)
 
+type actorReader interface {
+	GetActor(context.Context, string, string) (*ateapipb.Actor, error)
+}
 type Service struct {
-	store Store
+	store     database.RuntimeTaskStore
+	authority Store
+	actors    actorReader
 }
 
-func NewService(store Store) *Service {
-	return &Service{store: store}
+func NewService(store Store, actors actorReader) *Service {
+	return &Service{store: store, authority: store, actors: actors}
+}
+
+// runtimeCall performs fresh external identity observation before opening the
+// database-only authorization transaction. No successful identity is cached.
+func runtimeCall[T any](ctx context.Context, s *Service, sessionID string, fn func(*Service) (T, error)) (T, error) {
+	var result T
+	principal, _ := auth.AuthSessionFrom(ctx)
+	identity, ok := principal.(runtimeSession)
+	if !ok || identity.binding.SessionID.String() != sessionID || s.actors == nil {
+		return result, status.Error(codes.PermissionDenied, "invalid runtime authority")
+	}
+	binding := identity.binding
+	actor, err := s.actors.GetActor(ctx, binding.Atespace, binding.ActorName)
+	if err != nil || actor.GetMetadata().GetUid() != binding.ActorUID || actor.GetMetadata().GetName() != binding.ActorName || actor.GetMetadata().GetAtespace() != binding.Atespace || actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		return result, status.Error(codes.PermissionDenied, "runtime identity unavailable")
+	}
+	err = s.authority.WithRuntimeGeneration(ctx, binding, func(store database.RuntimeTaskStore) error {
+		var callErr error
+		result, callErr = fn(&Service{store: store})
+		return callErr
+	})
+	if err != nil {
+		return result, storageError(err)
+	}
+	return result, nil
 }
 
 func (s *Service) session(ctx context.Context, sessionID string) (*apiv1alpha1.Session, error) {
 	authSession, _ := auth.AuthSessionFrom(ctx)
 	identity, ok := authSession.(runtimeSession)
-	if !ok || identity.sessionID != sessionID {
+	if !ok || identity.binding.SessionID.String() != sessionID {
 		return nil, status.Error(codes.PermissionDenied, "actor does not belong to this session")
 	}
-	session, err := s.store.GetSessionForRuntime(ctx, sessionID, identity.actorUID)
+	session, err := s.store.GetSessionForRuntime(ctx, sessionID, identity.binding.ActorUID)
 	if err != nil {
 		return nil, storageError(err)
 	}
-	if session.A2AAuthority != substrate.ActorHost(identity.atespace, substrate.ActorName(sessionID), "") {
+	if session.A2AAuthority != substrate.ActorHost(identity.binding.Atespace, identity.binding.ActorName, "") {
 		return nil, status.Error(codes.PermissionDenied, "actor does not belong to this session")
 	}
 	return session, nil
@@ -58,7 +84,7 @@ func (s *Service) session(ctx context.Context, sessionID string) (*apiv1alpha1.S
 
 // CreateTask persists the SDK's first task snapshot. Runtime execution and
 // request serialization remain owned by the agent's SDK.
-func (s *Service) CreateTask(ctx context.Context, input *apiv1alpha1.TaskStoreServiceCreateTaskRequest) (*apiv1alpha1.TaskStoreServiceCreateTaskResponse, error) {
+func (s *Service) createTaskOperation(ctx context.Context, input *apiv1alpha1.TaskStoreServiceCreateTaskRequest) (*apiv1alpha1.TaskStoreServiceCreateTaskResponse, error) {
 	if _, err := s.session(ctx, input.SessionId); err != nil {
 		return nil, err
 	}
@@ -75,7 +101,7 @@ func (s *Service) CreateTask(ctx context.Context, input *apiv1alpha1.TaskStoreSe
 	return &apiv1alpha1.TaskStoreServiceCreateTaskResponse{Version: version}, storageError(err)
 }
 
-func (s *Service) GetTask(ctx context.Context, input *apiv1alpha1.TaskStoreServiceGetTaskRequest) (*apiv1alpha1.TaskStoreServiceGetTaskResponse, error) {
+func (s *Service) getTaskOperation(ctx context.Context, input *apiv1alpha1.TaskStoreServiceGetTaskRequest) (*apiv1alpha1.TaskStoreServiceGetTaskResponse, error) {
 	if _, err := s.session(ctx, input.SessionId); err != nil {
 		return nil, err
 	}
@@ -92,7 +118,7 @@ func (s *Service) getTask(ctx context.Context, sessionID, taskID string) (*apiv1
 	return &apiv1alpha1.StoredTask{Task: wire, Version: version}, err
 }
 
-func (s *Service) UpdateTask(ctx context.Context, input *apiv1alpha1.TaskStoreServiceUpdateTaskRequest) (*apiv1alpha1.TaskStoreServiceUpdateTaskResponse, error) {
+func (s *Service) updateTaskOperation(ctx context.Context, input *apiv1alpha1.TaskStoreServiceUpdateTaskRequest) (*apiv1alpha1.TaskStoreServiceUpdateTaskResponse, error) {
 	if _, err := s.session(ctx, input.SessionId); err != nil {
 		return nil, err
 	}
@@ -116,7 +142,7 @@ func (s *Service) UpdateTask(ctx context.Context, input *apiv1alpha1.TaskStoreSe
 	return &apiv1alpha1.TaskStoreServiceUpdateTaskResponse{Version: version}, storageError(err)
 }
 
-func (s *Service) ListTasks(ctx context.Context, input *apiv1alpha1.TaskStoreServiceListTasksRequest) (*apiv1alpha1.TaskStoreServiceListTasksResponse, error) {
+func (s *Service) listTasksOperation(ctx context.Context, input *apiv1alpha1.TaskStoreServiceListTasksRequest) (*apiv1alpha1.TaskStoreServiceListTasksResponse, error) {
 	session, err := s.session(ctx, input.SessionId)
 	if err != nil {
 		return nil, err
@@ -160,7 +186,7 @@ func (s *Service) ListTasks(ctx context.Context, input *apiv1alpha1.TaskStoreSer
 	return &apiv1alpha1.TaskStoreServiceListTasksResponse{Result: wire}, nil
 }
 
-func (s *Service) SettleTask(ctx context.Context, input *apiv1alpha1.TaskStoreServiceSettleTaskRequest) (*apiv1alpha1.TaskStoreServiceSettleTaskResponse, error) {
+func (s *Service) settleTaskOperation(ctx context.Context, input *apiv1alpha1.TaskStoreServiceSettleTaskRequest) (*apiv1alpha1.TaskStoreServiceSettleTaskResponse, error) {
 	if _, err := s.session(ctx, input.SessionId); err != nil {
 		return nil, err
 	}
@@ -188,10 +214,46 @@ func storageError(err error) error {
 // GetWorkspace returns the repository checkout the Session asked for. An empty
 // response means none was requested. The Session row is authoritative: the runtime
 // never receives the workspace through its image, environment, or config.
-func (s *Service) GetWorkspace(ctx context.Context, input *apiv1alpha1.TaskStoreServiceGetWorkspaceRequest) (*apiv1alpha1.TaskStoreServiceGetWorkspaceResponse, error) {
+func (s *Service) getWorkspaceOperation(ctx context.Context, input *apiv1alpha1.TaskStoreServiceGetWorkspaceRequest) (*apiv1alpha1.TaskStoreServiceGetWorkspaceResponse, error) {
 	session, err := s.session(ctx, input.SessionId)
 	if err != nil {
 		return nil, err
 	}
 	return &apiv1alpha1.TaskStoreServiceGetWorkspaceResponse{Workspace: session.GetWorkspace()}, nil
+}
+
+func (s *Service) CreateTask(ctx context.Context, input *apiv1alpha1.TaskStoreServiceCreateTaskRequest) (*apiv1alpha1.TaskStoreServiceCreateTaskResponse, error) {
+	return runtimeCall(ctx, s, input.GetSessionId(), func(inner *Service) (*apiv1alpha1.TaskStoreServiceCreateTaskResponse, error) {
+		return inner.createTaskOperation(ctx, input)
+	})
+}
+
+func (s *Service) GetTask(ctx context.Context, input *apiv1alpha1.TaskStoreServiceGetTaskRequest) (*apiv1alpha1.TaskStoreServiceGetTaskResponse, error) {
+	return runtimeCall(ctx, s, input.GetSessionId(), func(inner *Service) (*apiv1alpha1.TaskStoreServiceGetTaskResponse, error) {
+		return inner.getTaskOperation(ctx, input)
+	})
+}
+
+func (s *Service) UpdateTask(ctx context.Context, input *apiv1alpha1.TaskStoreServiceUpdateTaskRequest) (*apiv1alpha1.TaskStoreServiceUpdateTaskResponse, error) {
+	return runtimeCall(ctx, s, input.GetSessionId(), func(inner *Service) (*apiv1alpha1.TaskStoreServiceUpdateTaskResponse, error) {
+		return inner.updateTaskOperation(ctx, input)
+	})
+}
+
+func (s *Service) ListTasks(ctx context.Context, input *apiv1alpha1.TaskStoreServiceListTasksRequest) (*apiv1alpha1.TaskStoreServiceListTasksResponse, error) {
+	return runtimeCall(ctx, s, input.GetSessionId(), func(inner *Service) (*apiv1alpha1.TaskStoreServiceListTasksResponse, error) {
+		return inner.listTasksOperation(ctx, input)
+	})
+}
+
+func (s *Service) SettleTask(ctx context.Context, input *apiv1alpha1.TaskStoreServiceSettleTaskRequest) (*apiv1alpha1.TaskStoreServiceSettleTaskResponse, error) {
+	return runtimeCall(ctx, s, input.GetSessionId(), func(inner *Service) (*apiv1alpha1.TaskStoreServiceSettleTaskResponse, error) {
+		return inner.settleTaskOperation(ctx, input)
+	})
+}
+
+func (s *Service) GetWorkspace(ctx context.Context, input *apiv1alpha1.TaskStoreServiceGetWorkspaceRequest) (*apiv1alpha1.TaskStoreServiceGetWorkspaceResponse, error) {
+	return runtimeCall(ctx, s, input.GetSessionId(), func(inner *Service) (*apiv1alpha1.TaskStoreServiceGetWorkspaceResponse, error) {
+		return inner.getWorkspaceOperation(ctx, input)
+	})
 }

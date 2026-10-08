@@ -2,6 +2,8 @@ package session
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -10,7 +12,7 @@ import (
 	"github.com/google/uuid"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 	"github.com/kagent-dev/kagent/go/core/internal/database"
-	"github.com/kagent-dev/kagent/go/core/internal/substrate"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -23,6 +25,186 @@ type retryTestActors struct {
 	readErr     error
 	mutationErr error
 	mutations   atomic.Int32
+}
+
+// Count even rejected creation requests; AlreadyExists must not mask reissuance.
+type issuanceRaceActors struct {
+	*lifecycleTestActors
+	creations atomic.Int32
+	lostReply bool
+}
+
+func (a *issuanceRaceActors) create(ctx context.Context, space, name string, create func() (*ateapipb.Actor, error)) (*ateapipb.Actor, error) {
+	call := a.creations.Add(1)
+	if _, err := a.GetActor(ctx, space, name); status.Code(err) != codes.NotFound {
+		return nil, status.Error(codes.AlreadyExists, "Actor name already exists")
+	}
+	actor, err := create()
+	if err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	actor.Metadata.Uid = fmt.Sprintf("issuance-%d", call)
+	a.actors[actorKey(space, name)].Metadata.Uid = actor.Metadata.Uid
+	a.mu.Unlock()
+	if call == 1 && a.lostReply {
+		return nil, context.DeadlineExceeded
+	}
+	return actor, nil
+}
+
+func (a *issuanceRaceActors) CreateActor(ctx context.Context, space, name, templateSpace, templateName string) (*ateapipb.Actor, error) {
+	return a.create(ctx, space, name, func() (*ateapipb.Actor, error) {
+		return a.lifecycleTestActors.CreateActor(ctx, space, name, templateSpace, templateName)
+	})
+}
+
+func (a *issuanceRaceActors) CreateActorFromTag(ctx context.Context, space, name, templateSpace, templateName, tagSpace, tagName string) (*ateapipb.Actor, error) {
+	return a.create(ctx, space, name, func() (*ateapipb.Actor, error) {
+		return a.lifecycleTestActors.CreateActorFromTag(ctx, space, name, templateSpace, templateName, tagSpace, tagName)
+	})
+}
+
+type stalePreparerActors struct {
+	actorClient
+	once     sync.Once
+	prepared chan error
+	release  <-chan struct{}
+}
+
+func (a *stalePreparerActors) GetActor(ctx context.Context, space, name string) (*ateapipb.Actor, error) {
+	actor, err := a.actorClient.GetActor(ctx, space, name)
+	a.once.Do(func() {
+		a.prepared <- err
+		select {
+		case <-a.release:
+		case <-ctx.Done():
+		}
+	})
+	return actor, err
+}
+
+type issuanceClaimStore struct {
+	*lifecycleTestStore
+	claimed   bool
+	operation uuid.UUID
+}
+
+func (s *issuanceClaimStore) ClaimSessionOperation(ctx context.Context, id string, operation, executor uuid.UUID) (bool, error) {
+	claimed, err := s.Client.ClaimSessionOperation(ctx, id, operation, executor)
+	s.claimed, s.operation = claimed, operation
+	return claimed, err
+}
+
+func TestStalePreparerCannotReissueActor(t *testing.T) {
+	for _, kind := range []string{"create", "DATA fork"} {
+		for _, outcome := range []string{"creation reply lost", "binding commit failed"} {
+			for _, absent := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/first Actor absent=%v", kind, outcome, absent), func(t *testing.T) {
+					store, session := lifecycleFixture(t)
+					base := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
+					if kind == "DATA fork" {
+						session, _ = lifecycleForkFixture(t, store, base, session)
+					}
+					policyCalls := base.policyCalls
+					actors := &issuanceRaceActors{lifecycleTestActors: base, lostReply: outcome == "creation reply lost"}
+					prepared, release := make(chan error, 1), make(chan struct{})
+					releaseB := sync.OnceFunc(func() { close(release) })
+					defer releaseB()
+					ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+					defer cancel()
+					bStore := &issuanceClaimStore{lifecycleTestStore: store}
+					bActors := &stalePreparerActors{actorClient: actors, prepared: prepared, release: release}
+					done := make(chan error, 1)
+					go func() {
+						_, err := NewActorWorkflow(bStore, bActors, fixtureCredentials{}, "http://kagent-controller.kagent:8083").Create(ctx, session)
+						done <- err
+					}()
+					select {
+					case err := <-prepared:
+						require.Equal(t, codes.NotFound, status.Code(err), "B already prepared the missing Actor before claiming")
+					case <-ctx.Done():
+						t.Fatal(ctx.Err())
+					}
+					operation, err := store.BeginSessionOperation(ctx, session.Id, apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_CREATE)
+					require.NoError(t, err)
+					var aStore workflowStore = store
+					if outcome == "binding commit failed" {
+						aStore = &bindingReplyStore{lifecycleTestStore: store}
+					}
+					_, err = NewActorWorkflow(aStore, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083").Create(ctx, session)
+					require.Error(t, err)
+					before, err := store.GetRuntimeGeneration(ctx, session.Id)
+					require.NoError(t, err)
+					require.Equal(t, "actor-issued", before.Phase)
+					require.Empty(t, before.ActorUID)
+					retained, err := store.GetSessionOperation(ctx, session.Id, operation.ID)
+					require.NoError(t, err)
+					require.Equal(t, operation.ID, retained.ID, "A releases its claim without superseding B's operation")
+					if absent {
+						require.NoError(t, base.DeleteActor(ctx, before.Atespace, before.ActorName))
+					}
+					releaseB()
+					select {
+					case err = <-done:
+					case <-ctx.Done():
+						t.Fatal(ctx.Err())
+					}
+					after, readErr := store.GetRuntimeGeneration(ctx, session.Id)
+					require.NoError(t, readErr)
+					t.Logf("B prepared NotFound; A retained operation %s; B claimed=%v; creation calls=%d; target policy calls=%d; phase=%s UID=%q", operation.ID, bStore.claimed, actors.creations.Load(), base.policyCalls-policyCalls, after.Phase, after.ActorUID)
+					assert.True(t, bStore.claimed, "B must reach the issue boundary under the same reclaimed operation")
+					assert.Equal(t, operation.ID, bStore.operation)
+					assert.Error(t, err, "stale preparation cannot grant issuance permission")
+					assert.EqualValues(t, 1, actors.creations.Load(), "external creation must be issued exactly once")
+					assert.Equal(t, policyCalls, base.policyCalls, "unknown issuance cannot activate policy")
+					assert.Equal(t, before, after, "actor-issued identity must stay held, even if its Actor disappears")
+				})
+			}
+		}
+	}
+}
+
+type issuanceReplyStore struct {
+	*lifecycleTestStore
+	committed bool
+}
+
+func (s *issuanceReplyStore) AdvanceRuntimeGeneration(ctx context.Context, id uuid.UUID, from, to, uid string) error {
+	if to == "actor-issued" {
+		if s.committed {
+			if err := s.Client.AdvanceRuntimeGeneration(ctx, id, from, to, uid); err != nil {
+				return err
+			}
+		}
+		return context.DeadlineExceeded
+	}
+	return s.Client.AdvanceRuntimeGeneration(ctx, id, from, to, uid)
+}
+
+func TestUncertainIssuanceWriteDoesNotCreateActor(t *testing.T) {
+	for _, committed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("committed=%v", committed), func(t *testing.T) {
+			store, session := lifecycleFixture(t)
+			writes := &issuanceReplyStore{lifecycleTestStore: store, committed: committed}
+			actors := &issuanceRaceActors{lifecycleTestActors: &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}}
+			_, err := NewActorWorkflow(writes, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083").Create(t.Context(), session)
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			require.Zero(t, actors.creations.Load(), "an uncertain issuance write never authorizes an external call")
+			require.Zero(t, actors.policyCalls)
+			generation, err := store.GetRuntimeGeneration(t.Context(), session.Id)
+			require.NoError(t, err)
+			phase := "secret-issued"
+			if committed {
+				phase = "actor-issued"
+				_, err = NewActorWorkflow(store, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083").Create(t.Context(), session)
+				require.Error(t, err, "a lost committed reply leaves permanent issuance hold")
+				require.Zero(t, actors.creations.Load())
+			}
+			require.Equal(t, phase, generation.Phase)
+			require.Empty(t, generation.ActorUID)
+		})
+	}
 }
 
 func (a *retryTestActors) GetActor(ctx context.Context, space, name string) (*ateapipb.Actor, error) {
@@ -88,7 +270,7 @@ func TestLifecycleClientRetriesAmbiguousMutation(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			store, session := lifecycleFixture(t)
 			base := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
-			setup := NewActorWorkflow(store, base)
+			setup := NewActorWorkflow(store, base, fixtureCredentials{}, "http://kagent-controller.kagent:8083")
 			var err error
 			if name != "create" && name != "fork" {
 				session, err = setup.Create(t.Context(), session)
@@ -98,7 +280,7 @@ func TestLifecycleClientRetriesAmbiguousMutation(t *testing.T) {
 					session, err = setup.Suspend(t.Context(), session)
 					require.NoError(t, err)
 				case "suspend":
-					_, err = base.ResumeActor(t.Context(), "team-a", substrate.ActorName(session.Id))
+					_, err = base.ResumeActor(t.Context(), "team-a", fixtureActorName(t, store, session.Id))
 					require.NoError(t, err)
 				}
 			}
@@ -107,7 +289,7 @@ func TestLifecycleClientRetriesAmbiguousMutation(t *testing.T) {
 				session, checkpointID = lifecycleForkFixture(t, store, base, session)
 			}
 			actors := &retryTestActors{lifecycleTestActors: base, mutationErr: status.Error(codes.Unavailable, "response lost after effect")}
-			workflow := NewActorWorkflow(store, actors)
+			workflow := NewActorWorkflow(store, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083")
 			call := workflow.Create
 			switch name {
 			case "resume":
@@ -118,7 +300,11 @@ func TestLifecycleClientRetriesAmbiguousMutation(t *testing.T) {
 				call = workflow.Delete
 			}
 			_, err = call(t.Context(), session)
-			require.Equal(t, codes.Unavailable, status.Code(err))
+			if name == "create" || name == "fork" {
+				require.Error(t, err)
+			} else {
+				require.Equal(t, codes.Unavailable, status.Code(err))
+			}
 			current, err := store.GetSessionByID(t.Context(), session.Id)
 			require.NoError(t, err, "uncertainty must preserve the session and its resource pins")
 			require.NotEqual(t, apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_NONE, current.Operation)
@@ -135,7 +321,7 @@ func TestLifecycleClientRetriesAmbiguousMutation(t *testing.T) {
 			}
 			actors.mutationErr = nil
 			// A fresh workflow models the next request reaching another replica.
-			restarted := NewActorWorkflow(store, actors)
+			restarted := NewActorWorkflow(store, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083")
 			retryCall := restarted.Create
 			switch name {
 			case "resume":
@@ -146,6 +332,14 @@ func TestLifecycleClientRetriesAmbiguousMutation(t *testing.T) {
 				retryCall = restarted.Delete
 			}
 			result, err := retryCall(t.Context(), current)
+			if name == "create" || name == "fork" {
+				require.Error(t, err)
+				generation, readErr := store.GetRuntimeGeneration(t.Context(), current.Id)
+				require.NoError(t, readErr)
+				require.Equal(t, "actor-issued", generation.Phase)
+				require.EqualValues(t, 1, actors.mutations.Load(), "unknown creation must never be adopted or reissued")
+				return
+			}
 			require.NoError(t, err)
 			require.Equal(t, apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_NONE, result.Operation)
 			if name == "create" || name == "fork" {
@@ -171,7 +365,7 @@ func TestSupersededLifecycleObserverCannotExecute(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			store, session := lifecycleFixture(t)
 			base := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
-			workflow := NewActorWorkflow(store, base)
+			workflow := NewActorWorkflow(store, base, fixtureCredentials{}, "http://kagent-controller.kagent:8083")
 			session, err := workflow.Create(t.Context(), session)
 			require.NoError(t, err)
 			session, err = workflow.Suspend(t.Context(), session)
@@ -195,7 +389,7 @@ func TestSupersededLifecycleObserverCannotExecute(t *testing.T) {
 			}
 			result := make(chan outcome, 1)
 			go func() {
-				session, err := NewActorWorkflow(store, actors).Resume(ctx, session)
+				session, err := NewActorWorkflow(store, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083").Resume(ctx, session)
 				result <- outcome{session, err}
 			}()
 			select {
@@ -242,7 +436,7 @@ func TestDelayedCreationCannotResurrectDeletedActor(t *testing.T) {
 	defer cancel()
 	result := make(chan error, 1)
 	go func() {
-		_, err := NewActorWorkflow(store, actors).Create(ctx, session)
+		_, err := NewActorWorkflow(store, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083").Create(ctx, session)
 		result <- err
 	}()
 	select {
@@ -250,12 +444,12 @@ func TestDelayedCreationCannotResurrectDeletedActor(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
-	_, err := NewActorWorkflow(store, base).Delete(ctx, session)
+	_, err := NewActorWorkflow(store, base, fixtureCredentials{}, "http://kagent-controller.kagent:8083").Delete(ctx, session)
 	require.NoError(t, err)
 	close(release)
 	require.ErrorIs(t, <-result, database.ErrConflict)
 	require.Zero(t, actors.mutations.Load())
-	_, err = base.GetActor(ctx, "team-a", substrate.ActorName(session.Id))
+	_, err = base.GetActor(ctx, "team-a", fixtureActorName(t, store, session.Id))
 	require.Equal(t, codes.NotFound, status.Code(err))
 }
 
@@ -263,24 +457,23 @@ func TestLifecycleReadFailureCanRetryPreparation(t *testing.T) {
 	store, session := lifecycleFixture(t)
 	base := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
 	actors := &retryTestActors{lifecycleTestActors: base, readErr: status.Error(codes.Unavailable, "lookup unavailable")}
-	_, err := NewActorWorkflow(store, actors).Create(t.Context(), session)
+	_, err := NewActorWorkflow(store, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083").Create(t.Context(), session)
 	require.Equal(t, codes.Unavailable, status.Code(err))
 	require.Zero(t, actors.mutations.Load())
-	ready, err := NewActorWorkflow(store, base).Create(t.Context(), session)
+	ready, err := NewActorWorkflow(store, base, fixtureCredentials{}, "http://kagent-controller.kagent:8083").Create(t.Context(), session)
 	require.NoError(t, err)
 	require.Equal(t, apiv1alpha1.RuntimeState_RUNTIME_STATE_READY, ready.State)
 }
 
 func TestDeletePreparationFailureKeepsAdmissionClosed(t *testing.T) {
 	for _, state := range []apiv1alpha1.RuntimeState{
-		apiv1alpha1.RuntimeState_RUNTIME_STATE_CREATING,
 		apiv1alpha1.RuntimeState_RUNTIME_STATE_READY,
 		apiv1alpha1.RuntimeState_RUNTIME_STATE_SUSPENDED,
 	} {
 		t.Run(state.String(), func(t *testing.T) {
 			store, session := lifecycleFixture(t)
 			base := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
-			workflow := NewActorWorkflow(store, base)
+			workflow := NewActorWorkflow(store, base, fixtureCredentials{}, "http://kagent-controller.kagent:8083")
 			var err error
 			if state != apiv1alpha1.RuntimeState_RUNTIME_STATE_CREATING {
 				session, err = workflow.Create(t.Context(), session)
@@ -291,7 +484,7 @@ func TestDeletePreparationFailureKeepsAdmissionClosed(t *testing.T) {
 				require.NoError(t, err)
 			}
 			actors := &retryTestActors{lifecycleTestActors: base, readErr: status.Error(codes.Unavailable, "lookup unavailable")}
-			_, err = NewActorWorkflow(store, actors).Delete(t.Context(), session)
+			_, err = NewActorWorkflow(store, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083").Delete(t.Context(), session)
 			require.Equal(t, codes.Unavailable, status.Code(err))
 			require.Zero(t, actors.mutations.Load())
 			current, err := store.GetSessionByID(t.Context(), session.Id)
@@ -340,9 +533,9 @@ func TestLifecycleCompletionFailureRetriesPersistence(t *testing.T) {
 	store, session := lifecycleFixture(t)
 	actors := &retryTestActors{lifecycleTestActors: &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}}
 	failure := status.Error(codes.Unavailable, "completion database unavailable")
-	_, err := NewActorWorkflow(&completionTestStore{lifecycleTestStore: store, finishErr: failure}, actors).Create(t.Context(), session)
+	_, err := NewActorWorkflow(&completionTestStore{lifecycleTestStore: store, finishErr: failure}, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083").Create(t.Context(), session)
 	require.ErrorIs(t, err, failure)
-	ready, err := NewActorWorkflow(store, actors).Create(t.Context(), session)
+	ready, err := NewActorWorkflow(store, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083").Create(t.Context(), session)
 	require.NoError(t, err)
 	require.Equal(t, apiv1alpha1.RuntimeState_RUNTIME_STATE_READY, ready.State)
 	require.Equal(t, apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_NONE, ready.Operation)
@@ -364,7 +557,7 @@ func TestClaimedCreationBlocksDeletionBeforeRuntimeCall(t *testing.T) {
 	}}
 	result := make(chan error, 1)
 	go func() {
-		_, err := NewActorWorkflow(delayed, actors).Create(ctx, session)
+		_, err := NewActorWorkflow(delayed, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083").Create(ctx, session)
 		result <- err
 	}()
 	select {
@@ -372,7 +565,7 @@ func TestClaimedCreationBlocksDeletionBeforeRuntimeCall(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
-	workflow := NewActorWorkflow(store, actors)
+	workflow := NewActorWorkflow(store, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083")
 	_, err := workflow.Create(ctx, session)
 	require.ErrorIs(t, err, database.ErrConflict)
 	_, err = workflow.Delete(ctx, session)
@@ -397,13 +590,16 @@ func TestExpiredLifecycleAttemptCannotIssueRuntime(t *testing.T) {
 		<-release // Simulate a stalled executor that does not observe cancellation yet.
 	}}
 	done := make(chan error, 1)
-	go func() { _, err := NewActorWorkflow(delayed, actors).Create(attemptCtx, session); done <- err }()
+	go func() {
+		_, err := NewActorWorkflow(delayed, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083").Create(attemptCtx, session)
+		done <- err
+	}()
 	select {
 	case <-claimed:
 	case <-time.After(5 * time.Second):
 		t.Fatal("attempt did not claim execution")
 	}
-	workflow := NewActorWorkflow(store, actors)
+	workflow := NewActorWorkflow(store, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083")
 	require.Eventually(t, func() bool {
 		_, err := workflow.Create(t.Context(), session)
 		return err == nil
@@ -429,7 +625,7 @@ func TestCreationUsesPreparedAtespace(t *testing.T) {
 				session, _ = lifecycleForkFixture(t, store, base, session)
 			}
 			actors := &retryTestActors{lifecycleTestActors: base}
-			ready, err := NewActorWorkflow(store, actors).Create(t.Context(), session)
+			ready, err := NewActorWorkflow(store, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083").Create(t.Context(), session)
 			require.NoError(t, err)
 			require.Equal(t, apiv1alpha1.RuntimeState_RUNTIME_STATE_READY, ready.State)
 			require.EqualValues(t, 1, actors.mutations.Load())
@@ -467,7 +663,7 @@ func TestDelayedCreationObservesOnlyCurrentGeneration(t *testing.T) {
 			}
 			done := make(chan outcome, 1)
 			go func() {
-				result, err := NewActorWorkflow(store, actors).Create(ctx, session)
+				result, err := NewActorWorkflow(store, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083").Create(ctx, session)
 				done <- outcome{result, err}
 			}()
 			select {
@@ -475,7 +671,7 @@ func TestDelayedCreationObservesOnlyCurrentGeneration(t *testing.T) {
 			case <-ctx.Done():
 				t.Fatal(ctx.Err())
 			}
-			workflow := NewActorWorkflow(store, base)
+			workflow := NewActorWorkflow(store, base, fixtureCredentials{}, "http://kagent-controller.kagent:8083")
 			ready, err := workflow.Create(ctx, session)
 			require.NoError(t, err)
 			if test.supersede {
