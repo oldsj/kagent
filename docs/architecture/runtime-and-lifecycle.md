@@ -153,6 +153,22 @@ changing it creates a new ActorTemplate. Pausing for INPUT_REQUIRED/AUTH_REQUIRE
 is always Full, regardless of this field. Forking requires a Data checkpoint, so a
 checkpoint whose snapshot is Full cannot be forked.
 
+The workflow reads `SnapshotConfig.OnCommit` from the prepared revision's pinned
+ActorTemplate and verifies its name, atespace, and UID. Automatic quiescence and
+explicit suspension that captures runtime state require the returned external
+snapshot to match that scope and template UID. An unclaimed explicit suspension
+of an already SUSPENDED Actor verifies its lifecycle identity and atomically
+settles without claiming or issuing runtime work. A newly created Actor may have
+no snapshot or borrow golden FULL state even under an OnCommit DATA policy.
+Once a suspension has been claimed, its durable executor ID marks possibly issued
+capture. Every retry validates the captured snapshot, even if the Actor is now
+SUSPENDED; invalid capture retains the operation fence. Completed task boundaries
+always retain strict Quiesce validation. Checkpoint Tags preserve the recorded scope;
+they accept either DATA or FULL. Same-Actor resume delegates snapshot restoration
+to Substrate. The DATA restriction applies to creating a new Actor from a
+checkpoint, because a FULL fork would restore the source process state and
+runtime identity.
+
 Unfinished native cleanup blocks new task writes and explicit lifecycle changes.
 After publication, a new turn may supersede idle work before it is claimed. Once
 claimed, idle work blocks new execution, explicit lifecycle changes, and checkpoint
@@ -166,6 +182,90 @@ never expires: losing the worker does not prove that the suspend stopped. Uncert
 claims still block new work, but completed results remain readable. The recorded
 actor UID is checked before lifecycle calls; a same-name replacement cannot be
 adopted implicitly.
+
+### Recovering a claim held after snapshot scope rejection
+
+An older controller could successfully suspend an Actor with an `onQuiesce: Full`
+policy, then reject its FULL snapshot and leave its task boundary claimed. Merely
+restarting the controller does not release that claim. No claim-expiry migration
+is required for the scope fix, and a timeout does not authorize takeover.
+
+For this specific failure, an operator must:
+
+1. Hold dispatch and lifecycle traffic for the affected Sessions, including queued
+   requests, until step 6 verifies their original boundaries. Clearing the executor
+   reopens admission before the idle worker claims; a new task could supersede
+   unclaimed idle work without recording its snapshot.
+   Stop all controller replicas through GitOps and verify their workers have
+   exited. Do not release claims while a worker could still issue runtime work.
+2. Read the affected Session's pinned revision and generation, then observe the
+   Substrate Actor and ActorTemplate. Require the recorded Actor UID, SUSPENDED
+   state, a nonempty external snapshot URI, and the pinned template UID/scope.
+   A missing/replaced Actor, SUSPENDING state, or mismatched scope is unresolved
+   work; leave its claim fenced. Record the observed snapshot atespace, URI, and
+   scope (DATA or FULL). Correlate the terminal task ID and event sequence with the
+   original scope-rejection log; these identify the boundary to recover.
+3. Read the claim using the affected Session ID (psql variable `session_id`).
+   Confirm its task ID and sequence identify the original rejected boundary:
+
+   ```sql
+   SELECT e.task_id, e.sequence, e.quiescence_executor_id
+   FROM session_task_event e
+   JOIN session_record s ON s.history_id = e.history_id
+   WHERE s.id = :'session_id'::uuid
+     AND s.state = 'RUNTIME_STATE_READY'
+     AND s.operation = 'RUNTIME_OPERATION_NONE'
+     AND e.published AND e.quiescence_pending = TRUE
+     AND e.quiescence_executor_id IS NOT NULL;
+   ```
+
+4. Release only that executor's claim, using the observed `sequence` and
+   `executor_id` as psql variables. Require exactly one returned row:
+
+   ```sql
+   UPDATE session_task_event e SET quiescence_executor_id = NULL
+   FROM session_record s
+   WHERE s.history_id = e.history_id AND s.id = :'session_id'::uuid
+     AND s.state = 'RUNTIME_STATE_READY'
+     AND s.operation = 'RUNTIME_OPERATION_NONE'
+     AND e.sequence = :'sequence'::bigint
+     AND e.quiescence_executor_id = :'executor_id'::uuid
+     AND e.published AND e.quiescence_pending = TRUE
+   RETURNING e.sequence;
+   ```
+
+5. Start the fixed controller through GitOps. Its idle worker claims the same
+   boundary and validates the already suspended snapshot without another suspend
+   request. It stores the snapshot and clears `quiescence_pending` atomically.
+6. Keep traffic held while verifying that exact terminal task and event sequence.
+   Using the recorded `task_id`, `sequence`, `snapshot_atespace`, `snapshot_uri`,
+   and `snapshot_scope` as psql variables, require exactly one returned row:
+
+   ```sql
+   SELECT e.task_id, e.sequence, t.history_sequence, e.quiescence_executor_id
+   FROM session_record s
+   JOIN session_task_event e ON e.history_id = s.history_id
+   JOIN session_task t ON t.history_id = e.history_id AND t.id = e.task_id
+   WHERE s.id = :'session_id'::uuid
+     AND e.task_id = :'task_id' AND e.sequence = :'sequence'::bigint
+     AND e.published AND e.quiescence_pending = FALSE
+     AND t.history_sequence = e.sequence
+     AND e.snapshot_atespace = :'snapshot_atespace'
+     AND t.snapshot_atespace = e.snapshot_atespace
+     AND e.snapshot_uri = :'snapshot_uri' AND t.snapshot_uri = e.snapshot_uri
+     AND e.snapshot_content_scope = :'snapshot_scope'
+     AND t.snapshot_content_scope = e.snapshot_content_scope;
+   ```
+
+   `quiescence_pending=FALSE` alone is insufficient: superseded idle work also has
+   that value without a snapshot. Successful finish retains the new executor ID;
+   it need not be NULL. Restore traffic only after the original task/event's exact
+   snapshot and matching `history_sequence` are recorded. Then retry SuspendSession
+   or checkpoint creation.
+
+This procedure changes neither task history nor snapshot scope. It is an operator
+recovery procedure, not an automatic adoption API. The controller continues to
+reject mismatched snapshots and preserves the claim when verification fails.
 
 ```mermaid
 sequenceDiagram

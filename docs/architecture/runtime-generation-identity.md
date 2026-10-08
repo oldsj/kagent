@@ -47,8 +47,9 @@ source authority is never inherited. A fresh eligible Session deleted before
 ledger allocation can complete database-only deletion; it has issued no runtime
 effects. Unledgered pre-cutover rows have no such provenance. Resume preserves the same UID/generation.
 There is no automatic same-Session Actor replacement, old-session migration,
-legacy enrollment or Full process-memory restore. Quiescence/checkpoint creation
-requires DATA state. An uncertain original issuance is deliberately unavailable
+legacy enrollment or Full checkpoint forks. Same-Actor resume supports both DATA
+and FULL state. Quiescence verifies the snapshot scope configured by the pinned
+ActorTemplate; checkpoint creation retains that exact scope. An uncertain original issuance is deliberately unavailable
 until separately reviewed reconciliation; source preparation does not add an
 operator recovery/adoption API.
 

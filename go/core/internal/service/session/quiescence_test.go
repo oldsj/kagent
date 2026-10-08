@@ -32,6 +32,8 @@ func TestIdleLifecycleDoesNotOwnTaskPublication(t *testing.T) {
 			base := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
 			session, err := NewActorWorkflow(store, base, fixtureCredentials{}, "http://kagent-controller.kagent:8083").Create(t.Context(), session)
 			require.NoError(t, err)
+			_, err = base.ResumeActor(t.Context(), "team-a", fixtureActorName(t, store, session.Id))
+			require.NoError(t, err)
 			message := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("hello"))
 			message.ContextID = session.ContextId
 			task := a2a.NewSubmittedTask(message, message)
@@ -107,4 +109,112 @@ func (s *quiescenceRetryStore) FinishSessionQuiescence(ctx context.Context, work
 		return status.Error(codes.Unavailable, "database unavailable")
 	}
 	return s.Client.FinishSessionQuiescence(ctx, work, snapshot)
+}
+
+func TestIdleQuiescenceRecoveryAfterScopeRejection(t *testing.T) {
+	for _, mismatch := range []bool{false, true} {
+		name := "matching Full snapshot recovers"
+		if mismatch {
+			name = "mismatched snapshot remains fenced"
+		}
+		t.Run(name, func(t *testing.T) {
+			store, session := lifecycleFixture(t)
+			base := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}, snapshotScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL}
+			template, err := base.GetActorTemplate(t.Context(), store.revision.ActorTemplateAtespace, store.revision.ActorTemplateName)
+			require.NoError(t, err)
+			template.SnapshotConfig.OnCommit = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL
+			base.template = template
+			actors := &retryTestActors{lifecycleTestActors: base}
+			workflow := NewActorWorkflow(store, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083")
+			session, err = workflow.Create(t.Context(), session)
+			require.NoError(t, err)
+			_, err = actors.ResumeActor(t.Context(), "team-a", fixtureActorName(t, store, session.Id))
+			require.NoError(t, err)
+			message := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("done"))
+			message.ContextID = session.ContextId
+			task := a2a.NewSubmittedTask(message, message)
+			task.Status.State = a2a.TaskStateCompleted
+			hash := sha256.Sum256([]byte("completed"))
+			version, err := store.CreateRuntimeTask(t.Context(), session.Id, hash[:], task, "")
+			require.NoError(t, err)
+			require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, string(task.ID), version))
+			oldClaim, err := store.ClaimSessionQuiescence(t.Context())
+			require.NoError(t, err)
+			// Reproduce the old controller's failure: Suspend succeeded, but its
+			// FULL response was rejected and the original claim was never finished.
+			actor, err := actors.SuspendActor(t.Context(), "team-a", fixtureActorName(t, store, session.Id))
+			require.NoError(t, err)
+			require.Equal(t, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, actor.GetStatus().GetExternalSnapshot().GetContentScope())
+			_, err = workflow.Suspend(t.Context(), session)
+			require.ErrorIs(t, err, database.ErrFailedPrecondition)
+			_, err = store.ClaimSessionQuiescence(t.Context())
+			require.ErrorIs(t, err, database.ErrNotFound, "restarting a worker alone must not steal uncertain work")
+			if mismatch {
+				base.mu.Lock()
+				base.actors[actorKey("team-a", fixtureActorName(t, store, session.Id))].Status.ExternalSnapshot.ContentScope = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
+				base.mu.Unlock()
+			}
+			// Operator recovery after all old controller workers have stopped.
+			// The exact version/executor predicate cannot release another claim.
+			tag, err := store.pool.Exec(t.Context(), `
+				UPDATE session_task_event SET quiescence_executor_id = NULL
+				WHERE sequence = $1 AND quiescence_executor_id = $2
+				  AND published AND quiescence_pending = TRUE
+			`, oldClaim.Version, oldClaim.ExecutorID)
+			require.NoError(t, err)
+			require.EqualValues(t, 1, tag.RowsAffected())
+			newClaim, err := store.ClaimSessionQuiescence(t.Context())
+			require.NoError(t, err)
+			require.NotEqual(t, oldClaim.ExecutorID, newClaim.ExecutorID)
+			mutations := actors.mutations.Load()
+			// A fresh worker uses the suspended result, with no second mutation.
+			NewActorWorkflow(store, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083").quiesceIdleSession(t.Context(), newClaim)
+			require.Equal(t, mutations, actors.mutations.Load())
+			checkpoint, boundary, err := store.ReserveSessionCheckpoint(t.Context(), &apiv1alpha1.Checkpoint{Id: uuid.NewString(), SessionId: session.Id, HeadTaskId: string(task.ID)}, "alice", "checkpoint")
+			if mismatch {
+				require.ErrorIs(t, err, database.ErrFailedPrecondition)
+				_, err = workflow.Suspend(t.Context(), session)
+				require.ErrorIs(t, err, database.ErrFailedPrecondition)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, string(task.ID), checkpoint.HeadTaskId)
+			require.EqualValues(t, version, checkpoint.HistorySequence)
+			require.Equal(t, "team-a", boundary.Atespace)
+			require.Equal(t, "s3://snapshots/snapshot-1", boundary.URI)
+			require.Equal(t, "FULL", boundary.ContentScope)
+			// The runbook requires the original task and event to retain the exact
+			// snapshot, not merely pending=false (which supersession also sets).
+			var recordedTask string
+			var recordedVersion, historySequence int64
+			var retainedExecutor uuid.UUID
+			require.NoError(t, store.pool.QueryRow(t.Context(), `
+				SELECT e.task_id, e.sequence, t.history_sequence, e.quiescence_executor_id
+				FROM session_record s
+				JOIN session_task_event e ON e.history_id = s.history_id
+				JOIN session_task t ON t.history_id = e.history_id AND t.id = e.task_id
+				WHERE s.id = $1::uuid
+				  AND e.task_id = $2 AND e.sequence = $3::bigint
+				  AND e.published AND e.quiescence_pending = FALSE
+				  AND t.history_sequence = e.sequence
+				  AND e.snapshot_atespace = $4 AND t.snapshot_atespace = e.snapshot_atespace
+				  AND e.snapshot_uri = $5 AND t.snapshot_uri = e.snapshot_uri
+				  AND e.snapshot_content_scope = $6
+				  AND t.snapshot_content_scope = e.snapshot_content_scope
+			`, session.Id, string(task.ID), version, boundary.Atespace, boundary.URI, boundary.ContentScope).
+				Scan(&recordedTask, &recordedVersion, &historySequence, &retainedExecutor))
+			require.Equal(t, string(task.ID), recordedTask)
+			require.Equal(t, version, recordedVersion)
+			require.Equal(t, version, historySequence)
+			require.Equal(t, newClaim.ExecutorID, retainedExecutor)
+			// Reserving a checkpoint fences explicit lifecycle until finalized.
+			checkpoint, err = store.FinalizeSessionCheckpoint(t.Context(), checkpoint.Id, "tag-uid", "s3://retained/snapshot", "")
+			require.NoError(t, err)
+			snapshot, _, err := store.GetSessionCheckpointSnapshot(t.Context(), checkpoint.Id, "alice")
+			require.NoError(t, err)
+			require.Equal(t, "FULL", snapshot.ContentScope)
+			_, err = workflow.Suspend(t.Context(), session)
+			require.NoError(t, err, "explicit suspension becomes available again")
+		})
+	}
 }

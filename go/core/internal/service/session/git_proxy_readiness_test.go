@@ -31,6 +31,10 @@ func TestGitProxyFailedWarmupRetainsIntentAndReferences(t *testing.T) {
 	require.NoError(t, store.UpsertAgentDefinition(t.Context(), database.AgentDefinition{Namespace: revision.Namespace, AgentName: revision.AgentName, AgentUID: revision.AgentUID, DesiredRevision: revision.Revision}))
 	require.NoError(t, store.RecordRuntimeRevision(t.Context(), revision, true))
 	actors := deniedProxyResume{&lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}}
+	template, err := actors.GetActorTemplate(t.Context(), revision.ActorTemplateAtespace, revision.ActorTemplateName)
+	require.NoError(t, err)
+	actors.template = template
+	actors.template.Metadata.Uid = revision.ActorTemplateUID
 	service := NewService(store, serviceTestAuthorizer{}, NewActorWorkflow(store, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083"))
 	refs := []*api.SessionCredential{{Origin: workspace.ReadProxyOrigin, Header: "Authorization", SecretRef: &api.SecretKeyReference{Name: "mainloop-git-read-unpublished", Key: "authorization"}}}
 	ctx := serviceTestContext("alice")

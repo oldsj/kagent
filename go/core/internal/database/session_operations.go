@@ -112,6 +112,52 @@ func (c *Client) ClaimSessionOperation(ctx context.Context, sessionID string, id
 	return c.claimRuntimeOperation(ctx, sessionID, runtimeKindAgent, id, executorID)
 }
 
+// FinishObservedSessionSuspension settles a verified already-suspended Actor
+// without granting permission to issue runtime work. The caller observes the
+// Actor outside this transaction. Under the Session then generation locks, the
+// operation must still be the same never-claimed READY/SUSPEND, with the same
+// prepared revision and active Actor UID. A concurrent claim or supersession
+// returns ErrConflict; callers reconcile completed work through Begin/Get.
+func (c *Client) FinishObservedSessionSuspension(ctx context.Context, sessionID string, id uuid.UUID, preparedRevision, actorUID string) (*apiv1alpha1.Session, error) {
+	var result *apiv1alpha1.Session
+	err := c.withTx(ctx, func(tx pgx.Tx) error {
+		row, err := lockSession(ctx, tx, sessionID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrConflict
+		}
+		if err != nil {
+			return err
+		}
+		if id == uuid.Nil || row.OperationID == nil || *row.OperationID != id || row.ExecutorID != nil ||
+			row.State != apiv1alpha1.RuntimeState_RUNTIME_STATE_READY.String() ||
+			row.Operation != apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_SUSPEND.String() ||
+			preparedRevision == "" || derefStr(row.PreparedRevision) != preparedRevision || actorUID == "" {
+			return ErrConflict
+		}
+		uid, err := queryOne(ctx, tx, `
+			SELECT actor_uid FROM runtime_generation WHERE session_id = $1 AND phase = 'active' FOR UPDATE
+		`, pgx.RowTo[string], row.ID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrConflict
+		}
+		if err != nil {
+			return err
+		}
+		if uid != actorUID {
+			return ErrConflict
+		}
+		next := row.runtimeInstanceRow
+		next.State = apiv1alpha1.RuntimeState_RUNTIME_STATE_SUSPENDED.String()
+		next.Operation = apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_NONE.String()
+		result, err = persistSessionOperationResult(ctx, tx, row, next, "", actorUID, "")
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("finish observed Session suspension: %w", err)
+	}
+	return result, nil
+}
+
 // FinishSessionOperation publishes known success only for the claiming
 // executor. A nonempty failure releases only unclaimed preparation and invalidates
 // its generation. Uncertain issued work must remain pending. Stale completion or
@@ -132,64 +178,73 @@ func (c *Client) FinishSessionOperation(ctx context.Context, sessionID string, i
 		if err != nil {
 			return err
 		}
-		result, err = toSession(row)
-		if err != nil {
-			return err
-		}
-		if failure == "" {
-			switch result.Operation {
-			case apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_CREATE:
-				if authority == "" || actorUID == "" {
-					return fmt.Errorf("created Session requires runtime authority and actor UID")
-				}
-				result.A2AAuthority = authority
-			case apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_DELETE:
-				result.A2AAuthority = ""
-				if err := releaseAgentRuntimeReferences(ctx, tx, row.ID); err != nil {
-					return err
-				}
-			}
-		}
-		result.State, result.Operation, err = next.lifecycle()
-		if err != nil {
-			return err
-		}
-		result.PreparedRevision = derefStr(next.PreparedRevision)
-		result.UpdatedAt = timestamppb.Now()
-		result.Failure = nil
-		if failure != "" {
-			result.Failure = &apiv1alpha1.Failure{Reason: "PreparationFailed", Message: failure}
-		}
-		row.Data, err = marshalSession(result)
-		if err != nil {
-			return err
-		}
-		if err := saveRuntimeLifecycle(ctx, tx, next, runtimeKindAgent); err != nil {
-			return err
-		}
-		tag, err := tx.Exec(ctx, `
-            UPDATE session SET data = $2,
-                actor_uid = CASE WHEN $4 THEN $3 ELSE actor_uid END
-            WHERE id = $1 AND ($3::text = '' OR actor_uid = $3 OR (actor_uid IS NULL AND $4))
-        `, row.ID, row.Data, actorUID, failure == "" && row.Operation == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_CREATE.String())
-		if err != nil {
-			return err
-		}
-		if tag.RowsAffected() != 1 {
-			return fmt.Errorf("runtime actor UID changed: %w", ErrConflict)
-		}
-		row.runtimeInstanceRow = next
-		result, err = toSession(row)
-		if err != nil {
-			return err
-		}
-		if result.State == apiv1alpha1.RuntimeState_RUNTIME_STATE_DELETED && failure == "" {
-			return finishSessionDeletion(ctx, tx, row.ID)
-		}
-		return nil
+		result, err = persistSessionOperationResult(ctx, tx, row, next, authority, actorUID, failure)
+		return err
 	})
 	if err != nil {
 		return nil, fmt.Errorf("finish Session operation: %w", err)
+	}
+	return result, nil
+}
+
+// persistSessionOperationResult publishes lifecycle and Session data together.
+// The caller holds the Session lock and has verified completion authority.
+func persistSessionOperationResult(ctx context.Context, tx pgx.Tx, row sessionRow, next runtimeInstanceRow, authority, actorUID, failure string) (*apiv1alpha1.Session, error) {
+	result, err := toSession(row)
+	if err != nil {
+		return nil, err
+	}
+	if failure == "" {
+		switch result.Operation {
+		case apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_CREATE:
+			if authority == "" || actorUID == "" {
+				return nil, fmt.Errorf("created Session requires runtime authority and actor UID")
+			}
+			result.A2AAuthority = authority
+		case apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_DELETE:
+			result.A2AAuthority = ""
+			if err := releaseAgentRuntimeReferences(ctx, tx, row.ID); err != nil {
+				return nil, err
+			}
+		}
+	}
+	result.State, result.Operation, err = next.lifecycle()
+	if err != nil {
+		return nil, err
+	}
+	result.PreparedRevision = derefStr(next.PreparedRevision)
+	result.UpdatedAt = timestamppb.Now()
+	result.Failure = nil
+	if failure != "" {
+		result.Failure = &apiv1alpha1.Failure{Reason: "PreparationFailed", Message: failure}
+	}
+	row.Data, err = marshalSession(result)
+	if err != nil {
+		return nil, err
+	}
+	if err := saveRuntimeLifecycle(ctx, tx, next, runtimeKindAgent); err != nil {
+		return nil, err
+	}
+	tag, err := tx.Exec(ctx, `
+        UPDATE session SET data = $2,
+            actor_uid = CASE WHEN $4 THEN $3 ELSE actor_uid END
+        WHERE id = $1 AND ($3::text = '' OR actor_uid = $3 OR (actor_uid IS NULL AND $4))
+    `, row.ID, row.Data, actorUID, failure == "" && row.Operation == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_CREATE.String())
+	if err != nil {
+		return nil, err
+	}
+	if tag.RowsAffected() != 1 {
+		return nil, fmt.Errorf("runtime actor UID changed: %w", ErrConflict)
+	}
+	row.runtimeInstanceRow = next
+	result, err = toSession(row)
+	if err != nil {
+		return nil, err
+	}
+	if result.State == apiv1alpha1.RuntimeState_RUNTIME_STATE_DELETED && failure == "" {
+		if err := finishSessionDeletion(ctx, tx, row.ID); err != nil {
+			return nil, err
+		}
 	}
 	return result, nil
 }

@@ -40,6 +40,7 @@ type testStore struct {
 	deleted     bool
 	finalizeErr error
 	reserveErr  error
+	scope       string
 }
 
 func (s *testStore) ReserveSessionCheckpoint(_ context.Context, checkpoint *apiv1alpha1.Checkpoint, _, _ string) (*apiv1alpha1.Checkpoint, *database.SessionTaskSnapshot, error) {
@@ -51,7 +52,11 @@ func (s *testStore) ReserveSessionCheckpoint(_ context.Context, checkpoint *apiv
 	}
 	checkpoint.HeadTaskId = "task-1"
 	checkpoint.HistorySequence = 7
-	s.snapshot = &database.SessionTaskSnapshot{Atespace: "team-a", URI: "s3://snapshots/snapshot-1", ContentScope: "DATA"}
+	scope := s.scope
+	if scope == "" {
+		scope = "DATA"
+	}
+	s.snapshot = &database.SessionTaskSnapshot{Atespace: "team-a", URI: "s3://snapshots/snapshot-1", ContentScope: scope}
 	checkpoint.State = apiv1alpha1.CheckpointState_CHECKPOINT_STATE_CREATING
 	checkpoint.CreatedAt = timestamppb.Now()
 	s.prepared = checkpoint
@@ -146,6 +151,14 @@ type testTags struct {
 	deleteErr              error
 	actorErr               error
 	mutateTag              func(*ateapipb.Tag)
+	scope                  ateapipb.SnapshotContentScope
+}
+
+func (t *testTags) contentScope() ateapipb.SnapshotContentScope {
+	if t.scope == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED {
+		return ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
+	}
+	return t.scope
 }
 
 func (t *testTags) GetActor(_ context.Context, atespace, name string) (*ateapipb.Actor, error) {
@@ -156,6 +169,7 @@ func (t *testTags) GetActor(_ context.Context, atespace, name string) (*ateapipb
 	if t.created != nil && t.snapshotURIAfterCreate != "" {
 		uri = t.snapshotURIAfterCreate
 	}
+	scope := t.contentScope()
 	actorUID := "actor-uid"
 	if t.created != nil && t.actorUIDAfterCreate != "" {
 		actorUID = t.actorUIDAfterCreate
@@ -163,7 +177,7 @@ func (t *testTags) GetActor(_ context.Context, atespace, name string) (*ateapipb
 	return &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: atespace, Name: name, Uid: actorUID},
 		Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: uri, ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA, ActorTemplateUid: "template-uid"}},
+			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: uri, ContentScope: scope, ActorTemplateUid: "template-uid"}},
 	}, nil
 }
 
@@ -187,7 +201,7 @@ func (t *testTags) CreateTag(_ context.Context, atespace, name, actorName string
 		SourceActor: &ateapipb.ObjectRef{Atespace: atespace, Name: actorName},
 		Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
 		Status: &ateapipb.TagStatus{ActorTemplateUid: "template-uid",
-			Snapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "s3://tags/checkpoint", ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA}},
+			Snapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "s3://tags/checkpoint", ContentScope: t.contentScope()}},
 	}
 	if t.mutateTag != nil {
 		t.mutateTag(t.created)
@@ -324,6 +338,32 @@ func TestDeleteHidesCheckpointBeforeDeletingTag(t *testing.T) {
 		t.Fatalf("checkpoint state = %s, tag deletes = %d, row deleted = %v", checkpoint.State, tags.deleteCalls, store.deleted)
 	}
 }
+
+// A Full onQuiesce policy records FULL boundaries. They can be checkpointed but
+// not forked, because a fork restores only durable data.
+func TestFullSnapshotCheckpointsButCannotFork(t *testing.T) {
+	store := &testStore{scope: "FULL"}
+	tags := &testTags{snapshotURI: "s3://snapshots/snapshot-1", scope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL}
+	workflow := &testWorkflow{}
+	service := NewService(store, testAuthorizer{}, tags, workflow)
+	ctx := auth.AuthSessionTo(t.Context(), testSession{userID: "alice"})
+
+	checkpoint, err := service.Create(ctx, "018f47a2-4efb-7c21-a848-123456789abc", "request-1", "task-1")
+	require.NoError(t, err)
+	require.Equal(t, apiv1alpha1.CheckpointState_CHECKPOINT_STATE_READY, checkpoint.State)
+	require.Equal(t, "FULL", store.snapshot.ContentScope)
+
+	_, err = service.Fork(ctx, checkpoint.Id, "fork-request")
+	require.Equal(t, serviceerrors.CodeFailedPrecondition, serviceerrors.CodeOf(err))
+	require.Nil(t, workflow.session, "a FULL checkpoint must not reach runtime creation")
+
+	// The recorded scope still binds the copy: a DATA Actor cannot satisfy a FULL boundary.
+	store, tags = &testStore{scope: "FULL"}, &testTags{snapshotURI: "s3://snapshots/snapshot-1"}
+	_, err = NewService(store, testAuthorizer{}, tags, nil).Create(ctx, "018f47a2-4efb-7c21-a848-123456789abc", "request-2", "task-1")
+	require.Error(t, err)
+	require.Zero(t, tags.createCalls)
+}
+
 func TestForkCreatesSessionFromCheckpoint(t *testing.T) {
 	checkpoint := &apiv1alpha1.Checkpoint{Id: "018f47a2-4efb-7c21-a848-123456789abc", State: apiv1alpha1.CheckpointState_CHECKPOINT_STATE_READY}
 	store := &testStore{prepared: checkpoint, snapshot: &database.SessionTaskSnapshot{Atespace: "team-a", URI: "s3://snapshots/snapshot-1", ContentScope: "DATA"}}
