@@ -11,7 +11,8 @@ import (
 
 // Launch validates the immutable payload and durable directories, then replaces
 // the launcher with the harness. CLI paths are compiled absolute in its config.
-func Launch(root, data, platform string, check bool, environment []string, replace func(string, []string, []string) error) error {
+// system is the actor's filesystem root ("/"); see prepareFilesystem.
+func Launch(root, system, data, platform string, check bool, environment []string, replace func(string, []string, []string) error) error {
 	selected := ""
 	selectedPresent := false
 	for _, entry := range environment {
@@ -36,7 +37,7 @@ func Launch(root, data, platform string, check bool, environment []string, repla
 	}
 	// Reject durable symlinks: neither a restored checkout nor native state can
 	// redirect runtime-owned directories onto the payload or identity projection.
-	for _, name := range []string{"", "workspace", "adapter", "generated", "home", "claude", "codex", "cache", "tmp"} {
+	for _, name := range append([]string{""}, runtimeDirectories...) {
 		path := filepath.Join(data, name)
 		if err := os.MkdirAll(path, 0700); err != nil {
 			return fmt.Errorf("create writable runtime directory %s: %w", path, err)
@@ -115,6 +116,9 @@ func Launch(root, data, platform string, check bool, environment []string, repla
 	}
 	if executable != filepath.Join(root, "bin", manifest.Provider) || version != manifest.CLIVersion {
 		return fmt.Errorf("launch configuration must select the absolute bundled CLI and locked version")
+	}
+	for _, warning := range prepareFilesystem(system, data, owner{uid: os.Geteuid(), gid: os.Getegid(), lchown: os.Lchown}) {
+		fmt.Fprintln(os.Stderr, "runtime launch: warning:", warning)
 	}
 	harness := filepath.Join(root, "bin", "kagent-"+manifest.Provider)
 	return replace(harness, []string{harness}, cleaned)

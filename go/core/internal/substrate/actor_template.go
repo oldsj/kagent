@@ -146,6 +146,8 @@ func ActorTemplateForRevision(spec *translator.Revision, revisionID translator.R
 		}
 		template.Volumes = append(template.Volumes, &ateapipb.Volume{Name: "runtime-payload", Image: &ateapipb.ImageVolumeSource{Reference: spec.Composition.PayloadImage}})
 		template.Containers[0].VolumeMounts = append(template.Containers[0].VolumeMounts, &ateapipb.VolumeMount{Name: "runtime-payload", MountPath: payload.Root})
+		// Revision.Digest hashes this profile, so the template name changes with it.
+		template.Containers[0].SecurityContext = &ateapipb.SecurityContext{Capabilities: &ateapipb.Capabilities{Add: spec.Composition.ContainerCapabilities()}}
 	}
 	return template, nil
 }

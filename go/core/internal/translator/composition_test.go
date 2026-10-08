@@ -2,6 +2,7 @@ package translator
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -87,4 +88,28 @@ func TestComposeRevision(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestComposedRevisionDigestIncludesCapabilityProfile(t *testing.T) {
+	selection := Composition{DevelopmentImage: "registry/dev@sha256:" + strings.Repeat("a", 64), PayloadImage: "registry/runtime@sha256:" + strings.Repeat("b", 64), Provider: HarnessTypeClaude, Platform: "linux/arm64", PolicyIdentity: "accepted-v1", Schema: payload.Schema, CLIVersion: "2.1.260"}
+	revision := Revision{Namespace: "agents", AgentName: "helper", Image: selection.DevelopmentImage, Composition: &selection}
+	require.Equal(t, []string{"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID"}, selection.ContainerCapabilities())
+	id, err := revision.Digest()
+	require.NoError(t, err)
+	// Pinned so a profile change is a deliberate, reviewed identity change.
+	// The empty profile reproduces the pre-profile serialization (omitempty),
+	// so the inequality below shows existing composed revisions are not reused.
+	require.Equal(t, "0ef3346937756377aaaf4baa55a27a10c1911a4f361b0aa5ddab9b8b05c236c3", id.String())
+
+	original := composedCapabilities
+	t.Cleanup(func() { composedCapabilities = original })
+	composedCapabilities = nil
+	withoutProfile, err := revision.Digest()
+	require.NoError(t, err)
+	require.NotEqual(t, id, withoutProfile)
+	composedCapabilities = append(slices.Clone(original), "NET_RAW")
+	widened, err := revision.Digest()
+	require.NoError(t, err)
+	require.NotEqual(t, id, widened)
+	require.NotEqual(t, withoutProfile, widened)
 }

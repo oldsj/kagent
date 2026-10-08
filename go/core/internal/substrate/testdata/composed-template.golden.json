@@ -1,7 +1,7 @@
 {
   "metadata": {
     "atespace": "agents",
-    "name": "helper-45f2eb367f8c"
+    "name": "helper-9f5a825633bc"
   },
   "worker_selector": {
     "match_labels": {
@@ -81,7 +81,18 @@
           "name": "runtime-payload",
           "mount_path": "/opt/mainloop-runtime"
         }
-      ]
+      ],
+      "security_context": {
+        "capabilities": {
+          "add": [
+            "CHOWN",
+            "DAC_OVERRIDE",
+            "FOWNER",
+            "SETGID",
+            "SETUID"
+          ]
+        }
+      }
     }
   ],
   "volumes": [

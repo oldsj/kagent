@@ -102,8 +102,16 @@ func (r *Revision) Digest() (RevisionID, error) {
 	default:
 		return RevisionID{}, fmt.Errorf("unsupported sandbox class %q", sandboxClass)
 	}
+	// The composed capability profile is fixed in code rather than stored on
+	// the Composition; hashing it gives a changed profile new ActorTemplates
+	// and goldens instead of conflicting with immutable existing ones.
+	var capabilities []string
+	if r.Composition != nil {
+		capabilities = r.Composition.ContainerCapabilities()
+	}
 	raw, err := json.Marshal(struct {
 		Composition        *Composition                  `json:"composition,omitempty"`
+		Capabilities       []string                      `json:"containerCapabilities,omitempty"`
 		AgentName          string                        `json:"agentName"`
 		AgentUID           string                        `json:"agentUID"`
 		Namespace          string                        `json:"namespace"`
@@ -120,7 +128,7 @@ func (r *Revision) Digest() (RevisionID, error) {
 		EgressDestinations []string                      `json:"egressDestinations"`
 		SandboxClass       atev1alpha1.SandboxClass      `json:"sandboxClass"`
 	}{
-		Composition: r.Composition, AgentName: r.AgentName, AgentUID: r.AgentUID, Namespace: r.Namespace,
+		Composition: r.Composition, Capabilities: capabilities, AgentName: r.AgentName, AgentUID: r.AgentUID, Namespace: r.Namespace,
 		Image: r.Image, Command: r.Command, Args: r.Args, Environment: r.Environment, ConfigJSON: r.ConfigJSON,
 		WorkerPoolName: r.WorkerPoolName, SnapshotLocation: r.SnapshotLocation, SnapshotOnQuiesce: r.SnapshotOnQuiesce, Provenance: r.Provenance,
 		Credentials: r.Credentials, EgressDestinations: r.EgressDestinations,

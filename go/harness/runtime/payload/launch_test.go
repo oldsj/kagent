@@ -62,7 +62,7 @@ func TestLauncherValidationAndExec(t *testing.T) {
 			if name == "relative CLI" {
 				configPath = "claude"
 			}
-			err = Launch(root, data, platform, false, []string{PlatformEnvironment + "=" + runtime.GOOS + "/" + runtime.GOARCH, "HOME=/evil", "LD_PRELOAD=/evil", "IS_SANDBOX=0", "KAGENT_CONFIG_JSON=" + `{"claude_executable":"` + configPath + `","expected_claude_version":"` + LockedRelease("claude").Version + `"}`}, func(path string, args, env []string) error {
+			err = Launch(root, filepath.Dir(data), data, platform, false, []string{PlatformEnvironment + "=" + runtime.GOOS + "/" + runtime.GOARCH, "HOME=/evil", "LD_PRELOAD=/evil", "IS_SANDBOX=0", "KAGENT_CONFIG_JSON=" + `{"claude_executable":"` + configPath + `","expected_claude_version":"` + LockedRelease("claude").Version + `"}`}, func(path string, args, env []string) error {
 				executed = true
 				require.Equal(t, filepath.Join(root, "bin", "kagent-claude"), path)
 				require.Equal(t, []string{path}, args)
@@ -97,10 +97,13 @@ func TestCodexLauncherExec(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, os.Chdir(cwd)) })
 	config := `{"codex_executable":"` + root + `/bin/codex","expected_codex_version":"` + LockedRelease("codex").Version + `"}`
 	executed := false
-	err = Launch(root, data, runtime.GOOS+"/"+runtime.GOARCH, false, []string{PlatformEnvironment + "=" + runtime.GOOS + "/" + runtime.GOARCH, "KAGENT_CONFIG_JSON=" + config}, func(path string, args, env []string) error {
+	err = Launch(root, filepath.Dir(data), data, runtime.GOOS+"/"+runtime.GOARCH, false, []string{PlatformEnvironment + "=" + runtime.GOOS + "/" + runtime.GOARCH, "KAGENT_CONFIG_JSON=" + config}, func(path string, args, env []string) error {
 		executed = true
 		require.Equal(t, root+"/bin/kagent-codex", path)
 		require.Contains(t, env, "CODEX_HOME="+data+"/codex")
+		info, err := os.Stat(data)
+		require.NoError(t, err)
+		require.Equal(t, os.FileMode(0711), info.Mode().Perm(), "filesystem preparation precedes exec")
 		return nil
 	})
 	require.NoError(t, err)
@@ -150,7 +153,7 @@ func TestLauncherSelectedPlatform(t *testing.T) {
 						expected = "duplicate"
 					}
 					executed := false
-					err := Launch(root, data, actual, check, environment, func(string, []string, []string) error { executed = true; return nil })
+					err := Launch(root, filepath.Dir(data), data, actual, check, environment, func(string, []string, []string) error { executed = true; return nil })
 					require.ErrorContains(t, err, expected)
 					require.False(t, executed)
 					_, err = os.Stat(data)
