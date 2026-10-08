@@ -90,6 +90,7 @@ func TestSessionCredentialsThroughGRPC(t *testing.T) {
 type proxyControlledActors struct {
 	mu                         sync.Mutex
 	actor                      *ateapipb.Actor
+	templateUID                string
 	policy                     *ateapipb.EgressPolicy
 	creates, resumes, suspends int
 }
@@ -102,6 +103,17 @@ func (a *proxyControlledActors) GetActor(context.Context, string, string) (*atea
 	}
 	return proto.CloneOf(a.actor), nil
 }
+
+func (a *proxyControlledActors) GetActorTemplate(_ context.Context, atespace, name string) (*ateapipb.ActorTemplate, error) {
+	return &ateapipb.ActorTemplate{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: atespace, Name: name, Uid: a.templateUID},
+		SnapshotConfig: &ateapipb.SnapshotConfig{
+			OnPause:  ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+			OnCommit: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
+		},
+	}, nil
+}
+
 func (a *proxyControlledActors) CreateActor(_ context.Context, at, name, templateAt, templateName string) (*ateapipb.Actor, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -130,6 +142,9 @@ func (a *proxyControlledActors) SuspendActor(context.Context, string, string) (*
 	defer a.mu.Unlock()
 	a.suspends++
 	a.actor.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
+	a.actor.Status.ExternalSnapshot = &ateapipb.ExternalSnapshot{
+		SnapshotUri: "s3://snapshots/controlled-actor", ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA, ActorTemplateUid: a.templateUID,
+	}
 	return proto.CloneOf(a.actor), nil
 }
 func (a *proxyControlledActors) PauseActor(context.Context, string, string) (*ateapipb.Actor, error) {
@@ -170,7 +185,7 @@ func TestGitProxyReferenceOnlyGRPCReadiness(t *testing.T) {
 	scheme := runtime.NewScheme()
 	require.NoError(t, corev1.AddToScheme(scheme))
 	kube := fake.NewClientBuilder().WithScheme(scheme).Build()
-	actors := &proxyControlledActors{}
+	actors := &proxyControlledActors{templateUID: revision.ActorTemplateUID}
 	workflow := sessionsvc.NewActorWorkflow(store, actors, substrate.NewRuntimeCredentialIssuer(kube, "kagent"), "http://kagent-controller.kagent:8083")
 	listener := bufconn.Listen(DefaultMaxMessageSize)
 	server, err := New(Config{Listener: listener, Authenticator: authenticator, SystemService: testSystemService(), SessionService: sessionsvc.NewService(store, policy, workflow)})

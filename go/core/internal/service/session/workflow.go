@@ -32,12 +32,14 @@ type workflowStore interface {
 	ClaimSessionOperation(context.Context, string, uuid.UUID, uuid.UUID) (bool, error)
 	ReleaseRuntimeOperation(context.Context, string, uuid.UUID, uuid.UUID) error
 	FinishSessionOperation(context.Context, string, uuid.UUID, uuid.UUID, string, string, string) (*apiv1alpha1.Session, error)
+	FinishObservedSessionSuspension(context.Context, string, uuid.UUID, string, string) (*apiv1alpha1.Session, error)
 	GetSessionOperation(context.Context, string, uuid.UUID) (*database.SessionOperation, error)
 }
 
 type actorClient interface {
 	substrate.LifecycleClient
 	PauseActor(context.Context, string, string) (*ateapipb.Actor, error)
+	GetActorTemplate(context.Context, string, string) (*ateapipb.ActorTemplate, error)
 }
 
 // ActorWorkflow runs the imperative Substrate operations behind Session
@@ -169,6 +171,9 @@ func (w *ActorWorkflow) Pause(ctx context.Context, session *apiv1alpha1.Session)
 	if !validActorIdentity(actor, revision, name) || actor.GetMetadata().GetUid() != current.GetMetadata().GetUid() || actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_PAUSED {
 		return fmt.Errorf("pause Actor %s/%s returned status %s", atespace, name, actor.GetStatus().GetState())
 	}
+	if actor.GetStatus().GetLocalSnapshot().GetContentScope() != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL {
+		return fmt.Errorf("pause Actor %s/%s returned a snapshot without full process state", atespace, name)
+	}
 	return nil
 }
 
@@ -192,29 +197,90 @@ func (w *ActorWorkflow) Quiesce(ctx context.Context, session *apiv1alpha1.Sessio
 	if err := w.verifyActor(ctx, session, revision, current); err != nil {
 		return nil, err
 	}
+	// Recovery of a released claim observes an already completed suspension.
+	// Do not issue another suspend when its snapshot can be verified directly.
+	if current.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_SUSPENDED && current.GetStatus().GetExternalSnapshot().GetSnapshotUri() != "" {
+		return w.quiesceSnapshot(ctx, session, current)
+	}
 	actor, err := w.actors.SuspendActor(ctx, atespace, name)
 	if err != nil {
 		return nil, fmt.Errorf("suspend Actor %s/%s: %w", atespace, name, err)
 	}
-	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
-		return nil, fmt.Errorf("suspend Actor %s/%s returned status %s", atespace, name, actor.GetStatus().GetState())
-	}
-	metadata := actor.GetMetadata()
-	if !validActorIdentity(actor, revision, name) || metadata.GetUid() != current.GetMetadata().GetUid() {
+	if actor.GetMetadata().GetUid() != current.GetMetadata().GetUid() {
 		return nil, fmt.Errorf("suspend actor %s/%s returned invalid identity", atespace, name)
+	}
+	return w.quiesceSnapshot(ctx, session, actor)
+}
+
+// observeQuiesce reconciles an already issued boundary without issuing runtime
+// work. A pending or mismatched outcome leaves the durable claim fenced.
+func (w *ActorWorkflow) observeQuiesce(ctx context.Context, session *apiv1alpha1.Session) (*database.SessionTaskSnapshot, error) {
+	generation, err := w.store.GetRuntimeGeneration(ctx, session.GetId())
+	if err != nil {
+		return nil, err
+	}
+	actor, err := w.actors.GetActor(ctx, generation.Atespace, generation.ActorName)
+	if err != nil {
+		return nil, err
+	}
+	return w.quiesceSnapshot(ctx, session, actor)
+}
+
+func (w *ActorWorkflow) quiesceSnapshot(ctx context.Context, session *apiv1alpha1.Session, actor *ateapipb.Actor) (*database.SessionTaskSnapshot, error) {
+	revision, err := w.store.GetRuntimeRevision(ctx, session.GetPreparedRevision())
+	if err != nil {
+		return nil, fmt.Errorf("load prepared revision: %w", err)
+	}
+	if err := w.verifyActor(ctx, session, revision, actor); err != nil {
+		return nil, err
+	}
+	template, err := w.actors.GetActorTemplate(ctx, revision.ActorTemplateAtespace, revision.ActorTemplateName)
+	if err != nil {
+		return nil, fmt.Errorf("get prepared ActorTemplate: %w", err)
+	}
+	expected, err := quiesceSnapshotScope(revision, template)
+	if err != nil {
+		return nil, err
+	}
+	return snapshotForQuiesce(revision, actor, expected)
+}
+
+func snapshotForQuiesce(revision *database.RuntimeRevision, actor *ateapipb.Actor, expected ateapipb.SnapshotContentScope) (*database.SessionTaskSnapshot, error) {
+	atespace, name := actor.GetMetadata().GetAtespace(), actor.GetMetadata().GetName()
+	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		return nil, fmt.Errorf("actor %s/%s has unsettled status %s", atespace, name, actor.GetStatus().GetState())
 	}
 	snapshot := actor.GetStatus().GetExternalSnapshot()
 	if snapshot.GetSnapshotUri() == "" {
 		return nil, fmt.Errorf("suspend Actor %s/%s returned no snapshot", atespace, name)
 	}
 	scope := snapshot.GetContentScope()
-	if scope != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
-		return nil, fmt.Errorf("actor %s/%s returned invalid snapshot content scope %s", atespace, name, scope)
+	if scope != expected || snapshot.GetActorTemplateUid() != revision.ActorTemplateUID {
+		return nil, fmt.Errorf("actor %s/%s returned snapshot content scope %s from template %q; prepared revision requires %s from %q",
+			atespace, name, scope, snapshot.GetActorTemplateUid(), expected, revision.ActorTemplateUID)
 	}
 	return &database.SessionTaskSnapshot{
 		Atespace: atespace, URI: snapshot.GetSnapshotUri(),
 		ContentScope: strings.TrimPrefix(scope.String(), "SNAPSHOT_CONTENT_SCOPE_"),
 	}, nil
+}
+
+// quiesceSnapshotScope returns the scope Substrate records when an Actor of the
+// prepared revision suspends. Substrate always records the template's OnCommit
+// scope, including when it uploads a paused Actor's Full local snapshot, so the
+// pinned template, not a fixed scope, is the expectation.
+func quiesceSnapshotScope(revision *database.RuntimeRevision, template *ateapipb.ActorTemplate) (ateapipb.SnapshotContentScope, error) {
+	metadata := template.GetMetadata()
+	if metadata.GetAtespace() != revision.ActorTemplateAtespace || metadata.GetName() != revision.ActorTemplateName ||
+		metadata.GetUid() == "" || metadata.GetUid() != revision.ActorTemplateUID {
+		return 0, fmt.Errorf("prepared ActorTemplate identity changed")
+	}
+	switch scope := template.GetSnapshotConfig().GetOnCommit(); scope {
+	case ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL:
+		return scope, nil
+	default:
+		return 0, fmt.Errorf("prepared ActorTemplate has unsupported quiesce snapshot scope %s", scope)
+	}
 }
 
 // Create provisions the persisted session once, using its pinned checkpoint for
@@ -382,6 +448,32 @@ func (w *ActorWorkflow) execute(ctx context.Context, operation *database.Session
 		}
 	}
 
+	if kind == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_SUSPEND && operation.ExecutorID == uuid.Nil {
+		current, err := w.actors.GetActor(ctx, binding.Atespace, binding.Name)
+		if err != nil {
+			return nil, fmt.Errorf("observe Actor before suspension: %w", err)
+		}
+		if err := w.verifyActor(ctx, session, revision, current); err != nil {
+			return nil, err
+		}
+		if current.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+			// No runtime mutation is needed. Never claim this observation: an
+			// executor ID must continue to mean capture may have been issued,
+			// including after a failed or lost database completion reply.
+			finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			result, err := w.store.FinishObservedSessionSuspension(finishCtx, sessionID, operation.ID, session.PreparedRevision, current.GetMetadata().GetUid())
+			if errors.Is(err, database.ErrConflict) {
+				observed, readErr := w.store.GetSessionOperation(finishCtx, sessionID, operation.ID)
+				if readErr != nil {
+					return nil, errors.Join(err, readErr)
+				}
+				return operationOutcome(observed)
+			}
+			return result, err
+		}
+	}
+
 	executorID := uuid.New()
 	claimed, err := w.store.ClaimSessionOperation(ctx, sessionID, operation.ID, executorID)
 	if err != nil {
@@ -450,6 +542,11 @@ func (w *ActorWorkflow) execute(ctx context.Context, operation *database.Session
 	}
 	if err := substrate.ApplyActorTransition(ctx, w.actors, transition); err != nil {
 		return nil, fmt.Errorf("lifecycle operation %s remains pending: %w", operation.ID, err)
+	}
+	if kind == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_SUSPEND {
+		if _, err := w.observeQuiesce(ctx, session); err != nil {
+			return nil, fmt.Errorf("verify suspended runtime snapshot: %w", err)
+		}
 	}
 	if kind == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_DELETE {
 		if err := w.credentials.Delete(ctx, *generation); err != nil {
@@ -521,12 +618,6 @@ func (w *ActorWorkflow) InspectPreparation(ctx context.Context, session *apiv1al
 	if err != nil || association == nil {
 		return nil, err
 	}
-	reader, ok := w.actors.(interface {
-		GetActorTemplate(context.Context, string, string) (*ateapipb.ActorTemplate, error)
-	})
-	if !ok {
-		return nil, fmt.Errorf("prepared template observation unavailable")
-	}
 	revision, err := w.store.GetRuntimeRevision(ctx, session.GetPreparedRevision())
 	if err != nil {
 		return nil, err
@@ -535,7 +626,7 @@ func (w *ActorWorkflow) InspectPreparation(ctx context.Context, session *apiv1al
 	if err != nil || actor.GetMetadata().GetUid() != association.ActorUid {
 		return nil, fmt.Errorf("runtime identity changed")
 	}
-	template, err := reader.GetActorTemplate(ctx, revision.ActorTemplateAtespace, revision.ActorTemplateName)
+	template, err := w.actors.GetActorTemplate(ctx, revision.ActorTemplateAtespace, revision.ActorTemplateName)
 	if err != nil {
 		return nil, err
 	}

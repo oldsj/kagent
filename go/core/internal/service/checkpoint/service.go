@@ -151,8 +151,8 @@ func (s *Service) create(ctx context.Context, userID, sessionID, requestID, expe
 // because ate-api also permits Actors to be changed outside kagent.
 func (s *Service) ensureTag(ctx context.Context, checkpoint *apiv1alpha1.Checkpoint, reference *database.SessionTaskSnapshot) (*ateapipb.Tag, error) {
 	generation, err := s.store.GetRuntimeGeneration(ctx, checkpoint.GetSessionId())
-	if err != nil || generation.Phase != "active" || generation.ActorUID == "" || reference.ContentScope != "DATA" {
-		return nil, fmt.Errorf("checkpoint requires an active ledger-issued DATA generation")
+	if err != nil || generation.Phase != "active" || generation.ActorUID == "" || (reference.ContentScope != "DATA" && reference.ContentScope != "FULL") {
+		return nil, fmt.Errorf("checkpoint requires an active ledger-issued generation and a recorded snapshot scope")
 	}
 	actorName := generation.ActorName
 	actor, err := s.verifySnapshot(ctx, actorName, reference)

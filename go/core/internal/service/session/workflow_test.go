@@ -159,12 +159,13 @@ func lifecycleFixture(t *testing.T) (*lifecycleTestStore, *apiv1alpha1.Session) 
 	require.NoError(t, client.RecordRuntimeRevision(t.Context(), *revision, true))
 	session, _, err := client.CreateSession(t.Context(), &apiv1alpha1.Session{Id: uuid.NewString(), Creator: "alice", Agent: &apiv1alpha1.ResourceReference{Namespace: "team-a", Name: "assistant"}}, uuid.NewString())
 	require.NoError(t, err)
-	return &lifecycleTestStore{Client: client, revision: revision}, session
+	return &lifecycleTestStore{Client: client, revision: revision, pool: pool}, session
 }
 
 type lifecycleTestStore struct {
 	*database.Client
 	revision *database.RuntimeRevision
+	pool     *pgxpool.Pool
 }
 
 func (s *lifecycleTestStore) GetRuntimeRevision(context.Context, string) (*database.RuntimeRevision, error) {
@@ -172,12 +173,14 @@ func (s *lifecycleTestStore) GetRuntimeRevision(context.Context, string) (*datab
 }
 
 type lifecycleTestActors struct {
-	mu          sync.Mutex
-	actors      map[string]*ateapipb.Actor
-	policyErr   error
-	policy      *ateapipb.EgressPolicy
-	policyActor string
-	policyCalls int
+	mu            sync.Mutex
+	actors        map[string]*ateapipb.Actor
+	template      *ateapipb.ActorTemplate
+	snapshotScope ateapipb.SnapshotContentScope
+	policyErr     error
+	policy        *ateapipb.EgressPolicy
+	policyActor   string
+	policyCalls   int
 }
 
 func actorKey(atespace, name string) string { return atespace + "/" + name }
@@ -190,6 +193,21 @@ func (a *lifecycleTestActors) GetActor(_ context.Context, atespace, name string)
 		return nil, status.Error(codes.NotFound, "missing")
 	}
 	return proto.CloneOf(actor), nil
+}
+
+func (a *lifecycleTestActors) GetActorTemplate(_ context.Context, atespace, name string) (*ateapipb.ActorTemplate, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.template != nil {
+		return proto.CloneOf(a.template), nil
+	}
+	return &ateapipb.ActorTemplate{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: atespace, Name: name, Uid: "actor-template-uid"},
+		SnapshotConfig: &ateapipb.SnapshotConfig{
+			OnPause:  ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+			OnCommit: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
+		},
+	}, nil
 }
 
 func (a *lifecycleTestActors) CreateActor(_ context.Context, atespace, name, templateNamespace, templateName string) (*ateapipb.Actor, error) {
@@ -233,6 +251,7 @@ func (a *lifecycleTestActors) PauseActor(_ context.Context, atespace, name strin
 	defer a.mu.Unlock()
 	actor := a.actors[actorKey(atespace, name)]
 	actor.Status.State = ateapipb.ActorState_ACTOR_STATE_PAUSED
+	actor.Status.LocalSnapshot = &ateapipb.LocalSnapshot{ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL}
 	return proto.CloneOf(actor), nil
 }
 
@@ -240,8 +259,19 @@ func (a *lifecycleTestActors) SuspendActor(_ context.Context, atespace, name str
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	actor := a.actors[actorKey(atespace, name)]
+	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		return proto.CloneOf(actor), nil
+	}
 	actor.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
-	actor.Status.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: "s3://snapshots/snapshot-1", ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA}
+	scope := a.snapshotScope
+	if scope == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED {
+		scope = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
+	}
+	templateUID := "actor-template-uid"
+	if a.template != nil {
+		templateUID = a.template.GetMetadata().GetUid()
+	}
+	actor.Status.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: "s3://snapshots/snapshot-1", ContentScope: scope, ActorTemplateUid: templateUID}
 	return proto.CloneOf(actor), nil
 }
 
@@ -268,6 +298,8 @@ func TestQuiesceRejectsWrongActorIdentity(t *testing.T) {
 func lifecycleForkFixture(t *testing.T, store *lifecycleTestStore, actors *lifecycleTestActors, source *apiv1alpha1.Session) (*apiv1alpha1.Session, string) {
 	t.Helper()
 	source, err := NewActorWorkflow(store, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083").Create(t.Context(), source)
+	require.NoError(t, err)
+	_, err = actors.ResumeActor(t.Context(), "team-a", fixtureActorName(t, store, source.Id))
 	require.NoError(t, err)
 	message := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("hello"))
 	message.ContextID = source.ContextId

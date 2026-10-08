@@ -243,7 +243,11 @@ func nativePreparationInstalled(t *testing.T, provider, scenario string) {
 	prepared.SourceSnapshot, err = json.Marshal(database.EnvironmentRevisionSnapshot{BaseRevision: base.Revision, Environment: environment, Composition: composition})
 	require.NoError(t, err)
 	require.NoError(t, store.RecordRuntimeRevision(ctx, prepared, false))
-	actors := &preparationActors{proxyControlledActors: &proxyControlledActors{}, template: &ateapipb.ActorTemplate{Metadata: &ateapipb.ResourceMetadata{Atespace: prepared.ActorTemplateAtespace, Name: prepared.ActorTemplateName, Uid: prepared.ActorTemplateUID}, Containers: []*ateapipb.Container{{Name: "native", Image: environment.Image, Env: []*ateapipb.EnvVar{{Name: "KAGENT_CONFIG_JSON", Value: string(raw)}, {Name: "MAINLOOP_RUNTIME_PLATFORM", Value: environment.Platform}}}}, Volumes: []*ateapipb.Volume{{Name: "runtime-payload", Image: &ateapipb.ImageVolumeSource{Reference: composition.PayloadImage}}}}}
+	actors := &preparationActors{proxyControlledActors: &proxyControlledActors{templateUID: prepared.ActorTemplateUID}, template: &ateapipb.ActorTemplate{Metadata: &ateapipb.ResourceMetadata{Atespace: prepared.ActorTemplateAtespace, Name: prepared.ActorTemplateName, Uid: prepared.ActorTemplateUID}, Containers: []*ateapipb.Container{{Name: "native", Image: environment.Image, Env: []*ateapipb.EnvVar{{Name: "KAGENT_CONFIG_JSON", Value: string(raw)}, {Name: "MAINLOOP_RUNTIME_PLATFORM", Value: environment.Platform}}}}, Volumes: []*ateapipb.Volume{{Name: "runtime-payload", Image: &ateapipb.ImageVolumeSource{Reference: composition.PayloadImage}}}}}
+	actors.template.SnapshotConfig = &ateapipb.SnapshotConfig{
+		OnPause:  ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+		OnCommit: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
+	}
 	policy, err := controlauth.New(controlauth.Config{Namespace: "kagent", Agents: []string{"mainloop-main"}, DevelopmentEnvironmentRegistries: []string{"fixture.test"}, CleartextMCPOrigins: []string{"http://mainloop-mcp.mainloop.svc.cluster.local"}, Credentials: []controlauth.CredentialRule{
 		{Namespace: "kagent", SecretNamePattern: "mainloop-mcp-binding-*", Key: "authorization", Header: "authorization", Origin: "http://mainloop-mcp.mainloop.svc.cluster.local", Purpose: "mcp"},
 		{Namespace: "kagent", SecretNamePattern: "mainloop-git-read-*", Key: "authorization", Header: "authorization", Origin: apiworkspace.ReadProxyOrigin, Purpose: "git-read"},
