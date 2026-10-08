@@ -56,3 +56,58 @@ func TestGitCredentialRequiresOneOrigin(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestProxyPolicyAndTransport(t *testing.T) {
+	good := Git{Origins: []string{"github.com"}, ReadProxyOrigin: new(ReadProxyOrigin), PushProxyOrigin: new(PushProxyOrigin)}
+	for _, repo := range []string{"https://github.com/Owner/Repo", "https://GitHub.com/Owner/Repo.git"} {
+		read, push, err := good.Transport(repo)
+		if err != nil || read != ReadProxyOrigin+"/owner/repo.git" || push != PushProxyOrigin+"/owner/repo.git" {
+			t.Fatalf("transport = %q, %q, %v", read, push, err)
+		}
+	}
+	readonly := good
+	readonly.PushProxyOrigin = nil
+	read, push, err := readonly.Transport("https://github.com/o/r")
+	if err != nil || read != push {
+		t.Fatalf("readonly transport = %q, %q, %v", read, push, err)
+	}
+	for _, repo := range []string{
+		"https://github.com/o", "https://github.com/o/r/extra", "https://github.com/o/r/", "https://github.com//r", "https://github.com/o/..",
+		"https://github.com/o/%2fr", "https://github.com/o/%72", "https://github.com/o/r%2e%2e", "https://github.com/o/r?x", "https://github.com/o/r#",
+		"https://github.com./o/r", "https://github.com:443/o/r", "http://github.com/o/r", "https://user@github.com/o/r",
+		"https://mainloop-git-read.mainloop.svc.cluster.local/o/r", "https://github.com/o/r\\extra",
+	} {
+		t.Run(repo, func(t *testing.T) {
+			if _, _, err := good.Transport(repo); err == nil {
+				t.Fatal("accepted invalid proxy identity")
+			}
+		})
+	}
+	for name, mutate := range map[string]func(*Git){
+		"push without read":   func(g *Git) { g.ReadProxyOrigin = nil },
+		"legacy credential":   func(g *Git) { g.Credential = true },
+		"other identity":      func(g *Git) { g.Origins = []string{"gitlab.com"} },
+		"multiple identities": func(g *Git) { g.Origins = []string{"github.com", "gitlab.com"} },
+		"empty read":          func(g *Git) { g.ReadProxyOrigin = new("") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := good
+			mutate(&g)
+			if err := g.Validate(); err == nil {
+				t.Fatal("accepted invalid policy")
+			}
+		})
+	}
+	for _, bad := range []string{ReadProxyOrigin + "/", ReadProxyOrigin + ":80", ReadProxyOrigin + ".", ReadProxyOrigin + "?", ReadProxyOrigin + "#", "http://MAINLOOP-git-read.mainloop.svc.cluster.local", "http://127.0.0.1"} {
+		g := good
+		g.ReadProxyOrigin = new(bad)
+		if err := g.Validate(); err == nil {
+			t.Fatalf("accepted %q", bad)
+		}
+	}
+	legacy := Git{Origins: []string{"gitlab.com"}, Credential: true}
+	read, push, err = legacy.Transport("https://gitlab.com/group/subgroup/repo.git")
+	if err != nil || read != "https://gitlab.com/group/subgroup/repo.git" || push != "" {
+		t.Fatalf("legacy = %q %q %v", read, push, err)
+	}
+}

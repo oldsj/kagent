@@ -135,12 +135,17 @@ func (b *Bootstrapper) bootstrap(ctx context.Context, request Request) string {
 	if !b.policy.Allows(host) {
 		return fmt.Sprintf("Workspace bootstrap failed: %s is not one of this agent's Git origins.", host)
 	}
+	readURL, pushURL, err := b.policy.Transport(request.Repo)
+	if err != nil {
+		return "Workspace bootstrap failed: the repository does not satisfy the Git transport policy."
+	}
 	if err := os.MkdirAll(b.dir, 0o755); err != nil {
 		return "Workspace bootstrap failed: the workspace directory is not writable."
 	}
 	spec := checkout{
 		Dir: b.dir, StateDir: b.stateDir, Repo: request.Repo, Host: host, Ref: request.Ref, Branch: request.Branch,
 		Depth: request.Depth, Credential: b.policy.Credential,
+		ReadURL: readURL, PushURL: pushURL, Proxy: b.policy.ReadProxyOrigin != nil,
 	}
 	if spec.Depth <= 0 {
 		spec.Depth = apiworkspace.DefaultDepth
