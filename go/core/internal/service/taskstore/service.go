@@ -223,13 +223,22 @@ func (s *Service) getWorkspaceOperation(ctx context.Context, input *apiv1alpha1.
 	if err != nil {
 		return nil, err
 	}
-	result := &apiv1alpha1.TaskStoreServiceGetWorkspaceResponse{Workspace: session.GetWorkspace(), PreparationRequired: database.RequiresWorkspacePreparation(session)}
-	if result.PreparationRequired {
+	result := &apiv1alpha1.TaskStoreServiceGetWorkspaceResponse{Workspace: session.GetWorkspace()}
+	if database.RequiresWorkspacePreparation(session) {
 		store, ok := s.store.(interface {
+			WorkspacePreparationRequired(context.Context, *apiv1alpha1.Session) (bool, error)
 			AssignWorkspacePreparation(context.Context, string) (*apiv1alpha1.NativeWorkspacePreparation, bool, error)
 		})
 		if !ok {
 			return nil, status.Error(codes.FailedPrecondition, "workspace assignment unavailable")
+		}
+		// The runtime holds turns only when the store's admission gate does.
+		result.PreparationRequired, err = store.WorkspacePreparationRequired(ctx, session)
+		if err != nil {
+			return nil, storageError(err)
+		}
+		if !result.PreparationRequired {
+			return result, nil
 		}
 		assignment, ready, err := store.AssignWorkspacePreparation(ctx, session.Id)
 		if err != nil {
