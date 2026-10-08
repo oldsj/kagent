@@ -31,7 +31,7 @@ func main() {
 			}
 		}
 	} else if len(os.Args) == 1 || (len(os.Args) == 2 && os.Args[1] == "--check") {
-		err = payload.Launch(payload.Root, "/data", runtime.GOOS+"/"+runtime.GOARCH, len(os.Args) == 2, os.Environ(), syscall.Exec)
+		err = payload.Launch(payload.Root, "/", "/data", runtime.GOOS+"/"+runtime.GOARCH, len(os.Args) == 2, os.Environ(), syscall.Exec)
 	} else {
 		err = fmt.Errorf("usage: launch [--check]")
 	}

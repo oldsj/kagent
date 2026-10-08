@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	claudeconfig "github.com/kagent-dev/kagent/go/harness/claude/config"
@@ -25,6 +26,20 @@ type Composition struct {
 	PolicyIdentity   string      `json:"policyIdentity"`
 	Provider         HarnessType `json:"provider"`
 	Schema           uint32      `json:"schema"`
+}
+
+// composedCapabilities extend Substrate's default actor set (AUDIT_WRITE, KILL,
+// NET_BIND_SERVICE). Substrate always runs the process as uid 0; development
+// image tooling that drops to the image user (runuser, chown of its scratch
+// directories, root cleanup afterwards) needs these file and identity
+// capabilities. No network capability is granted: egress stays enforced
+// outside the sandbox.
+var composedCapabilities = []string{"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID"}
+
+// ContainerCapabilities returns the capabilities a composed runtime container
+// adds to Substrate's default set, in the order the ActorTemplate records them.
+func (Composition) ContainerCapabilities() []string {
+	return slices.Clone(composedCapabilities)
 }
 
 // Validate rejects mutable references and unsupported payload contracts.

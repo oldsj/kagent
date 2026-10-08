@@ -29,7 +29,37 @@ Mainloop code Sessions with an explicit development environment and Git workspac
 
 `go/harness/runtime/payload/runtime-lock.json` is the shared CLI version and per-architecture artifact checksum source for both legacy Dockerfiles and payload builds. The payload includes static Go launch/harness binaries, untouched vendor CLI bytes, private musl libraries, Bash, Git and ripgrep helpers, and a checksummed manifest. Dynamic vendor CLIs run through the bundled musl loader; rewriting the Claude executable's ELF layout breaks its embedded Bun payload. Other dynamic helpers use the private payload interpreter and library path.
 
-The launcher checks manifest metadata, platform and file hashes, verifies writable durable state, establishes native homes beneath `/data`, enters `/data/workspace`, and executes the harness. Harness configuration names the CLI by absolute payload path and pins its expected version. `launch --check` verifies packaging and CLI version without contacting a model. Payload files remain world-readable/executable. Stock Substrate currently runs actors as root; Claude retains `IS_SANDBOX=1`.
+The launcher checks manifest metadata, platform and file hashes, verifies writable durable state, establishes native homes beneath `/data`, enters `/data/workspace`, and executes the harness. Harness configuration names the CLI by absolute payload path and pins its expected version. `launch --check` verifies packaging and CLI version without contacting a model. Payload files remain world-readable/executable. Stock Substrate currently runs actors as root; Claude retains `IS_SANDBOX=1`. Immediately before executing the harness, launch also prepares the filesystem for development-image tooling; see [Process identity and capabilities](#process-identity-and-capabilities).
+
+## Process identity and capabilities
+
+Substrate always runs the actor process as uid 0 and ignores the image's OCI `User`. Its default capability set is `AUDIT_WRITE`, `KILL` and `NET_BIND_SERVICE`, and gVisor has no ambient capabilities. Development images, however, ship tooling that expects to drop to the image user. For example, a test PostgreSQL wrapper uses `runuser` to start PostgreSQL as the image user (PostgreSQL refuses euid 0), chowns its scratch directories, and removes them as root afterwards.
+
+Composed ActorTemplates therefore add exactly `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETGID` and `SETUID` to the default set, and drop nothing. Legacy single-image templates and standalone sandboxes are unchanged. The profile is fixed in the translator (`Composition.ContainerCapabilities`), so neither Session callers nor the payload catalog can choose it. The revision digest includes it, so changing the profile creates new revisions, ActorTemplates and goldens rather than conflicting with existing immutable templates.
+
+The agent already ran as uid 0 and owned every file in the sandbox, so these capabilities grant no new access to credentials or provider state. They add DAC bypass for files owned by another user, ownership changes, and uid switching. No network or mount capability is granted: egress is enforced outside the sandbox, credentials are injected at the gateway, and the payload, identity and trust-bundle mounts stay read-only. gVisor remains the isolation boundary. The agent still runs as root; running the harness itself as the image user is not supported on stock Substrate, because image-layer files appear root-owned inside the actor.
+
+On a cold launch (golden creation, a Data-scope resume or a crash restart), launch prepares the filesystem as root after all validation and before exec. Every step is best-effort and logs a `runtime launch: warning:` line to stderr instead of failing:
+
+- `/` gains at least `0755`. Substrate composes the actor root with mode `0700` ([agent-substrate/substrate#2035](https://github.com/agent-substrate/substrate/issues/2035)), so a non-root process could not resolve any path. The step is a no-op once the root is already traversable.
+- `/data` is set to `0711`: other users can traverse to scratch directories but cannot list it.
+- The runtime directories `workspace`, `adapter`, `generated`, `home`, `claude`, `codex`, `cache` and `tmp` are reset to `0700` and owned by root. This is reasserted on every cold launch, because the agent can now loosen them. Only the directories themselves are reset; their contents are not walked.
+- Any other top-level entry under `/data` owned by a non-root uid or gid is chowned recursively to root, without following symlinks. Substrate's atelet holds no capabilities and cannot delete a DurableDir containing non-root-owned directories ([agent-substrate/substrate#2034](https://github.com/agent-substrate/substrate/issues/2034)). Scratch left behind when tooling dies mid-run would otherwise block cleanup.
+
+**Contract:** image-user-owned state at the top level of `/data` does not survive a cold start; it is returned to root. Tooling should keep image-user scratch directly under `/data` (not inside a runtime directory) and remove it on exit. Leftovers are reclaimed by chown, not removed, so a tool that refuses an existing scratch root (as `mkdir` does) needs the agent to delete it first.
+
+Limits of these work-arounds:
+
+- The reclaim runs only on cold launches. atelet resets the node-local DurableDir and rootfs upper on suspend (after upload), on restore and on actor deletion, before any relaunch. Foreign-owned, non-empty directories present at those points can still fail the reset: suspend returns an error, or deletion stalls in `DELETING` while holding its worker.
+- Paths the reclaim does not cover:
+  - a killed tool's scratch while the actor stays up;
+  - image-user files inside runtime directories, such as archives extracted with their original owners (GNU `tar` as root preserves them, as do `cp -a` and `rsync -a`);
+  - the ownership of `/data` itself;
+  - the rootfs upper.
+- New Sessions start from the golden `Full` snapshot, so the filesystem preparation ran only once, when the golden was created. `/data`'s mode is part of the durable snapshot. Whether `/`'s mode survives a `Full` restore depends on gVisor capturing the root directory's own metadata, and is verified only by live evidence.
+- PostgreSQL started through `runuser` inherits the agent's working directory (`/data/workspace`, mode `0700`), so it starts without access to its working directory. Tools that use absolute paths tolerate this; the fix belongs in the tool's wrapper, not in widening the workspace.
+
+These work-arounds stay until upstream Substrate fixes #2035 and #2034. Each is a no-op once the condition it repairs no longer occurs.
 
 Build locally from `go/harness/runtime/payload` with `make build PROVIDER=claude PLATFORM=linux/amd64 IMAGE=runtime-claude:local` (or `PROVIDER=codex`). Publishing and catalog deployment are separate operator steps.
 

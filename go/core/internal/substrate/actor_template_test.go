@@ -84,6 +84,7 @@ func TestActorTemplateForRevision(t *testing.T) {
 		t.Fatalf("ActorTemplate = %+v", template)
 	}
 	container := template.GetContainers()[0]
+	require.Nil(t, container.GetSecurityContext(), "legacy revisions keep Substrate's default capabilities")
 	if !slices.Equal(container.Command, spec.Command) || !slices.Equal(container.Args, spec.Args) {
 		t.Fatalf("container command/args = %v %v", container.Command, container.Args)
 	}
@@ -225,6 +226,8 @@ func TestComposedActorTemplate(t *testing.T) {
 	require.Equal(t, []string{"/opt/mainloop-runtime/bin/launch"}, template.Containers[0].Command)
 	require.Equal(t, selection.PayloadImage, template.Volumes[len(template.Volumes)-1].GetImage().GetReference())
 	require.Equal(t, "/opt/mainloop-runtime", template.Containers[0].VolumeMounts[len(template.Containers[0].VolumeMounts)-1].MountPath)
+	require.Equal(t, []string{"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID"}, template.Containers[0].GetSecurityContext().GetCapabilities().GetAdd())
+	require.Empty(t, template.Containers[0].GetSecurityContext().GetCapabilities().GetDrop())
 	rendered, err := protojson.MarshalOptions{Indent: "  ", UseProtoNames: true}.Marshal(template)
 	require.NoError(t, err)
 	goldenPath := filepath.Join("testdata", "composed-template.golden.json")
