@@ -61,6 +61,23 @@ Claude runs in print mode with `permissions.ask` rules for MCP servers
 that require approval. Its native `--permission-prompt-tool` calls a private,
 authenticated loopback MCP tool before executing a protected call.
 
+The adapter sets `timeout: 100000000` milliseconds (about 27 hours 47 minutes)
+on the reserved `kagent_hitl` server only. In the pinned Claude Code 2.1.260,
+this bounds the permission call and raises its idle and HTTP request limits
+to cover human approval waits, including wall time while the Actor is suspended.
+Ordinary MCP servers retain their configured timeouts or native defaults.
+Explicit timeouts must be integers from 1,000 to 2,147,483,647 milliseconds;
+smaller values fall back to native defaults, and larger values can overflow
+JavaScript timers, so the configuration rejects both.
+See [Claude Code MCP timeouts](https://code.claude.com/docs/en/mcp) and
+[JavaScript timer bounds](https://nodejs.org/api/timers.html#settimeoutcallback-delay-args).
+
+This is a finite wait bound, not indefinite approval durability. A permission
+call that waits beyond it still fails; accepting a later decision does not prove
+that the protected tool executed. A new call, even with identical arguments,
+requires its own approval. The timeout applies to newly configured processes;
+it does not repair a parked process whose permission call already expired.
+
 ```mermaid
 sequenceDiagram
     participant Client as A2A client

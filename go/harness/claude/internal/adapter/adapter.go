@@ -25,6 +25,10 @@ import (
 
 const approvalMCPServerName = "kagent_hitl"
 
+// Match Claude's default overall tool limit while lifting the shorter HTTP
+// idle/request limits for human decisions, including suspended wall time.
+const approvalTimeoutMillis int64 = 100_000_000
+
 // Input contains compiler output and Actor-owned locations used to construct
 // the Claude driver.
 type Input struct {
@@ -139,6 +143,7 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 		maps.Copy(mcpServers, cfg.MCPServers)
 		mcpServers[approvalMCPServerName] = config.MCPServer{
 			Type: "http", URL: approvalBroker.URL(), Headers: approvalBroker.Headers(),
+			TimeoutMillis: new(approvalTimeoutMillis),
 		}
 		cfg.MCPServers = mcpServers
 	}

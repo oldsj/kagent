@@ -1,0 +1,3 @@
+{"type":"assistant","message":{"id":"msg-old","content":[{"type":"tool_use","id":"call-old","name":"mcp__protected__write","input":{"value":7}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"call-old","is_error":true,"content":"Error calling tool (mcp__protected__write): MCP server \"kagent_hitl\" tool \"approve\" sent no response or progress for 2378s; aborting. If this server is configured in your MCP settings, set a per-server \"timeout\" (ms) to allow longer silent runs for just this server; otherwise set CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT (ms) globally (0 disables)."}]}}
+{"type":"assistant","message":{"id":"msg-new","content":[{"type":"tool_use","id":"call-new","name":"mcp__protected__write","input":{"value":7}}]}}
