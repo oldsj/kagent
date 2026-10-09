@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"regexp"
 	"strings"
 	"time"
@@ -93,6 +94,9 @@ type MCPServer struct {
 	URL             string            `json:"url"`
 	Headers         map[string]string `json:"headers,omitempty"`
 	RequireApproval bool              `json:"require_approval,omitempty"`
+	// TimeoutMillis overrides Claude's per-call wall-clock limit and raises
+	// its idle/request limits. Nil leaves native defaults unchanged.
+	TimeoutMillis *int64 `json:"timeout,omitempty"`
 }
 
 // Agent is one compiler-owned local Claude subagent passed through --agents.
@@ -172,6 +176,11 @@ func (c Config) Validate() error {
 		if strings.TrimSpace(server.URL) == "" {
 			return fmt.Errorf("claude MCP server %q URL is required", name)
 		}
+		// Claude ignores values below 1000, including zero. Keep larger values
+		// within the JavaScript timer range to avoid overflow into a short wait.
+		if server.TimeoutMillis != nil && (*server.TimeoutMillis < 1000 || *server.TimeoutMillis > math.MaxInt32) {
+			return fmt.Errorf("claude MCP server %q timeout must be between 1000 and %d milliseconds", name, math.MaxInt32)
+		}
 		for header, value := range server.Headers {
 			if strings.TrimSpace(header) == "" || strings.TrimSpace(value) == "" {
 				return fmt.Errorf("claude MCP server %q headers require non-empty names and values", name)
@@ -197,13 +206,14 @@ func (c Config) MCPConfigJSON() ([]byte, error) {
 		return nil, nil
 	}
 	type nativeMCPServer struct {
-		Type    string            `json:"type"`
-		URL     string            `json:"url"`
-		Headers map[string]string `json:"headers,omitempty"`
+		Type          string            `json:"type"`
+		URL           string            `json:"url"`
+		Headers       map[string]string `json:"headers,omitempty"`
+		TimeoutMillis *int64            `json:"timeout,omitempty"`
 	}
 	servers := make(map[string]nativeMCPServer, len(c.MCPServers))
 	for name, server := range c.MCPServers {
-		servers[name] = nativeMCPServer{Type: server.Type, URL: server.URL, Headers: server.Headers}
+		servers[name] = nativeMCPServer{Type: server.Type, URL: server.URL, Headers: server.Headers, TimeoutMillis: server.TimeoutMillis}
 	}
 	raw, err := json.Marshal(struct {
 		Servers map[string]nativeMCPServer `json:"mcpServers"`

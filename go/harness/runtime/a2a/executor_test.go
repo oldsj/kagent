@@ -567,6 +567,144 @@ func TestExecutePublishesAndConsumesAskUser(t *testing.T) {
 	}
 }
 
+func TestExecuteRefusesUnmatchedParkedApproval(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		park       bool
+		taskID     a2atype.TaskID
+		contextID  string
+		approvalID string
+		wantError  string
+	}{
+		{name: "missing parked turn", taskID: "task-1", contextID: testContextID, approvalID: "approval-1", wantError: "no parked turn"},
+		{name: "different task", park: true, taskID: "task-2", contextID: testContextID, approvalID: "approval-1", wantError: "does not match the parked task"},
+		{name: "different context", park: true, taskID: "task-1", contextID: "different-context", approvalID: "approval-1", wantError: "does not match the parked task"},
+		{name: "different approval", park: true, taskID: "task-1", contextID: testContextID, approvalID: "approval-stale", wantError: "unknown or duplicate ID"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			starts, resumes := 0, 0
+			pending := &fakePendingTurn{
+				request: &runtime.ApprovalRequest{ID: "approval-1", CallID: "call-1", Name: "tools.write"},
+				resume: func(context.Context, runtime.InputResponse, runtime.EventSink) (runtime.Outcome, error) {
+					resumes++
+					return runtime.Outcome{}, nil
+				},
+			}
+			executor, err := New(fakeRunner{run: func(context.Context, runtime.Turn, runtime.EventSink) (runtime.Outcome, error) {
+				starts++
+				return runtime.Outcome{Pending: pending}, nil
+			}}, &fakeContinuation{}, tracing.RuntimeTelemetry{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			first := requestContext("task-1", "write")
+			message, err := inputRequiredMessage(first, pending.request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.park {
+				events, errs := collect(executor.Execute(t.Context(), first))
+				parkedStatus(t, events, errs)
+			}
+			decision := approvalDecision(t, first, &a2atype.TaskStatusUpdateEvent{
+				Status: a2atype.TaskStatus{State: a2atype.TaskStateInputRequired, Message: message},
+			}, test.approvalID)
+			decision.TaskID, decision.ContextID = test.taskID, test.contextID
+			decision.Message.TaskID, decision.Message.ContextID = test.taskID, test.contextID
+			decision.StoredTask.ID, decision.StoredTask.ContextID = test.taskID, test.contextID
+			_, errs := collect(executor.Execute(t.Context(), decision))
+			if len(errs) != 1 || !strings.Contains(errs[0].Error(), test.wantError) {
+				t.Fatalf("Execute() errors = %v, want %q", errs, test.wantError)
+			}
+			wantStarts := 0
+			if test.park {
+				wantStarts = 1
+			}
+			if starts != wantStarts || resumes != 0 {
+				t.Fatalf("starts/resumes = %d/%d", starts, resumes)
+			}
+			if test.park && executor.ReservedTaskID() != first.TaskID {
+				t.Fatal("refusal discarded the original parked turn")
+			}
+		})
+	}
+}
+
+func TestExecuteAcceptedApprovalCanReturnIdleErrorAndRequireNewApproval(t *testing.T) {
+	starts, accepted, executions := 0, 0, 0
+	args := map[string]any{"value": float64(7)}
+	retry := &fakePendingTurn{
+		request: &runtime.ApprovalRequest{ID: "approval-new", CallID: "call-new", Name: "tools.write", Args: args},
+		resume: func(_ context.Context, input runtime.InputResponse, sink runtime.EventSink) (runtime.Outcome, error) {
+			decision := input.(*runtime.ApprovalDecision)
+			if decision.ID != "approval-new" || !decision.Approved {
+				t.Fatalf("retry decision = %#v", decision)
+			}
+			accepted++
+			executions++
+			return runtime.Outcome{}, sink.ToolResult(runtime.ToolResult{ID: "call-new", Name: "tools.write", Result: "written"})
+		},
+	}
+	original := &fakePendingTurn{
+		request: &runtime.ApprovalRequest{ID: "approval-old", CallID: "call-old", Name: "tools.write", Args: args},
+		resume: func(_ context.Context, input runtime.InputResponse, sink runtime.EventSink) (runtime.Outcome, error) {
+			decision := input.(*runtime.ApprovalDecision)
+			if decision.ID != "approval-old" || !decision.Approved {
+				t.Fatalf("original decision = %#v", decision)
+			}
+			accepted++
+			if err := sink.ToolResult(runtime.ToolResult{ID: "call-old", Name: "tools.write", Result: "kagent_hitl.approve idle timeout after 2378s", IsError: true}); err != nil {
+				return runtime.Outcome{}, err
+			}
+			if err := sink.ToolCall(runtime.ToolCall{ID: "call-new", Name: "tools.write", Arguments: args}); err != nil {
+				return runtime.Outcome{}, err
+			}
+			return runtime.Outcome{Pending: retry}, nil
+		},
+	}
+	executor, err := New(fakeRunner{run: func(_ context.Context, _ runtime.Turn, sink runtime.EventSink) (runtime.Outcome, error) {
+		starts++
+		if err := sink.SessionStarted(runtime.SessionStarted{ContinuationID: testSessionID}); err != nil {
+			return runtime.Outcome{}, err
+		}
+		if err := sink.ToolCall(runtime.ToolCall{ID: "call-old", Name: "tools.write", Arguments: args}); err != nil {
+			return runtime.Outcome{}, err
+		}
+		return runtime.Outcome{Pending: original}, nil
+	}}, &fakeContinuation{}, tracing.RuntimeTelemetry{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := requestContext("task-retry", "write once")
+	events, errs := collect(executor.Execute(t.Context(), first))
+	oldStatus := parkedStatus(t, events, errs)
+	events, errs = collect(executor.Execute(t.Context(), approvalDecision(t, first, oldStatus, "approval-old")))
+	newStatus := parkedStatus(t, events, errs)
+	assertToolActivity(t, events, "function_response", map[string]any{
+		"id": "call-old", "name": "tools.write", "response": map[string]any{"result": "kagent_hitl.approve idle timeout after 2378s", "isError": true},
+	})
+	assertToolActivity(t, events, "function_call", map[string]any{"id": "call-new", "name": "tools.write", "args": args})
+	if accepted != 1 || executions != 0 {
+		t.Fatalf("accepted/executed = %d/%d", accepted, executions)
+	}
+	newRequest, err := apia2a.ParseToolApprovalRequest(newStatus.Status.Message)
+	if err != nil || newRequest == nil || len(newRequest.Tools) != 1 || newRequest.Tools[0].ID != "approval-new" || newRequest.Tools[0].CallID != "call-new" {
+		t.Fatalf("new approval card = %#v, %v", newRequest, err)
+	}
+	// Replaying the old transport decision must leave the new request parked.
+	_, errs = collect(executor.Execute(t.Context(), approvalDecision(t, first, newStatus, "approval-old")))
+	if len(errs) != 1 || accepted != 1 || executions != 0 || executor.ReservedTaskID() != first.TaskID {
+		t.Fatalf("stale decision errors/accepted/executed = %v/%d/%d", errs, accepted, executions)
+	}
+	events, errs = collect(executor.Execute(t.Context(), approvalDecision(t, first, newStatus, "approval-new")))
+	if len(errs) != 0 || events[len(events)-1].(*a2atype.TaskStatusUpdateEvent).Status.State != a2atype.TaskStateCompleted {
+		t.Fatalf("new decision events/errors = %#v/%v", events, errs)
+	}
+	if starts != 1 || accepted != 2 || executions != 1 {
+		t.Fatalf("starts/accepted/executed = %d/%d/%d", starts, accepted, executions)
+	}
+}
+
 func collect(seq iter.Seq2[a2atype.Event, error]) ([]a2atype.Event, []error) {
 	var events []a2atype.Event
 	var errs []error

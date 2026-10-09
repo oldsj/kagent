@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -88,6 +89,72 @@ func TestAgentsJSON(t *testing.T) {
 	}
 	if !reflect.DeepEqual(parsed.Agents, cfg.Agents) {
 		t.Fatalf("parsed agents = %#v, want %#v", parsed.Agents, cfg.Agents)
+	}
+}
+
+func TestMCPTimeoutRoundTrip(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		timeout   *int64
+		wantError bool
+	}{
+		{name: "absent"},
+		{name: "minimum", timeout: new(int64(1000))},
+		{name: "human wait", timeout: new(int64(100_000_000))},
+		{name: "maximum timer delay", timeout: new(int64(2_147_483_647))},
+		{name: "zero is not disabled", timeout: new(int64(0)), wantError: true},
+		{name: "negative", timeout: new(int64(-1)), wantError: true},
+		{name: "below native minimum", timeout: new(int64(999)), wantError: true},
+		{name: "timer overflow", timeout: new(int64(2_147_483_648)), wantError: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := Production("claude-test", "help")
+			cfg.MCPServers = map[string]MCPServer{"tools": {
+				Type: "http", URL: "https://mcp.example.com/mcp", RequireApproval: true, TimeoutMillis: test.timeout,
+			}}
+			raw, err := json.Marshal(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			parsed, err := Parse(raw)
+			if test.wantError {
+				if err == nil || !strings.Contains(err.Error(), "timeout must be between 1000") {
+					t.Fatalf("Parse() error = %v, want invalid timeout", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			native, err := parsed.MCPConfigJSON()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var projection struct {
+				Servers map[string]json.RawMessage `json:"mcpServers"`
+			}
+			if err := json.Unmarshal(native, &projection); err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(projection.Servers["tools"], &fields); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := fields["require_approval"]; ok {
+				t.Fatal("native JSON contains internal approval policy")
+			}
+			value, present := fields["timeout"]
+			if test.timeout == nil {
+				if present {
+					t.Fatalf("absent timeout serialized as %s", value)
+				}
+			} else {
+				var got int64
+				if !present || json.Unmarshal(value, &got) != nil || got != *test.timeout {
+					t.Fatalf("native timeout = %s, want %d", value, *test.timeout)
+				}
+			}
+		})
 	}
 }
 

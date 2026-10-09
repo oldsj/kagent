@@ -91,7 +91,7 @@ func TestNewMaterializesApprovalSettings(t *testing.T) {
 	cfg := config.Production("claude-test", "help")
 	cfg.StrictVersion = false
 	cfg.MCPServers = map[string]config.MCPServer{
-		"protected": {Type: "http", URL: "https://mcp.example.com/write", RequireApproval: true},
+		"protected": {Type: "http", URL: "https://mcp.example.com/write", RequireApproval: true, TimeoutMillis: new(int64(600_000))},
 		"readonly":  {Type: "http", URL: "https://mcp.example.com/read"},
 	}
 	raw, err := json.Marshal(cfg)
@@ -119,9 +119,10 @@ func TestNewMaterializesApprovalSettings(t *testing.T) {
 	}
 	var materialized struct {
 		Servers map[string]struct {
-			Type    string            `json:"type"`
-			URL     string            `json:"url"`
-			Headers map[string]string `json:"headers"`
+			Type          string            `json:"type"`
+			URL           string            `json:"url"`
+			Headers       map[string]string `json:"headers"`
+			TimeoutMillis *int64            `json:"timeout"`
 		} `json:"mcpServers"`
 	}
 	if err := json.Unmarshal(mcpConfig, &materialized); err != nil {
@@ -135,11 +136,25 @@ func TestNewMaterializesApprovalSettings(t *testing.T) {
 	if len(materialized.Servers) != 3 {
 		t.Fatalf("materialized MCP servers = %#v", materialized.Servers)
 	}
+	if approvalServer.TimeoutMillis == nil || *approvalServer.TimeoutMillis != 100_000_000 {
+		t.Fatalf("private approval timeout = %v, want 100000000 ms", approvalServer.TimeoutMillis)
+	}
+	protected := materialized.Servers["protected"]
+	if protected.TimeoutMillis == nil || *protected.TimeoutMillis != 600_000 {
+		t.Fatalf("protected server timeout = %v, want its configured 600000 ms", protected.TimeoutMillis)
+	}
+	if materialized.Servers["readonly"].TimeoutMillis != nil {
+		t.Fatal("ordinary server without a timeout acquired an override")
+	}
+	if strings.Contains(string(mcpConfig), "require_approval") {
+		t.Fatal("native MCP configuration contains internal approval policy")
+	}
 	args := strings.Join(runner.Args(runtime.Turn{Prompt: "test"}), "\n")
 	for _, required := range []string{
 		"--setting-sources\n\n",
 		"--settings\n" + filepath.Join(ephemeralDir, "settings.json"),
 		"--dangerously-skip-permissions",
+		"--strict-mcp-config",
 		"--permission-prompt-tool\nmcp__" + approvalMCPServerName + "__approve",
 	} {
 		if !strings.Contains(args, required) {
