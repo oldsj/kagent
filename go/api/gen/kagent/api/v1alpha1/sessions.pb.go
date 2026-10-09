@@ -2213,7 +2213,7 @@ const file_kagent_api_v1alpha1_sessions_proto_rawDesc = "" +
 	"\x04page\x18\x02 \x01(\v2!.kagent.api.v1alpha1.PageResponseR\x04page\"@\n" +
 	"\x19RevokeSessionShareRequest\x12#\n" +
 	"\bshare_id\x18\x01 \x01(\tB\b\xbaH\x05r\x03\xb0\x01\x01R\ashareId\"\x1c\n" +
-	"\x1aRevokeSessionShareResponse\"\x8a\a\n" +
+	"\x1aRevokeSessionShareResponse\"\x91\a\n" +
 	"\x1ePrepareSessionWorkspaceRequest\x12'\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tB\b\xbaH\x05r\x03\xb0\x01\x01R\tsessionId\x12;\n" +
@@ -2227,10 +2227,10 @@ const file_kagent_api_v1alpha1_sessions_proto_rawDesc = "" +
 	"\xbaH\ar\x05\x10\x01\x18\x80\x01R\x10preparedRevision\x12D\n" +
 	"\tworkspace\x18\a \x01(\v2\x1e.kagent.api.v1alpha1.WorkspaceB\x06\xbaH\x03\xc8\x01\x01R\tworkspace\x12l\n" +
 	"\x17development_environment\x18\b \x01(\v2+.kagent.api.v1alpha1.DevelopmentEnvironmentB\x06\xbaH\x03\xc8\x01\x01R\x16developmentEnvironment\x12`\n" +
-	"\x13runtime_composition\x18\t \x01(\v2'.kagent.api.v1alpha1.RuntimeCompositionB\x06\xbaH\x03\xc8\x01\x01R\x12runtimeComposition\x12=\n" +
+	"\x13runtime_composition\x18\t \x01(\v2'.kagent.api.v1alpha1.RuntimeCompositionB\x06\xbaH\x03\xc8\x01\x01R\x12runtimeComposition\x12D\n" +
 	"\rsetup_profile\x18\n" +
-	" \x01(\tB\x18\xbaH\x15r\x13R\n" +
-	"supervisorR\x05childR\fsetupProfile\x128\n" +
+	" \x01(\tB\x1f\xbaH\x1cr\x1aR\n" +
+	"supervisorR\x05childR\x05agentR\fsetupProfile\x128\n" +
 	"\fsetup_digest\x18\v \x01(\tB\x15\xbaH\x12r\x102\x0e^[a-f0-9]{64}$R\vsetupDigest:\xa9\x01\xbaH\xa5\x01\x1a\xa2\x01\n" +
 	"\x1apreparation.exact_checkout\x127preparation requires a full commit SHA and named branch\x1aKthis.workspace.ref.matches('^[a-f0-9]{40}$') && this.workspace.branch != ''\"m\n" +
 	"\x1fPrepareSessionWorkspaceResponse\x12J\n" +

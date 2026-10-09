@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestProtovalidateUnaryInterceptor(t *testing.T) {
@@ -206,30 +207,62 @@ func TestSessionCredentialRequestValidation(t *testing.T) {
 }
 
 func TestPreparationRequestIntrinsicValidation(t *testing.T) {
-	base := &apiv1alpha1.PrepareSessionWorkspaceRequest{SessionId: "11111111-1111-4111-8111-111111111111", ActionId: "create:prepare", CreateRequestId: "create", GenerationId: "11111111-1111-4111-8111-111111111111", ActorUid: "owned", PreparedRevision: "original", Workspace: &apiv1alpha1.Workspace{Repo: "https://github.com/owner/repo.git", Ref: strings.Repeat("a", 40), Branch: "feature"}, DevelopmentEnvironment: &apiv1alpha1.DevelopmentEnvironment{Image: "fixture.test/d@sha256:" + strings.Repeat("a", 64), Platform: "linux/amd64", PolicyIdentity: "v1"}, RuntimeComposition: &apiv1alpha1.RuntimeComposition{}, SetupProfile: "child", SetupDigest: strings.Repeat("a", 64)}
-	if err := protovalidate.Validate(base); err != nil {
-		t.Fatal(err)
+	for _, profile := range []string{"supervisor", "child", "agent"} {
+		t.Run(profile, func(t *testing.T) {
+			base := &apiv1alpha1.PrepareSessionWorkspaceRequest{SessionId: "11111111-1111-4111-8111-111111111111", ActionId: "create:prepare", CreateRequestId: "create", GenerationId: "11111111-1111-4111-8111-111111111111", ActorUid: "owned", PreparedRevision: "original", Workspace: &apiv1alpha1.Workspace{Repo: "https://github.com/owner/repo.git", Ref: strings.Repeat("a", 40), Branch: "feature"}, DevelopmentEnvironment: &apiv1alpha1.DevelopmentEnvironment{Image: "fixture.test/d@sha256:" + strings.Repeat("a", 64), Platform: "linux/amd64", PolicyIdentity: "v1"}, RuntimeComposition: &apiv1alpha1.RuntimeComposition{}, SetupProfile: profile, SetupDigest: strings.Repeat("a", 64)}
+			if err := protovalidate.Validate(base); err != nil {
+				t.Fatal(err)
+			}
+			for _, field := range []string{"Session", "action", "generation", "HEAD", "branch", "profile", "empty profile", "digest"} {
+				request := proto.CloneOf(base)
+				switch field {
+				case "Session":
+					request.SessionId = "wrong"
+				case "action":
+					request.ActionId = strings.Repeat("a", 129)
+				case "generation":
+					request.GenerationId = "wrong"
+				case "HEAD":
+					request.Workspace.Ref = "main"
+				case "branch":
+					request.Workspace.Branch = ""
+				case "profile":
+					request.SetupProfile = "arbitrary"
+				case "empty profile":
+					request.SetupProfile = ""
+				case "digest":
+					request.SetupDigest = strings.Repeat("a", 16)
+				}
+				if err := protovalidate.Validate(request); err == nil {
+					t.Errorf("accepted invalid %s", field)
+				}
+			}
+		})
 	}
-	for _, field := range []string{"Session", "action", "generation", "HEAD", "branch", "profile", "digest"} {
-		request := proto.CloneOf(base)
-		switch field {
-		case "Session":
-			request.SessionId = "wrong"
-		case "action":
-			request.ActionId = strings.Repeat("a", 129)
-		case "generation":
-			request.GenerationId = "wrong"
-		case "HEAD":
-			request.Workspace.Ref = "main"
-		case "branch":
-			request.Workspace.Branch = ""
-		case "profile":
-			request.SetupProfile = "arbitrary"
-		case "digest":
-			request.SetupDigest = strings.Repeat("a", 16)
-		}
-		if err := protovalidate.Validate(request); err == nil {
-			t.Errorf("accepted invalid %s", field)
-		}
+}
+
+func TestPreparationAssignmentProfileValidation(t *testing.T) {
+	const id = "11111111-1111-4111-8111-111111111111"
+	for _, test := range []struct {
+		profile string
+		valid   bool
+	}{{"supervisor", true}, {"child", true}, {"agent", true}, {"owner", false}, {"", false}} {
+		t.Run(test.profile, func(t *testing.T) {
+			assignment := &apiv1alpha1.NativeWorkspacePreparation{
+				SessionId: id, ContextId: id, CreateRequestId: "create", ActionId: "create:prepare",
+				RequestDigest: strings.Repeat("a", 64), ExecutionId: id, ChallengeId: id, GenerationId: id,
+				Atespace: "kagent", ActorName: "actor", ActorUid: "owned", PreparedRevision: "original",
+				Workspace:        &apiv1alpha1.Workspace{Repo: "https://github.com/owner/repo.git", Ref: strings.Repeat("a", 40), Branch: "feature"},
+				DevelopmentImage: "fixture.test/d@sha256:" + strings.Repeat("a", 64), Platform: "linux/amd64", PolicyIdentity: "v1",
+				PayloadImage: "fixture.test/r@sha256:" + strings.Repeat("b", 64), Provider: "codex", Schema: 1, CliVersion: "1.0",
+				Profile: test.profile, SetupDigest: strings.Repeat("a", 64), ConfigDigest: strings.Repeat("b", 64), McpDigest: strings.Repeat("c", 64),
+			}
+			callback := &apiv1alpha1.TaskStoreServiceCompleteWorkspacePreparationRequest{SessionId: id, Assignment: assignment, ObservedAt: timestamppb.Now()}
+			for _, message := range []proto.Message{assignment, callback} {
+				if err := protovalidate.Validate(message); (err == nil) != test.valid {
+					t.Errorf("%T valid=%v, error=%v", message, test.valid, err)
+				}
+			}
+		})
 	}
 }

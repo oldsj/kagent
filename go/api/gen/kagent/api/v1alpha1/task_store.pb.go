@@ -1137,7 +1137,7 @@ const file_kagent_api_v1alpha1_task_store_proto_rawDesc = "" +
 	"\tworkspace\x18\x01 \x01(\v2\x1e.kagent.api.v1alpha1.WorkspaceR\tworkspace\x121\n" +
 	"\x14preparation_required\x18\x02 \x01(\bR\x13preparationRequired\x12+\n" +
 	"\x11preparation_ready\x18\x03 \x01(\bR\x10preparationReady\x12Q\n" +
-	"\vpreparation\x18\x04 \x01(\v2/.kagent.api.v1alpha1.NativeWorkspacePreparationR\vpreparation\"\xcc\t\n" +
+	"\vpreparation\x18\x04 \x01(\v2/.kagent.api.v1alpha1.NativeWorkspacePreparationR\vpreparation\"\xd3\t\n" +
 	"\x1aNativeWorkspacePreparation\x12'\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tB\b\xbaH\x05r\x03\xb0\x01\x01R\tsessionId\x12'\n" +
@@ -1176,9 +1176,9 @@ const file_kagent_api_v1alpha1_task_store_proto_rawDesc = "" +
 	"\x06schema\x18\x14 \x01(\rR\x06schema\x12+\n" +
 	"\vcli_version\x18\x15 \x01(\tB\n" +
 	"\xbaH\ar\x05\x10\x01\x18\x80\x01R\n" +
-	"cliVersion\x122\n" +
-	"\aprofile\x18\x16 \x01(\tB\x18\xbaH\x15r\x13R\n" +
-	"supervisorR\x05childR\aprofile\x128\n" +
+	"cliVersion\x129\n" +
+	"\aprofile\x18\x16 \x01(\tB\x1f\xbaH\x1cr\x1aR\n" +
+	"supervisorR\x05childR\x05agentR\aprofile\x128\n" +
 	"\fsetup_digest\x18\x17 \x01(\tB\x15\xbaH\x12r\x102\x0e^[a-f0-9]{64}$R\vsetupDigest\x12:\n" +
 	"\rconfig_digest\x18\x18 \x01(\tB\x15\xbaH\x12r\x102\x0e^[a-f0-9]{64}$R\fconfigDigest\x124\n" +
 	"\n" +
