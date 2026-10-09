@@ -51,34 +51,43 @@ func TestNativePreparationServiceRequiresExactServicePrincipal(t *testing.T) {
 }
 
 func TestNativePreparationServiceRejectsIntrinsicAndForeignInputs(t *testing.T) {
-	policy, err := controlauth.New(controlauth.Config{Namespace: "kagent", Agents: []string{"mainloop-main"}})
-	require.NoError(t, err)
-	for _, name := range []string{"unknown", "oversize", "setup", "creator", "Agent", "namespace", "share"} {
-		t.Run(name, func(t *testing.T) {
-			input := nativeServiceInput(t)
-			session := &api.Session{Id: input.SessionId, Creator: "mainloop", Agent: &api.ResourceReference{Namespace: "kagent", Name: "mainloop-main"}, Workspace: input.Workspace, DevelopmentEnvironment: input.DevelopmentEnvironment}
-			store := &nativeTestStore{serviceTestStore: &serviceTestStore{getResult: session}}
-			service := NewService(store, policy, serviceTestWorkflow{})
-			ctx := auth.AuthSessionTo(t.Context(), mainloopSession{})
-			switch name {
-			case "unknown":
-				input.ProtoReflect().SetUnknown([]byte{0xf8, 0x07, 0x01})
-			case "oversize":
-				input.RuntimeComposition.CliVersion = strings.Repeat("x", 8193)
-			case "setup":
-				input.SetupDigest = strings.Repeat("0", 64)
-			case "creator":
-				session.Creator = "other"
-			case "Agent":
-				session.Agent.Name = "other"
-			case "namespace":
-				session.Agent.Namespace = "other"
-			case "share":
-				ctx = auth.ShareContextTo(ctx, &auth.ShareContext{SessionID: session.Id, UserID: "mainloop", ReadOnly: false})
+	for _, profile := range []string{"supervisor", "child", "agent"} {
+		t.Run(profile, func(t *testing.T) {
+			policy, err := controlauth.New(controlauth.Config{Namespace: "kagent", Agents: []string{"mainloop-main"}})
+			require.NoError(t, err)
+			for _, name := range []string{"unknown", "oversize", "setup", "profile", "creator", "Agent", "namespace", "share"} {
+				t.Run(name, func(t *testing.T) {
+					input := nativeServiceInput(t)
+					input.SetupProfile = profile
+					input.SetupDigest, err = workspace.SetupDigest(profile)
+					require.NoError(t, err)
+					session := &api.Session{Id: input.SessionId, Creator: "mainloop", Agent: &api.ResourceReference{Namespace: "kagent", Name: "mainloop-main"}, Workspace: input.Workspace, DevelopmentEnvironment: input.DevelopmentEnvironment}
+					store := &nativeTestStore{serviceTestStore: &serviceTestStore{getResult: session}}
+					service := NewService(store, policy, serviceTestWorkflow{})
+					ctx := auth.AuthSessionTo(t.Context(), mainloopSession{})
+					switch name {
+					case "unknown":
+						input.ProtoReflect().SetUnknown([]byte{0xf8, 0x07, 0x01})
+					case "oversize":
+						input.RuntimeComposition.CliVersion = strings.Repeat("x", 8193)
+					case "setup":
+						input.SetupDigest = strings.Repeat("0", 64)
+					case "profile":
+						input.SetupProfile = "owner"
+					case "creator":
+						session.Creator = "other"
+					case "Agent":
+						session.Agent.Name = "other"
+					case "namespace":
+						session.Agent.Namespace = "other"
+					case "share":
+						ctx = auth.ShareContextTo(ctx, &auth.ShareContext{SessionID: session.Id, UserID: "mainloop", ReadOnly: false})
+					}
+					_, err := service.PrepareWorkspace(ctx, input)
+					require.Error(t, err)
+					require.Zero(t, store.prepares)
+				})
 			}
-			_, err := service.PrepareWorkspace(ctx, input)
-			require.Error(t, err)
-			require.Zero(t, store.prepares)
 		})
 	}
 }

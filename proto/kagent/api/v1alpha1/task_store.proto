@@ -134,7 +134,7 @@ message NativeWorkspacePreparation {
   string provider = 19 [(buf.validate.field).string = {min_len: 1, max_len: 128}];
   uint32 schema = 20 ;
   string cli_version = 21 [(buf.validate.field).string = {min_len: 1, max_len: 128}];
-  string profile = 22 [(buf.validate.field).string.in = "supervisor", (buf.validate.field).string.in = "child"];
+  string profile = 22 [(buf.validate.field).string.in = "supervisor", (buf.validate.field).string.in = "child", (buf.validate.field).string.in = "agent"];
   string setup_digest = 23 [(buf.validate.field).string.pattern = "^[a-f0-9]{64}$"];
   string config_digest = 24 [(buf.validate.field).string.pattern = "^[a-f0-9]{64}$"];
   string mcp_digest = 25 [(buf.validate.field).string.pattern = "^[a-f0-9]{64}$"];

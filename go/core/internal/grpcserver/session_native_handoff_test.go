@@ -137,24 +137,30 @@ func nativeGit(t *testing.T) (string, []string) {
 
 func TestNativePreparationInstalledGRPCPostgres(t *testing.T) {
 	for _, provider := range []string{"claude", "codex"} {
-		t.Run(provider, func(t *testing.T) { nativePreparationInstalled(t, provider, "ordinary") })
+		t.Run(provider, func(t *testing.T) { nativePreparationInstalled(t, provider, "ordinary", "child") })
+	}
+}
+
+func TestNativePreparationOwnerWorkspaceGRPCPostgres(t *testing.T) {
+	for _, provider := range []string{"claude", "codex"} {
+		t.Run(provider, func(t *testing.T) { nativePreparationInstalled(t, provider, "lifecycle", "agent") })
 	}
 }
 
 func TestNativePreparationLifecycleContinuationPostgres(t *testing.T) {
 	for _, provider := range []string{"claude", "codex"} {
-		t.Run(provider, func(t *testing.T) { nativePreparationInstalled(t, provider, "lifecycle") })
+		t.Run(provider, func(t *testing.T) { nativePreparationInstalled(t, provider, "lifecycle", "child") })
 	}
 }
 
 func TestNativePreparationClaudeDurableRestartPostgres(t *testing.T) {
 	for _, scenario := range []string{"restart", "restart-protected"} {
-		t.Run(scenario, func(t *testing.T) { nativePreparationInstalled(t, "claude", scenario) })
+		t.Run(scenario, func(t *testing.T) { nativePreparationInstalled(t, "claude", scenario, "child") })
 	}
 }
 
 func TestNativePreparationClaudeProtectedMCPPostgres(t *testing.T) {
-	nativePreparationInstalled(t, "claude", "protected")
+	nativePreparationInstalled(t, "claude", "protected", "child")
 }
 
 // The first callback is committed but its reply is lost. A fresh executor must
@@ -189,7 +195,7 @@ func (c capturedPreparationReply) CompleteWorkspacePreparation(ctx context.Conte
 	return err
 }
 
-func nativePreparationInstalled(t *testing.T, provider, scenario string) {
+func nativePreparationInstalled(t *testing.T, provider, scenario, profile string) {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("real PostgreSQL integration")
@@ -289,9 +295,9 @@ func nativePreparationInstalled(t *testing.T, provider, scenario string) {
 	require.NoError(t, err)
 	association := original.Session.RuntimeAssociation
 	require.NotNil(t, association)
-	setup, err := workspace.SetupDigest("child")
+	setup, err := workspace.SetupDigest(profile)
 	require.NoError(t, err)
-	input := &api.PrepareSessionWorkspaceRequest{SessionId: created.Session.Id, ActionId: "native-create:prepare", CreateRequestId: creation.RequestId, GenerationId: association.GenerationId, ActorUid: association.ActorUid, PreparedRevision: original.Session.PreparedRevision, Workspace: proto.CloneOf(original.Session.Workspace), DevelopmentEnvironment: proto.CloneOf(environment), RuntimeComposition: proto.CloneOf(composition), SetupProfile: "child", SetupDigest: setup}
+	input := &api.PrepareSessionWorkspaceRequest{SessionId: created.Session.Id, ActionId: "native-create:prepare", CreateRequestId: creation.RequestId, GenerationId: association.GenerationId, ActorUid: association.ActorUid, PreparedRevision: original.Session.PreparedRevision, Workspace: proto.CloneOf(original.Session.Workspace), DevelopmentEnvironment: proto.CloneOf(environment), RuntimeComposition: proto.CloneOf(composition), SetupProfile: profile, SetupDigest: setup}
 	assigned, err := client.PrepareSessionWorkspace(owner, input)
 	require.NoError(t, err)
 	require.Equal(t, "pending", assigned.Receipt.Classification)
@@ -356,6 +362,12 @@ func nativePreparationInstalled(t *testing.T, provider, scenario string) {
 		completed = r.Session
 		return completed.GetWorkspacePreparation().GetClassification() == "confirmed" || completed.GetWorkspacePreparation().GetClassification() == "definite-failure"
 	}, 15*time.Second, 20*time.Millisecond)
+	require.Equal(t, created.Session.Id, completed.Id)
+	require.Equal(t, created.Session.ContextId, completed.ContextId)
+	require.Equal(t, original.Session.PreparedRevision, completed.PreparedRevision)
+	require.True(t, proto.Equal(environment, completed.DevelopmentEnvironment))
+	require.True(t, proto.Equal(composition, completed.RuntimeComposition))
+	require.True(t, proto.Equal(input, completed.WorkspacePreparation.Original))
 	require.Equal(t, "confirmed", completed.WorkspacePreparation.Classification)
 	require.Equal(t, sha, completed.WorkspacePreparation.Head)
 	require.NotNil(t, completed.WorkspacePreparation.EffectObservedAt)

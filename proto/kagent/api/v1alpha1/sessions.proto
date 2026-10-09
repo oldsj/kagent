@@ -285,7 +285,7 @@ message PrepareSessionWorkspaceRequest {
   Workspace workspace = 7 [(buf.validate.field).required = true];
   DevelopmentEnvironment development_environment = 8 [(buf.validate.field).required = true];
   RuntimeComposition runtime_composition = 9 [(buf.validate.field).required = true];
-  string setup_profile = 10 [(buf.validate.field).string.in = "supervisor", (buf.validate.field).string.in = "child"];
+  string setup_profile = 10 [(buf.validate.field).string.in = "supervisor", (buf.validate.field).string.in = "child", (buf.validate.field).string.in = "agent"];
   string setup_digest = 11 [(buf.validate.field).string = {pattern: "^[a-f0-9]{64}$"}];
   option (buf.validate.message).cel = {
     id: "preparation.exact_checkout"
