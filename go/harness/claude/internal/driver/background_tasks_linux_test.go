@@ -5,7 +5,9 @@ package driver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,7 +47,7 @@ func TestBackgroundTaskHoldsPostResultGrace(t *testing.T) {
 			// The follow-up iteration outlasts the remaining grace. It still owes
 			// the task's outcome, so the grace stays held until its result.
 			name:     "follow-up iteration outlasts grace",
-			script:   backgroundFirstIteration + "sleep 0.4\nsed -n 9,11p \"$STREAM\"\nsleep 0.5\ntail -n 1 \"$STREAM\"\n",
+			script:   backgroundFirstIteration + "sleep 0.4\nsed -n 9,12p \"$STREAM\"\nsleep 0.5\ntail -n 1 \"$STREAM\"\n",
 			wantText: "waiting for checks checks passed", minElapsed: 900 * time.Millisecond,
 		},
 		{
@@ -85,7 +87,7 @@ func TestExitWithLiveBackgroundTaskReportsA2AFailure(t *testing.T) {
 	message := a2atype.NewMessage(a2atype.MessageRoleUser, a2atype.NewTextPart("run checks"))
 	message.TaskID, message.ContextID = "background-lost", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 	req := &a2asrv.ExecutorContext{TaskID: message.TaskID, ContextID: message.ContextID, Message: message}
-	want := "Claude stopped 1 background task before reporting its result"
+	want := "Claude ended the turn before reporting the outcome of 1 background task"
 	var terminal int
 	for event, err := range executor.Execute(t.Context(), req) {
 		if err != nil {
@@ -103,27 +105,60 @@ func TestExitWithLiveBackgroundTaskReportsA2AFailure(t *testing.T) {
 	}
 }
 
-// TestPrintModeWindDownReportsLostTask replays Claude 2.1.260's print-mode
-// wind-down: it kills a background shell after the result and exits 0 without
-// another iteration. The turn must fail rather than report the stale result.
-func TestPrintModeWindDownReportsLostTask(t *testing.T) {
-	path, err := filepath.Abs("../../testdata/stream-background-wind-down.jsonl")
+// TestUnreportedBackgroundTaskFailsTurn replays Claude 2.1.260 captures in
+// which Claude kills a background task and exits without reporting it: the
+// print-mode wind-down kills a shell after the result, and the wait ceiling
+// kills an agent and then flushes the result it held. Both must fail rather
+// than report the stale result as success.
+func TestUnreportedBackgroundTaskFailsTurn(t *testing.T) {
+	for _, test := range []struct {
+		name, fixture string
+		// split is the last line Claude writes before the kill.
+		split int
+	}{
+		{name: "shell wind-down", fixture: "stream-background-wind-down.jsonl", split: 9},
+		{name: "agent wait ceiling", fixture: "stream-background-agent-ceiling.jsonl", split: 8},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path, err := filepath.Abs("../../testdata/" + test.fixture)
+			if err != nil {
+				t.Fatal(err)
+			}
+			script := fmt.Sprintf("head -n %d \"$STREAM\"\nsleep 0.3\ntail -n +%d \"$STREAM\"\n", test.split, test.split+1)
+			driver := scriptedDriver(t, script, "STREAM="+path)
+			driver.config.PostResultGrace = 100 * time.Millisecond
+			driver.config.TurnTimeout = 10 * time.Second
+			outcome, err := driver.Run(t.Context(), runtime.Turn{Prompt: "run checks"}, &recordingSink{})
+			if err != nil || outcome.Pending != nil {
+				t.Fatalf("Run = %#v, %v", outcome, err)
+			}
+			if want := "Claude ended the turn before reporting the outcome of 1 background task"; outcome.Failure == nil || outcome.Failure.Message != want {
+				t.Fatalf("outcome = %#v, want failure %q", outcome, want)
+			}
+		})
+	}
+}
+
+// TestTaskEndingDuringFinalModelCallHoldsGrace replays a Claude 2.1.260 capture
+// in which a background task ends while the final model call is in flight.
+// That call's result does not report the task, so the grace must stay held
+// until the follow-up iteration's result, even when the follow-up is slow.
+func TestTaskEndingDuringFinalModelCallHoldsGrace(t *testing.T) {
+	path, err := filepath.Abs("../../testdata/stream-background-mid-call.jsonl")
 	if err != nil {
 		t.Fatal(err)
 	}
-	script := `head -n 7 "$STREAM"
-sleep 0.3
-tail -n +8 "$STREAM"
-`
+	script := "head -n 12 \"$STREAM\"\nsleep 0.5\ntail -n +13 \"$STREAM\"\n"
 	driver := scriptedDriver(t, script, "STREAM="+path)
-	driver.config.PostResultGrace = 100 * time.Millisecond
+	driver.config.PostResultGrace = 200 * time.Millisecond
 	driver.config.TurnTimeout = 10 * time.Second
-	outcome, err := driver.Run(t.Context(), runtime.Turn{Prompt: "run checks"}, &recordingSink{})
-	if err != nil || outcome.Pending != nil {
+	sink := &recordingSink{}
+	outcome, err := driver.Run(t.Context(), runtime.Turn{Prompt: "run checks"}, sink)
+	if err != nil || outcome.Failure != nil || outcome.Pending != nil {
 		t.Fatalf("Run = %#v, %v", outcome, err)
 	}
-	if want := "Claude stopped 1 background task before reporting its result"; outcome.Failure == nil || outcome.Failure.Message != want {
-		t.Fatalf("outcome = %#v, want failure %q", outcome, want)
+	if !strings.HasSuffix(sink.text.String(), "follow-up after notification") {
+		t.Fatalf("text = %q, want the follow-up iteration", sink.text.String())
 	}
 }
 
@@ -148,16 +183,13 @@ while [ ! -s "$ACTIVITY" ]; do sleep 0.01; done
 }
 
 func TestApprovalResumeKeepsGraceHeldForLiveTasks(t *testing.T) {
-	session := &processSession{backgroundTasks: BackgroundTasks{Live: 1}, postResultBudget: newActiveBudget(time.Hour)}
-	for _, owed := range []BackgroundTasks{{Live: 1}, {Unreported: 1}} {
-		session.backgroundTasks = owed
-		session.holdPostResultGrace(true)
-		session.holdPostResultGrace(false)
-		if session.postResultBudget.done() != nil {
-			t.Fatalf("approval decision restarted grace while background work %+v is owed", owed)
-		}
+	session := &processSession{backgroundTasks: 1, postResultBudget: newActiveBudget(time.Hour)}
+	session.holdPostResultGrace(true)
+	session.holdPostResultGrace(false)
+	if session.postResultBudget.done() != nil {
+		t.Fatal("approval decision restarted grace while a background task is unreported")
 	}
-	session.backgroundTasks = BackgroundTasks{}
+	session.backgroundTasks = 0
 	session.holdPostResultGrace(false)
 	if session.postResultBudget.done() == nil {
 		t.Fatal("grace did not resume after the last background outcome was reported")

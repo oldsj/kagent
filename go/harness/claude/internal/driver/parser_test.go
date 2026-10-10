@@ -201,51 +201,60 @@ func TestParseJSONLErrors(t *testing.T) {
 	}
 }
 
-func TestParseJSONLTracksLiveBackgroundTasks(t *testing.T) {
-	fixture, err := os.ReadFile("../../testdata/stream-background-task.jsonl")
-	if err != nil {
-		t.Fatal(err)
+func TestParseJSONLTracksUnreportedBackgroundTasks(t *testing.T) {
+	fixture := func(name string) string {
+		data, err := os.ReadFile("../../testdata/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
 	}
 	const (
 		startedBackground = `{"type":"system","subtype":"task_started","task_id":"bash-1","task_type":"local_bash","is_backgrounded":true}`
 		startedLegacy     = `{"type":"system","subtype":"task_started","task_id":"bash-2","task_type":"local_bash"}`
 		startedForeground = `{"type":"system","subtype":"task_started","task_id":"agent-1","task_type":"local_agent","is_backgrounded":false}`
+		completed         = `{"type":"system","subtype":"task_updated","task_id":"bash-1","patch":{"status":"completed"}}`
+		requesting        = `{"type":"system","subtype":"status","status":"requesting"}`
 		result            = `{"type":"result","subtype":"success"}`
 	)
-	windDown, err := os.ReadFile("../../testdata/stream-background-wind-down.jsonl")
-	if err != nil {
-		t.Fatal(err)
-	}
-	live := func(n int) BackgroundTasks { return BackgroundTasks{Live: n} }
-	var none BackgroundTasks
+	lines := func(events ...string) string { return strings.Join(events, "\n") + "\n" }
 	for _, test := range []struct {
-		name    string
-		input   string
-		fixture bool
-		want    []BackgroundTasks
+		name  string
+		input string
+		// reported appends a model request and its result, which report every
+		// task that ended before them.
+		reported bool
+		want     []int
 	}{
-		{name: "fixture", input: string(fixture), fixture: true, want: []BackgroundTasks{live(1), {Unreported: 1}, none}},
-		// Claude 2.1.260 kills a background shell five seconds after the
-		// result once input has ended, then exits without another result.
-		{name: "print-mode wind-down", input: string(windDown), fixture: true, want: []BackgroundTasks{live(1), {Unreported: 1}, {Unreported: 1, Stopped: 1}}},
-		{name: "unset backgrounding counts", input: startedLegacy + "\n" + `{"type":"system","subtype":"task_notification","task_id":"bash-2","status":"stopped"}`, want: []BackgroundTasks{live(1), {Unreported: 1, Stopped: 1}, none}},
-		{name: "foreground moved to background", input: startedForeground + "\n" + `{"type":"system","subtype":"task_updated","task_id":"agent-1","patch":{"is_backgrounded":true}}` + "\n" + `{"type":"system","subtype":"task_updated","task_id":"agent-1","patch":{"status":"killed"}}`, want: []BackgroundTasks{live(1), {Unreported: 1, Stopped: 1}, none}},
+		{name: "follow-up reports task", input: fixture("stream-background-task.jsonl"), want: []int{1, 0}},
+		// Claude 2.1.260 captures. Wind-down kills a shell after the result; the
+		// wait ceiling kills an agent and then flushes the held result.
+		{name: "2.1.260 shell wind-down", input: fixture("stream-background-wind-down.jsonl"), want: []int{1}},
+		{name: "2.1.260 agent ceiling", input: fixture("stream-background-agent-ceiling.jsonl"), want: []int{1}},
+		// The task ends during the final model call, so the first result does
+		// not report it; the follow-up iteration's request and result do.
+		{name: "2.1.260 end during model call", input: fixture("stream-background-mid-call.jsonl"), want: []int{1, 0}},
+		{name: "result without a later request keeps task", input: lines(startedBackground, completed, result), want: []int{1}},
+		{name: "subagent request does not report", input: lines(startedBackground, completed, `{"type":"system","subtype":"status","status":"requesting","parent_tool_use_id":"tool-9"}`, result), want: []int{1}},
+		{name: "model stops its own task", input: lines(startedBackground, `{"type":"system","subtype":"task_updated","task_id":"bash-1","patch":{"status":"killed"}}`, requesting, result), want: []int{1, 0}},
+		{name: "running task survives request and result", input: lines(startedBackground, `{"type":"system","subtype":"task_updated","task_id":"bash-1","patch":{"status":"running"}}`), reported: true, want: []int{1}},
+		{name: "unset backgrounding counts", input: lines(startedLegacy, `{"type":"system","subtype":"task_notification","task_id":"bash-2","status":"stopped"}`), reported: true, want: []int{1, 0}},
+		{name: "foreground moved to background", input: lines(startedForeground, `{"type":"system","subtype":"task_updated","task_id":"agent-1","patch":{"is_backgrounded":true}}`, `{"type":"system","subtype":"task_updated","task_id":"agent-1","patch":{"status":"killed"}}`), reported: true, want: []int{1, 0}},
 		// With CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1, subagents run in the
 		// foreground and their bookends never reach the background state.
-		{name: "foreground subagent ignored", input: startedForeground + "\n" + `{"type":"system","subtype":"task_notification","task_id":"agent-1","status":"completed"}`, want: nil},
-		{name: "in-process teammates excluded", input: `{"type":"system","subtype":"task_started","task_id":"mate-1","task_type":"in_process_teammate"}`, want: nil},
-		{name: "ambient monitors excluded", input: `{"type":"system","subtype":"task_started","task_id":"ws-1","task_type":"monitor_ws","is_backgrounded":true,"ambient":true}` + "\n" + `{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"ws-1","task_type":"monitor_ws","ambient":true}]}` + "\n" + `{"type":"system","subtype":"task_updated","task_id":"ws-1","patch":{"status":"killed"}}`, want: nil},
-		{name: "monitor turning ambient is dropped", input: `{"type":"system","subtype":"task_started","task_id":"ws-1","task_type":"monitor_ws","is_backgrounded":true}` + "\n" + `{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"ws-1","task_type":"monitor_ws","ambient":true}]}` + "\n" + `{"type":"system","subtype":"task_updated","task_id":"ws-1","patch":{"status":"killed"}}`, want: []BackgroundTasks{live(1), none}},
-		{name: "replace set", input: startedBackground + "\n" + `{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"bash-1","task_type":"local_bash"},{"task_id":"monitor-1","task_type":"monitor"},{"task_id":"mate-1","task_type":"in_process_teammate"}]}` + "\n" + `{"type":"system","subtype":"background_tasks_changed","tasks":[]}`, want: []BackgroundTasks{live(1), live(2), {Unreported: 2}, none}},
-		{name: "running update keeps task", input: startedBackground + "\n" + `{"type":"system","subtype":"task_updated","task_id":"bash-1","patch":{"status":"running"}}`, want: []BackgroundTasks{live(1)}},
-		{name: "reported task ignores late bookends", input: startedBackground + "\n" + `{"type":"system","subtype":"task_updated","task_id":"bash-1","patch":{"status":"completed"}}` + "\n" + result + "\n" + `{"type":"system","subtype":"task_notification","task_id":"bash-1","status":"stopped"}`, want: []BackgroundTasks{live(1), {Unreported: 1}, none}},
+		{name: "foreground subagent ignored", input: lines(startedForeground, `{"type":"system","subtype":"task_notification","task_id":"agent-1","status":"completed"}`), reported: true, want: nil},
+		{name: "in-process teammates excluded", input: lines(`{"type":"system","subtype":"task_started","task_id":"mate-1","task_type":"in_process_teammate"}`), reported: true, want: nil},
+		{name: "ambient monitors excluded", input: lines(`{"type":"system","subtype":"task_started","task_id":"ws-1","task_type":"monitor_ws","is_backgrounded":true,"ambient":true}`, `{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"ws-1","task_type":"monitor_ws","ambient":true}]}`, `{"type":"system","subtype":"task_updated","task_id":"ws-1","patch":{"status":"killed"}}`), reported: true, want: nil},
+		{name: "monitor turning ambient is dropped", input: lines(`{"type":"system","subtype":"task_started","task_id":"ws-1","task_type":"monitor_ws","is_backgrounded":true}`, `{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"ws-1","task_type":"monitor_ws","ambient":true}]}`, `{"type":"system","subtype":"task_updated","task_id":"ws-1","patch":{"status":"killed"}}`), reported: true, want: []int{1, 0}},
+		{name: "replace set", input: lines(startedBackground, `{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"bash-1","task_type":"local_bash"},{"task_id":"monitor-1","task_type":"monitor"},{"task_id":"mate-1","task_type":"in_process_teammate"}]}`, `{"type":"system","subtype":"background_tasks_changed","tasks":[]}`), reported: true, want: []int{1, 2, 0}},
+		{name: "reported task ignores late bookends", input: lines(startedBackground, completed, requesting, result, `{"type":"system","subtype":"task_notification","task_id":"bash-1","status":"stopped"}`), reported: true, want: []int{1, 0}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			input := test.input
-			if !test.fixture {
-				input += "\n" + result + "\n"
+			if test.reported {
+				input += lines(requesting, result)
 			}
-			var counts []BackgroundTasks
+			var counts []int
 			if err := ParseJSONL(strings.NewReader(input), 4096, func(event Event) error {
 				if event.Kind == EventBackgroundTasks {
 					counts = append(counts, event.BackgroundTasks)
@@ -255,7 +264,7 @@ func TestParseJSONLTracksLiveBackgroundTasks(t *testing.T) {
 				t.Fatal(err)
 			}
 			if !slices.Equal(counts, test.want) {
-				t.Fatalf("background task states = %+v, want %+v", counts, test.want)
+				t.Fatalf("unreported background task counts = %v, want %v", counts, test.want)
 			}
 		})
 	}

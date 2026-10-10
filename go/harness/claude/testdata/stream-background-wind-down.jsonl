@@ -1,10 +1,12 @@
 {"type":"system","subtype":"init","session_id":"22222222-2222-4222-8222-222222222222"}
-{"type":"assistant","message":{"id":"msg_start","content":[{"type":"tool_use","id":"tool-1","name":"Bash","input":{"command":"make check","description":"background check","run_in_background":true}}]},"session_id":"22222222-2222-4222-8222-222222222222"}
-{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"bash-1","task_type":"local_bash","description":"background check"}],"session_id":"22222222-2222-4222-8222-222222222222"}
-{"type":"system","subtype":"task_started","task_id":"bash-1","tool_use_id":"tool-1","description":"background check","is_backgrounded":true,"task_type":"local_bash","session_id":"22222222-2222-4222-8222-222222222222"}
-{"type":"user","message":{"role":"user","content":[{"tool_use_id":"tool-1","type":"tool_result","content":"Command running in background with ID: bash-1. You will be notified when it completes."}]},"session_id":"22222222-2222-4222-8222-222222222222"}
-{"type":"assistant","message":{"id":"msg_wait","content":[{"type":"text","text":"waiting for checks"}]},"session_id":"22222222-2222-4222-8222-222222222222"}
-{"stop_reason":"end_turn","subtype":"success","is_error":false,"result":"waiting for checks","type":"result","session_id":"22222222-2222-4222-8222-222222222222"}
+{"type":"system","subtype":"status","status":"requesting","session_id":"22222222-2222-4222-8222-222222222222"}
+{"type":"assistant","message":{"id":"msg-1","role":"assistant","content":[{"type":"tool_use","id":"tool-1","name":"Bash","input":{"command":"sleep 40; echo bg-done","description":"background check","run_in_background":true}}]},"session_id":"22222222-2222-4222-8222-222222222222"}
+{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"task-1","task_type":"local_bash","description":"background check"}],"session_id":"22222222-2222-4222-8222-222222222222"}
+{"type":"system","subtype":"task_started","task_id":"task-1","tool_use_id":"tool-1","description":"background check","task_type":"local_bash","is_backgrounded":true,"session_id":"22222222-2222-4222-8222-222222222222"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-1","content":"background task launched"}]},"session_id":"22222222-2222-4222-8222-222222222222"}
+{"type":"system","subtype":"status","status":"requesting","session_id":"22222222-2222-4222-8222-222222222222"}
+{"type":"assistant","message":{"id":"msg-2","role":"assistant","content":[{"type":"text","text":"waiting for checks"}]},"session_id":"22222222-2222-4222-8222-222222222222"}
+{"type":"result","subtype":"success","is_error":false,"result":"waiting for checks","session_id":"22222222-2222-4222-8222-222222222222"}
 {"type":"system","subtype":"background_tasks_changed","tasks":[],"session_id":"22222222-2222-4222-8222-222222222222"}
-{"type":"system","subtype":"task_updated","task_id":"bash-1","patch":{"status":"killed","end_time":1791668480615},"session_id":"22222222-2222-4222-8222-222222222222"}
-{"type":"system","subtype":"task_notification","task_id":"bash-1","tool_use_id":"tool-1","status":"stopped","output_file":"","summary":"background check","session_id":"22222222-2222-4222-8222-222222222222"}
+{"type":"system","subtype":"task_updated","task_id":"task-1","patch":{"status":"killed"},"session_id":"22222222-2222-4222-8222-222222222222"}
+{"type":"system","subtype":"task_notification","status":"stopped","task_id":"task-1","tool_use_id":"tool-1","session_id":"22222222-2222-4222-8222-222222222222"}

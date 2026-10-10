@@ -19,13 +19,21 @@ type parser struct {
 	emittedToolCalls map[string]struct{}
 	emittedResults   map[string]struct{}
 	terminal         bool
-	// liveTasks holds the IDs of background tasks Claude reports as running.
-	liveTasks map[string]struct{}
-	// endedTasks holds background tasks that ended after the latest result,
-	// mapped to whether Claude killed or stopped them. The next result reports
-	// their outcome to the model and clears the set.
-	endedTasks map[string]bool
+	// backgroundTasks holds the background tasks Claude has not yet reported
+	// to the conversation, by ID.
+	backgroundTasks map[string]taskPhase
 }
+
+// taskPhase is how far a background task is from being reported. A task is
+// reported once a main-loop model request starts after it ends, which gives
+// the model its outcome, and that request's iteration produces a result.
+type taskPhase int
+
+const (
+	taskRunning taskPhase = iota
+	taskEnded
+	taskSeen
+)
 
 type contentBlockRef struct {
 	messageID string
@@ -41,7 +49,7 @@ func ParseJSONL(r io.Reader, maxEventBytes int, emit func(Event) error) error {
 	p := parser{
 		emitted: map[string]string{}, tools: map[string]string{},
 		emittedToolCalls: map[string]struct{}{}, emittedResults: map[string]struct{}{},
-		liveTasks: map[string]struct{}{}, endedTasks: map[string]bool{},
+		backgroundTasks: map[string]taskPhase{},
 	}
 	reader := bufio.NewReaderSize(r, min(maxEventBytes+1, 64*1024))
 	for {
@@ -120,8 +128,13 @@ func (p *parser) parseLine(line []byte, emit func(Event) error) error {
 		if err != nil {
 			return err
 		}
-		// This iteration saw every task that ended before its result.
-		return p.updateBackgroundTasks(emit, func() { clear(p.endedTasks) })
+		return p.updateBackgroundTasks(emit, func() {
+			for id, phase := range p.backgroundTasks {
+				if phase == taskSeen {
+					delete(p.backgroundTasks, id)
+				}
+			}
+		})
 	}
 	return nil
 }
@@ -131,19 +144,23 @@ func (p *parser) parseLine(line []byte, emit func(Event) error) error {
 const inProcessTeammate = "in_process_teammate"
 
 // parseBackgroundTask tracks Claude's background tasks from its task lifecycle
-// events and emits their state whenever it changes. A task is live from
+// events and emits the unreported count whenever it changes. A task runs from
 // task_started until task_notification or a terminal task_updated;
-// background_tasks_changed replaces the live set. Tasks registered in the
-// foreground block their tool call and end before that iteration's result.
+// background_tasks_changed replaces the running set. How a task ended does not
+// matter: completed, failed, killed, and stopped tasks all need the model to see
+// the outcome before a result. A main-loop "requesting" status marks a new
+// model request; background subagents' requests do not produce one. Tasks
+// registered in the foreground block their tool call and are not tracked.
 // Ambient monitors are excluded, as Claude does not wait for them either.
 func (p *parser) parseBackgroundTask(subtype string, line []byte, emit func(Event) error) error {
 	var task struct {
-		TaskID         string `json:"task_id"`
-		TaskType       string `json:"task_type"`
-		Status         string `json:"status"`
-		Ambient        bool   `json:"ambient"`
-		IsBackgrounded *bool  `json:"is_backgrounded"`
-		Patch          struct {
+		TaskID          string `json:"task_id"`
+		TaskType        string `json:"task_type"`
+		Status          string `json:"status"`
+		ParentToolUseID string `json:"parent_tool_use_id"`
+		Ambient         bool   `json:"ambient"`
+		IsBackgrounded  *bool  `json:"is_backgrounded"`
+		Patch           struct {
 			Status         string `json:"status"`
 			IsBackgrounded *bool  `json:"is_backgrounded"`
 		} `json:"patch"`
@@ -155,97 +172,100 @@ func (p *parser) parseBackgroundTask(subtype string, line []byte, emit func(Even
 	}
 	switch subtype {
 	case "task_started", "task_updated", "task_notification", "background_tasks_changed":
+	case "status":
+		// Skip decoding on turns with no background tasks.
+		if len(p.backgroundTasks) == 0 {
+			return nil
+		}
 	default:
 		return nil
 	}
 	if err := json.Unmarshal(line, &task); err != nil {
 		return fmt.Errorf("decode Claude %s event: %w", subtype, err)
 	}
-	if subtype != "background_tasks_changed" && task.TaskID == "" {
+	if subtype != "background_tasks_changed" && subtype != "status" && task.TaskID == "" {
 		return fmt.Errorf("claude %s event requires a task_id", subtype)
 	}
 	return p.updateBackgroundTasks(emit, func() {
 		switch subtype {
+		case "status":
+			if task.Status != "requesting" || task.ParentToolUseID != "" {
+				return
+			}
+			for id, phase := range p.backgroundTasks {
+				if phase == taskEnded {
+					p.backgroundTasks[id] = taskSeen
+				}
+			}
 		case "task_started":
 			if task.TaskType != inProcessTeammate && !task.Ambient && (task.IsBackgrounded == nil || *task.IsBackgrounded) {
-				p.liveTasks[task.TaskID] = struct{}{}
+				p.startTask(task.TaskID)
 			}
 		case "task_updated":
 			switch task.Patch.Status {
-			case "completed", "failed":
-				p.endTask(task.TaskID, false)
-			case "killed":
-				p.endTask(task.TaskID, true)
+			case "completed", "failed", "killed":
+				p.endTask(task.TaskID)
 			default:
 				if task.Patch.IsBackgrounded != nil && *task.Patch.IsBackgrounded {
-					p.liveTasks[task.TaskID] = struct{}{}
+					p.startTask(task.TaskID)
 				}
 			}
 		case "task_notification":
-			p.endTask(task.TaskID, task.Status == "stopped" || task.Status == "killed")
+			p.endTask(task.TaskID)
 		case "background_tasks_changed":
-			live, ambient := map[string]struct{}{}, map[string]struct{}{}
+			running, ambient := map[string]struct{}{}, map[string]struct{}{}
 			for _, entry := range task.Tasks {
 				switch {
 				case entry.TaskID == "" || entry.TaskType == inProcessTeammate:
 				case entry.Ambient:
 					ambient[entry.TaskID] = struct{}{}
 				default:
-					live[entry.TaskID] = struct{}{}
+					running[entry.TaskID] = struct{}{}
 				}
 			}
-			for id := range p.liveTasks {
-				if _, ok := live[id]; ok {
+			for id, phase := range p.backgroundTasks {
+				if _, ok := running[id]; ok || phase != taskRunning {
 					continue
 				}
 				if _, ok := ambient[id]; ok {
-					delete(p.liveTasks, id)
+					delete(p.backgroundTasks, id)
 					continue
 				}
-				// Claude sends this level signal before a task's end events,
-				// which follow and say whether it was stopped.
-				p.endTask(id, false)
+				// Claude sends this level signal just before a task's end events.
+				p.endTask(id)
 			}
-			for id := range live {
-				p.liveTasks[id] = struct{}{}
-				delete(p.endedTasks, id)
+			for id := range running {
+				p.startTask(id)
 			}
 		}
 	})
 }
 
-// endTask moves a tracked background task to the ended set. Events for
-// foreground or already reported tasks are ignored.
-func (p *parser) endTask(id string, stopped bool) {
-	_, live := p.liveTasks[id]
-	wasStopped, ended := p.endedTasks[id]
-	if !live && !ended {
-		return
+// startTask tracks a background task as running. A task already tracked keeps
+// its phase, so repeated level signals cannot reopen an ended task.
+func (p *parser) startTask(id string) {
+	if _, ok := p.backgroundTasks[id]; !ok {
+		p.backgroundTasks[id] = taskRunning
 	}
-	delete(p.liveTasks, id)
-	p.endedTasks[id] = wasStopped || stopped
 }
 
-// updateBackgroundTasks applies change and emits the background task state if
-// it changed.
+// endTask marks a running background task as ended. Events for foreground or
+// already reported tasks are ignored.
+func (p *parser) endTask(id string) {
+	if phase, ok := p.backgroundTasks[id]; ok && phase == taskRunning {
+		p.backgroundTasks[id] = taskEnded
+	}
+}
+
+// updateBackgroundTasks applies change and emits the unreported task count if
+// it changed. Phase changes that keep the count do not reach the driver.
 func (p *parser) updateBackgroundTasks(emit func(Event) error, change func()) error {
-	before := p.backgroundTasks()
+	before := len(p.backgroundTasks)
 	change()
-	after := p.backgroundTasks()
-	if after == before {
+	if len(p.backgroundTasks) == before {
 		return nil
 	}
-	return emit(Event{Kind: EventBackgroundTasks, BackgroundTasks: after})
-}
-
-func (p *parser) backgroundTasks() BackgroundTasks {
-	state := BackgroundTasks{Live: len(p.liveTasks), Unreported: len(p.endedTasks)}
-	for _, stopped := range p.endedTasks {
-		if stopped {
-			state.Stopped++
-		}
-	}
-	return state
+	return emit(Event{Kind: EventBackgroundTasks, BackgroundTasks: len(p.backgroundTasks)})
 }
 
 func (p *parser) parseStreamEvent(raw json.RawMessage, emit func(Event) error) error {

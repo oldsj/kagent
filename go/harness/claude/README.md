@@ -65,23 +65,26 @@ the last result's success or failure. Later results do not reset the allowance.
 Results whose origin is `task-notification` describe a root follow-up iteration
 and participate in that outcome.
 
-When background tasks are enabled, Claude can report a background task's
-outcome after a result by starting another iteration. The driver tracks
-background tasks from Claude's `task_started`, `task_updated`,
-`task_notification`, and `background_tasks_changed` events, as Claude Code's SDK
-does. Foreground tasks, in-process teammates, and ambient monitors are not
-counted. The post-result grace pauses while a task is live and while a task
-that ended after the latest result still awaits the follow-up iteration's
-result; the overall turn timeout still bounds the wait.
+When background tasks are enabled, Claude reports a background task's outcome
+to the model in a later model request, often a follow-up iteration after a
+result. The driver tracks background tasks from Claude's `task_started`,
+`task_updated`, `task_notification`, and `background_tasks_changed` events, as
+Claude Code's SDK does, and treats a task as reported once a main-loop model
+request (`status: requesting`) starts after the task ends and that iteration
+produces a result. Foreground tasks, in-process teammates, and ambient monitors
+are not tracked.
 
-What Claude waits for depends on its version. The pinned 2.1.260 waits for
-background subagents, workflows, and Monitor watches, but kills background
-shells five seconds after its input ends. Later versions also wait for
-background shells. Claude also stops waiting at its own idle ceiling. In each
-case it emits the task's end events and exits without another result. If Claude
-exits while a task is live, or after killing or stopping one since the latest
-result, the turn reports an A2A failure naming how many tasks were stopped
-instead of the earlier result's success.
+A turn succeeds only if every background task it started has been reported.
+How the task ended does not matter; completed, failed, killed, and stopped
+tasks all count once the model has seen them. If Claude exits with any task
+unreported, the turn reports an A2A failure naming how many, instead of the
+earlier result's success. This covers each way the pinned Claude 2.1.260 drops
+background work: it kills background shells five seconds after its input ends,
+and at its wait ceiling it kills background agents and Monitor watches, in some
+cases flushing a result it held after the kill. The post-result grace pauses
+while any task is unreported, so a long check and its follow-up iteration
+finish in the same turn; the overall turn timeout still bounds the wait. The
+grace only bounds later output and never decides whether the turn succeeded.
 
 The driver also enforces `turn_timeout_millis`, defaulting to two hours, from
 process start. Both budgets pause while tool approval is pending and resume with
