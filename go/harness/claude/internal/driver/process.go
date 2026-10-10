@@ -340,6 +340,10 @@ func sendPrompt(ctx context.Context, stdin io.WriteCloser, message []byte, gate 
 }
 
 func (d *ProcessDriver) consume(ctx context.Context, session *processSession, sink runtime.EventSink) (runtime.Outcome, error) {
+	// Health is observation only: it never fails, delays or blocks cancellation
+	// of the turn it describes.
+	health := startHealthPublisher(sink)
+	defer health.close(ctx)
 	var approvalPending *PendingApprovalRequest
 	for {
 		if err := ctx.Err(); err != nil {
@@ -383,6 +387,10 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 		case item, ok := <-items:
 			if !ok {
 				return runtime.Outcome{}, fmt.Errorf("claude parser stopped without a result")
+			}
+			if item.event != nil && item.event.Kind == EventHealth {
+				health.publish(item.event.Health)
+				continue
 			}
 			if item.event != nil {
 				outcome, err := emitEvent(*item.event, sink)
@@ -508,8 +516,6 @@ func (d *ProcessDriver) Close() error {
 // provided event sink, which is then consumed by the shared A2A executor.
 func emitEvent(event Event, sink runtime.EventSink) (*runtime.Outcome, error) {
 	switch event.Kind {
-	case EventHealth:
-		return nil, sink.Health(event.Health)
 	case EventSessionStarted:
 		return nil, sink.SessionStarted(runtime.SessionStarted{ContinuationID: event.SessionID})
 	case EventTextDelta:

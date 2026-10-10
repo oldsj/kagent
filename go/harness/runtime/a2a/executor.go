@@ -92,13 +92,23 @@ func (*parkedTask) isExecutorState()    {}
 func (*cancelingTask) isExecutorState() {}
 
 type executionSink struct {
+	ctx            context.Context
 	reqCtx         *a2asrv.ExecutorContext
 	yield          func(a2atype.Event, error) bool
 	continuation   ContinuationStore
 	capture        *tracing.TextCapture
 	textArtifactID a2atype.ArtifactID
 	lastPosition   time.Time
+
+	// Health arrives from the runtime's observation goroutine. It is buffered
+	// here and published only from the execution goroutine that owns yield.
+	healthMu      sync.Mutex
+	health        []*a2atype.TaskArtifactUpdateEvent
+	healthDropped int
 }
+
+// healthBufferSize bounds health observations awaiting the execution goroutine.
+const healthBufferSize = 256
 
 var (
 	errBusy         = errors.New("runtime actor already has an active task")
@@ -131,7 +141,7 @@ func (e *Executor) Execute(ctx context.Context, reqCtx *a2asrv.ExecutorContext) 
 			// already completed the invocation.
 			invocation = nil
 		}
-		sink := &executionSink{reqCtx: reqCtx, yield: yield, continuation: e.continuation}
+		sink := &executionSink{ctx: ctx, reqCtx: reqCtx, yield: yield, continuation: e.continuation}
 		result := tracing.Result{}
 		endInvocation := func() {
 			invocation.SetAttributes(sink.captureAttributes(result)...)
@@ -275,6 +285,16 @@ func (e *Executor) Execute(ctx context.Context, reqCtx *a2asrv.ExecutorContext) 
 		} else {
 			outcome, runErr = continued.pending.Resume(runCtx, turn.InputResponse, sink)
 		}
+		if runErr == nil || !errors.Is(runErr, context.Canceled) && !errors.Is(runErr, errYieldStopped) {
+			// Health precedes the status it describes. A consumer that stops here
+			// abandons the stream like any other refused event.
+			if err := sink.flushHealth(); err != nil {
+				if outcome.Pending != nil {
+					_ = outcome.Pending.Cancel(context.Background())
+				}
+				runErr = err
+			}
+		}
 		if errors.Is(runErr, errYieldStopped) {
 			// The A2A event consumer stopped accepting events before execution
 			// finished. That is not a cancellation the client requested, so it is
@@ -414,6 +434,9 @@ func (s *executionSink) TextDelta(event runtime.TextDelta) error {
 	if event.Text == "" {
 		return nil
 	}
+	if err := s.flushHealth(); err != nil {
+		return err
+	}
 	// Capture keeps only the first bounded slice of this segment's text. Every
 	// delta still reaches the caller in full.
 	s.capture.Append(event.Text)
@@ -467,13 +490,39 @@ func (s *executionSink) Health(event runtime.HealthEvent) error {
 	update.Artifact.ID = a2atype.ArtifactID(event.EventID)
 	update.Artifact.Name = runtime.HealthSchema
 	update.LastChunk = true
-	if !s.yield(update, nil) {
-		return errYieldStopped
+	s.healthMu.Lock()
+	defer s.healthMu.Unlock()
+	if len(s.health) >= healthBufferSize {
+		// The consumer sees the sequence gap and reports incomplete coverage.
+		s.healthDropped++
+		return nil
+	}
+	s.health = append(s.health, update)
+	return nil
+}
+
+// flushHealth publishes buffered health artifacts. Only the execution
+// goroutine calls it, before its own events and before any status update.
+func (s *executionSink) flushHealth() error {
+	s.healthMu.Lock()
+	pending, dropped := s.health, s.healthDropped
+	s.health, s.healthDropped = nil, 0
+	s.healthMu.Unlock()
+	if dropped != 0 {
+		a2alog.Warn(s.ctx, "dropped runtime health observations", "count", dropped)
+	}
+	for _, update := range pending {
+		if !s.yield(update, nil) {
+			return errYieldStopped
+		}
 	}
 	return nil
 }
 
 func (s *executionSink) emitToolArtifact(part *a2atype.Part) error {
+	if err := s.flushHealth(); err != nil {
+		return err
+	}
 	// Append relates deltas within one contiguous text run. Tool activity closes
 	// that run and is an agent-produced artifact of its own, matching the Go ADK's
 	// OutputArtifactPerEvent representation.

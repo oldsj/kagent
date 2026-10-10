@@ -2,7 +2,9 @@ package driver
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -111,4 +113,77 @@ func TestHealthPathsAndUnknownUsage(t *testing.T) {
 	require.Error(t, err)
 	require.Len(t, incomplete, 1)
 	require.Equal(t, "partial", incomplete[0].Turn.Coverage)
+}
+
+type isolatedHealthSink struct {
+	*recordingSink
+	fail    error
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *isolatedHealthSink) Health(runtime.HealthEvent) error {
+	if s.entered != nil {
+		select {
+		case <-s.entered:
+		default:
+			close(s.entered)
+		}
+		<-s.release
+	}
+	return s.fail
+}
+
+func healthIsolationDriver(t *testing.T) *ProcessDriver {
+	t.Helper()
+	dir := t.TempDir()
+	executable := filepath.Join(dir, "claude")
+	script := "#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"11111111-1111-4111-8111-111111111111\"}' '{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"done\",\"usage\":{\"input_tokens\":3,\"output_tokens\":2}}'\nsleep 1\n"
+	require.NoError(t, os.WriteFile(executable, []byte(script), 0700))
+	return NewProcessDriver(ProcessConfig{Executable: executable, Workspace: dir, MaxEventBytes: 4096, MaxStderrBytes: 1024, InterruptGrace: 20 * time.Millisecond, PostResultGrace: 50 * time.Millisecond})
+}
+
+// Health is an observation: its failure must never change the turn.
+func TestHealthSinkFailureDoesNotFailTurn(t *testing.T) {
+	sink := &isolatedHealthSink{recordingSink: &recordingSink{}, fail: errors.New("fixture health sink unavailable")}
+	outcome, err := healthIsolationDriver(t).Run(t.Context(), runtime.Turn{Prompt: "fixture"}, sink)
+	require.NoError(t, err)
+	require.Nil(t, outcome.Failure)
+	require.Nil(t, outcome.Pending)
+	require.Len(t, sink.sessions, 1, "the turn's own events still reach the sink")
+}
+
+// A stalled health consumer must not hold the turn or its cancellation.
+func TestHealthSinkStallDoesNotBlockCompletionOrCancellation(t *testing.T) {
+	t.Run("completion", func(t *testing.T) {
+		sink := &isolatedHealthSink{recordingSink: &recordingSink{}, entered: make(chan struct{}), release: make(chan struct{})}
+		defer close(sink.release)
+		outcome, err := healthIsolationDriver(t).Run(t.Context(), runtime.Turn{Prompt: "fixture"}, sink)
+		require.NoError(t, err)
+		require.Nil(t, outcome.Failure)
+	})
+	t.Run("cancellation", func(t *testing.T) {
+		sink := &isolatedHealthSink{recordingSink: &recordingSink{}, entered: make(chan struct{}), release: make(chan struct{})}
+		defer close(sink.release)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		done := make(chan error, 1)
+		runner := healthIsolationDriver(t)
+		go func() {
+			_, err := runner.Run(ctx, runtime.Turn{Prompt: "fixture"}, sink)
+			done <- err
+		}()
+		select {
+		case <-sink.entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("fixture never reached the health sink")
+		}
+		cancel()
+		select {
+		case err := <-done:
+			require.ErrorIs(t, err, context.Canceled)
+		case <-time.After(2 * time.Second):
+			t.Fatal("cancelled turn remained blocked in Health")
+		}
+	})
 }
