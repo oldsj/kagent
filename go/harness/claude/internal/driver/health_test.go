@@ -187,3 +187,15 @@ func TestHealthSinkStallDoesNotBlockCompletionOrCancellation(t *testing.T) {
 		}
 	})
 }
+
+// A nil sink has no health consumer; the turn's health must not crash it.
+func TestHealthWithNilSinkDoesNotPanic(t *testing.T) {
+	dir := t.TempDir()
+	executable := filepath.Join(dir, "claude")
+	require.NoError(t, os.WriteFile(executable, []byte("#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\"}'\n"), 0700))
+	driver := NewProcessDriver(ProcessConfig{Executable: executable, Workspace: dir, MaxEventBytes: 4096, MaxStderrBytes: 1024, InterruptGrace: 20 * time.Millisecond})
+	outcome, err := driver.Run(t.Context(), runtime.Turn{Prompt: "fixture"}, nil)
+	require.NoError(t, err)
+	require.Nil(t, outcome.Failure)
+	require.Nil(t, outcome.Pending)
+}

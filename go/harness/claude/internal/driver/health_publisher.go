@@ -27,11 +27,17 @@ type healthPublisher struct {
 	failed    atomic.Int64
 }
 
+// A nil sink has no health consumer, so its observations are dropped
+// uncounted. A result-only turn with a nil sink touched no sink method before
+// health existed, and must still complete.
 func startHealthPublisher(sink runtime.EventSink) *healthPublisher {
 	p := &healthPublisher{events: make(chan runtime.HealthEvent, healthQueueSize), done: make(chan struct{})}
 	go func() {
 		defer close(p.done)
 		for event := range p.events {
+			if sink == nil {
+				continue
+			}
 			if p.abandoned.Load() {
 				p.dropped.Add(1)
 				continue
