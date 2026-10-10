@@ -129,6 +129,9 @@ func TestCompileProviderCredentials(t *testing.T) {
 			if config.Model != tt.model.Model || config.AppendSystemPrompt != "help carefully" || config.ExpectedClaudeVersion != claudeconfig.PinnedClaudeVersion {
 				t.Fatalf("compiled config = %#v", config)
 			}
+			if config.AllowBackgroundTasks || config.AllowScheduledTasks || !reflect.DeepEqual(config.DisallowedTools, claudeconfig.Production("", "").DisallowedTools) {
+				t.Fatalf("compiled headless policy = %#v", config)
+			}
 			gotEnvironment := map[string]string{}
 			for _, variable := range revision.Environment {
 				if variable.ValueFrom != nil {
@@ -319,13 +322,16 @@ func TestCompileRejectsProviderOwnedHarnessEnvironment(t *testing.T) {
 		Provider: v1alpha3.ModelProviderAnthropic, Model: "claude-sonnet-4-5",
 		APIKeySecret: "model-auth", APIKeySecretKey: "api-key",
 	}
-	input, reader := testInput(t, model, map[string][]byte{"api-key": []byte("secret")})
-	value := "http://mock.example.com"
-	input.Harness.Spec.Env = []v1alpha3.RuntimeEnvVar{{Name: claudeconfig.AnthropicBaseURLEnvName, Value: value}}
-	_, err := NewCompiler(krt.TestingDummyContext{}, reader).Compile(context.Background(), input)
-	var validation *v2translator.ValidationError
-	if !errors.As(err, &validation) {
-		t.Fatalf("Compile() error = %v, want validation error", err)
+	for _, name := range []string{claudeconfig.AnthropicBaseURLEnvName, claudeconfig.DisableBackgroundTasksEnvName, claudeconfig.DisableCronEnvName} {
+		t.Run(name, func(t *testing.T) {
+			input, reader := testInput(t, model, map[string][]byte{"api-key": []byte("secret")})
+			input.Harness.Spec.Env = []v1alpha3.RuntimeEnvVar{{Name: name, Value: "override"}}
+			_, err := NewCompiler(krt.TestingDummyContext{}, reader).Compile(context.Background(), input)
+			var validation *v2translator.ValidationError
+			if !errors.As(err, &validation) {
+				t.Fatalf("Compile() error = %v, want validation error", err)
+			}
+		})
 	}
 }
 

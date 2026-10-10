@@ -23,6 +23,8 @@ const (
 	Version                             = 5
 	ClaudeConfigDirEnvName              = "CLAUDE_CONFIG_DIR"
 	DisableUpdatesEnvName               = "DISABLE_UPDATES"
+	DisableBackgroundTasksEnvName       = "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"
+	DisableCronEnvName                  = "CLAUDE_CODE_DISABLE_CRON"
 	GoogleApplicationCredentialsEnvName = "GOOGLE_APPLICATION_CREDENTIALS"
 	GoogleCredentialsJSONEnvName        = "KAGENT_CLAUDE_GOOGLE_CREDENTIALS_JSON"
 	UseBedrockEnvName                   = "CLAUDE_CODE_USE_BEDROCK"
@@ -39,6 +41,8 @@ const (
 	VertexRegionEnvName                 = "CLOUD_ML_REGION"
 	SandboxEnvName                      = "IS_SANDBOX"
 	MCPCredentialEnvPrefix              = "KAGENT_CLAUDE_MCP_CREDENTIAL_"
+	DefaultPostResultGrace              = 120 * time.Second
+	DefaultTurnTimeout                  = 2 * time.Hour
 )
 
 // OwnsEnvironment reports whether the compiler or adapter reserves name for
@@ -48,7 +52,7 @@ func OwnsEnvironment(name string) bool {
 		return true
 	}
 	switch name {
-	case ClaudeConfigDirEnvName, DisableUpdatesEnvName, GoogleApplicationCredentialsEnvName,
+	case ClaudeConfigDirEnvName, DisableUpdatesEnvName, DisableBackgroundTasksEnvName, DisableCronEnvName, GoogleApplicationCredentialsEnvName,
 		GoogleCredentialsJSONEnvName, UseBedrockEnvName, UseVertexEnvName, AWSRegionEnvName,
 		AWSAccessKeyEnvName, AWSSecretKeyEnvName, AWSSessionTokenEnvName, AWSBedrockTokenEnvName,
 		AnthropicAPIKeyEnvName, ClaudeCodeOAuthTokenEnvName, AnthropicBaseURLEnvName, VertexProjectEnvName, VertexRegionEnvName,
@@ -74,16 +78,23 @@ type Config struct {
 	Agents                map[string]Agent       `json:"agents,omitempty"`
 	SkillResources        *agentplugin.Resources `json:"skill_resources,omitempty"`
 	MCPServers            map[string]MCPServer   `json:"mcp_servers,omitempty"`
+	// Headless turns cannot depend on work that wakes the process later. These
+	// opt-ins and the native tool deny list are harness-owned execution policy.
+	AllowBackgroundTasks bool     `json:"allow_background_tasks,omitempty"`
+	AllowScheduledTasks  bool     `json:"allow_scheduled_tasks,omitempty"`
+	DisallowedTools      []string `json:"disallowed_tools"`
 	// Git is the repository policy for Session workspaces. Absent means Sessions
 	// cannot request a workspace.
 	Git *workspace.Git `json:"git,omitempty"`
 	// RuntimeTelemetry carries the compiler-owned span identity and content
 	// capture policy. It is absent for standalone runs, which fall back to the
 	// environment for service identity and leave capture disabled.
-	RuntimeTelemetry     tracing.RuntimeTelemetry `json:"runtime_telemetry,omitzero"`
-	MaxEventBytes        int                      `json:"max_event_bytes"`
-	MaxStderrBytes       int                      `json:"max_stderr_bytes"`
-	InterruptGraceMillis int                      `json:"interrupt_grace_millis"`
+	RuntimeTelemetry      tracing.RuntimeTelemetry `json:"runtime_telemetry,omitzero"`
+	MaxEventBytes         int                      `json:"max_event_bytes"`
+	MaxStderrBytes        int                      `json:"max_stderr_bytes"`
+	InterruptGraceMillis  int                      `json:"interrupt_grace_millis"`
+	PostResultGraceMillis int                      `json:"post_result_grace_millis"`
+	TurnTimeoutMillis     int                      `json:"turn_timeout_millis"`
 }
 
 // MCPServer is one compiler-owned direct remote server. Claude's strict MCP
@@ -113,13 +124,24 @@ func Production(model, instruction string) Config {
 		Version: Version, ClaudeExecutable: "claude",
 		ExpectedClaudeVersion: PinnedClaudeVersion, StrictVersion: true,
 		Model: model, AppendSystemPrompt: instruction,
-		MaxEventBytes: 1 << 20, MaxStderrBytes: 64 << 10,
-		InterruptGraceMillis: 2000,
+		DisallowedTools: defaultDisallowedTools(),
+		MaxEventBytes:   1 << 20, MaxStderrBytes: 64 << 10,
+		InterruptGraceMillis:  2000,
+		PostResultGraceMillis: int(DefaultPostResultGrace / time.Millisecond),
+		TurnTimeoutMillis:     int(DefaultTurnTimeout / time.Millisecond),
 	}
 }
 
+func defaultDisallowedTools() []string {
+	return []string{"ScheduleWakeup", "Monitor", "CronCreate", "CronList", "CronDelete", "RemoteTrigger"}
+}
+
 func Parse(b []byte) (Config, error) {
-	var cfg Config
+	cfg := Config{
+		DisallowedTools:       defaultDisallowedTools(),
+		PostResultGraceMillis: int(DefaultPostResultGrace / time.Millisecond),
+		TurnTimeoutMillis:     int(DefaultTurnTimeout / time.Millisecond),
+	}
 	dec := json.NewDecoder(strings.NewReader(string(b)))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&cfg); err != nil {
@@ -147,6 +169,17 @@ func (c Config) Validate() error {
 	if c.MaxEventBytes <= 0 || c.MaxStderrBytes <= 0 || c.InterruptGraceMillis <= 0 {
 		return fmt.Errorf("event, stderr, and interrupt grace limits must be positive")
 	}
+	for _, limit := range []struct {
+		name   string
+		millis int
+	}{
+		{"post_result_grace_millis", c.PostResultGraceMillis},
+		{"turn_timeout_millis", c.TurnTimeoutMillis},
+	} {
+		if limit.millis <= 0 || int64(limit.millis) > math.MaxInt64/int64(time.Millisecond) {
+			return fmt.Errorf("%s must be a positive duration in milliseconds", limit.name)
+		}
+	}
 	if err := c.RuntimeTelemetry.Validate(); err != nil {
 		return err
 	}
@@ -157,6 +190,11 @@ func (c Config) Validate() error {
 	}
 	if runtime := c.RuntimeTelemetry.Runtime; runtime != "" && runtime != tracing.RuntimeClaude {
 		return fmt.Errorf("claude runtime telemetry names runtime %q", runtime)
+	}
+	for _, tool := range c.DisallowedTools {
+		if !agentNamePattern.MatchString(tool) {
+			return fmt.Errorf("disallowed tool %q must be a bare tool name", tool)
+		}
 	}
 	for name, agent := range c.Agents {
 		if !agentNamePattern.MatchString(name) {
@@ -226,6 +264,14 @@ func (c Config) MCPConfigJSON() ([]byte, error) {
 
 func (c Config) InterruptGrace() time.Duration {
 	return time.Duration(c.InterruptGraceMillis) * time.Millisecond
+}
+
+func (c Config) PostResultGrace() time.Duration {
+	return time.Duration(c.PostResultGraceMillis) * time.Millisecond
+}
+
+func (c Config) TurnTimeout() time.Duration {
+	return time.Duration(c.TurnTimeoutMillis) * time.Millisecond
 }
 
 // PinnedClaudeVersion comes from the central runtime release lock.

@@ -34,6 +34,55 @@ Credentials use [Substrate gateway injection](../../../docs/architecture/credent
 AWS IAM keys and Vertex service-account keys require local signing and are rejected
 by the compiler. Harness environment entries accept only literal values.
 
+## Turn completion and background work
+
+Each runtime turn starts one `claude -p` process with stream-JSON input and
+output, verbose output, and partial messages. The driver sends one user message
+and closes stdin. Later turns start another process with `--resume` and the
+exact durable conversation ID. A human approval parks the current live process
+and resumes it after the decision.
+
+Headless configuration defaults to `allow_background_tasks: false` and
+`allow_scheduled_tasks: false`. The adapter sets
+`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` and `CLAUDE_CODE_DISABLE_CRON=1`,
+overriding inherited environment values. The default `disallowed_tools` list
+contains `ScheduleWakeup`, `Monitor`, `CronCreate`, `CronList`, `CronDelete`,
+and `RemoteTrigger`, passed through `--disallowedTools` to remove those tools.
+These are versioned harness JSON settings; the compiler emits the safe defaults.
+Standalone configurations can opt in and replace the deny list (an explicit
+empty list clears it). Enabling background or scheduled work also requires
+removing the corresponding tools from that list. No public CRD fields are added.
+See Claude's [environment variables](https://code.claude.com/docs/en/env-vars),
+[tool reference](https://code.claude.com/docs/en/tools-reference), and
+[CLI reference](https://code.claude.com/docs/en/cli-reference).
+
+Claude can continue after an iteration's `result` when background work finishes.
+The first result starts the driver's `post_result_grace_millis` allowance,
+defaulting to 120 seconds. The driver consumes further activity and approvals
+until the process exits or that grace expires, then returns the last result
+once. Grace expiry logs a warning and stops remaining native work; it preserves
+the last result's success or failure. Later results do not reset the allowance.
+Results whose origin is `task-notification` describe a root follow-up iteration
+and participate in that outcome.
+
+The driver also enforces `turn_timeout_millis`, defaulting to two hours, from
+process start. Both budgets pause while tool approval is pending and resume with
+their remaining time after a decision. They apply even when the A2A SDK detaches
+execution from the caller's context, and bound both stream consumption and the
+exit wait. Overall budget expiry reports a terminal A2A failure with an execution
+budget message. Explicit CancelTask retains its canceled state. Malformed
+streams and unexpected process exits still fail the turn.
+
+Linux child subreaping and `/proc` ancestry tracking keep native descendants
+owned by the harness even after `setsid`, double-fork, or environment reset.
+Cleanup interrupts, kills, and reaps them on completion, cancellation, and
+expiry, including children holding inherited pipes open. One active native
+process tree is allowed per harness process, including parked approvals;
+preexisting child trees are excluded. The dedicated Actor must not launch
+unrelated child trees during native execution. Unsupported platforms or a
+failure to establish process ownership reject execution.
+See [Claude's headless exit behavior](https://code.claude.com/docs/en/headless#background-tasks-at-exit).
+
 ## Telemetry
 
 The driver passes each prompt to Claude Code on stdin as stream-JSON. When

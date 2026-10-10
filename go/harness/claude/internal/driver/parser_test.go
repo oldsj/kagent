@@ -125,11 +125,11 @@ func TestParseJSONLBuiltInToolLifecycle(t *testing.T) {
 	}
 }
 
-func TestParseJSONLIgnoresSubagentTaskNotificationResult(t *testing.T) {
+func TestParseJSONLIncludesTaskNotificationTurnResult(t *testing.T) {
 	input := strings.Join([]string{
 		`{"type":"system","subtype":"init","session_id":"11111111-1111-4111-8111-111111111111"}`,
 		`{"type":"result","subtype":"success","is_error":false,"result":"parent done"}`,
-		`{"type":"result","subtype":"success","is_error":false,"result":"child done","origin":{"kind":"task-notification"}}`,
+		`{"type":"result","subtype":"success","is_error":false,"result":"follow-up done","origin":{"kind":"task-notification"}}`,
 	}, "\n") + "\n"
 	var terminal []Event
 	if err := ParseJSONL(strings.NewReader(input), 4096, func(event Event) error {
@@ -140,8 +140,8 @@ func TestParseJSONLIgnoresSubagentTaskNotificationResult(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if len(terminal) != 1 || terminal[0].Result != "parent done" {
-		t.Fatalf("terminal events = %#v, want only the parent result", terminal)
+	if len(terminal) != 2 || terminal[0].Result != "parent done" || terminal[1].Result != "follow-up done" {
+		t.Fatalf("terminal events = %#v, want both iteration results", terminal)
 	}
 }
 

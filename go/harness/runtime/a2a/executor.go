@@ -281,7 +281,7 @@ func (e *Executor) Execute(ctx context.Context, reqCtx *a2asrv.ExecutorContext) 
 			result.Disposition = tracing.DispositionAbandoned
 			return
 		}
-		if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
+		if errors.Is(runErr, context.Canceled) {
 			// Cancel yields the canceled event from its own request, so complete
 			// the invocation here rather than waiting for an event that this
 			// execution never produces.
@@ -293,6 +293,9 @@ func (e *Executor) Execute(ctx context.Context, reqCtx *a2asrv.ExecutorContext) 
 		}
 		if runErr != nil {
 			publicMessage := "Harness runtime execution failed"
+			if errors.Is(runErr, context.DeadlineExceeded) {
+				publicMessage = "Harness execution deadline exceeded"
+			}
 			var terminalFailure *runtime.TerminalFailure
 			if errors.As(runErr, &terminalFailure) {
 				publicMessage = terminalFailure.PublicMessage()

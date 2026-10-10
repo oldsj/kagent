@@ -26,6 +26,34 @@ type failureContinuation struct{}
 func (failureContinuation) Load() (string, bool, error) { return "", false, nil }
 func (failureContinuation) Bind(string) error           { return nil }
 
+func TestPostResultActivityCompletesA2AOnce(t *testing.T) {
+	dir := t.TempDir()
+	fixture, err := os.ReadFile("../../testdata/stream-post-result.jsonl")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "stream"), fixture, 0o600))
+	executable := filepath.Join(dir, "claude")
+	require.NoError(t, os.WriteFile(executable, []byte("#!/bin/sh\ncat >/dev/null\ncat stream\n"), 0o700))
+	runner := NewProcessDriver(ProcessConfig{
+		Executable: executable, Workspace: dir, MaxEventBytes: 4096, MaxStderrBytes: 1024, InterruptGrace: time.Second,
+	})
+	executor, err := runtimea2a.New(runner, failureContinuation{}, tracing.RuntimeTelemetry{})
+	require.NoError(t, err)
+	message := a2atype.NewMessage(a2atype.MessageRoleUser, a2atype.NewTextPart("hello"))
+	message.TaskID, message.ContextID = "task-post-result", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	req := &a2asrv.ExecutorContext{TaskID: message.TaskID, ContextID: message.ContextID, Message: message}
+	var completed int
+	for event, err := range executor.Execute(t.Context(), req) {
+		require.NoError(t, err)
+		if update, ok := event.(*a2atype.TaskStatusUpdateEvent); ok {
+			require.NotEqual(t, a2atype.TaskStateFailed, update.Status.State)
+			if update.Status.State == a2atype.TaskStateCompleted {
+				completed++
+			}
+		}
+	}
+	require.Equal(t, 1, completed)
+}
+
 func TestTerminalFailureThroughA2A(t *testing.T) {
 	const detail = "API Error: 503 upstream unavailable"
 	const withheld = "upstream error (details withheld: possible credential)"
