@@ -274,7 +274,8 @@ func TestExecuteRuntimeErrorBoundary(t *testing.T) {
 		{name: "unexpected error", err: errors.New("private runtime detail"), want: "Harness runtime execution failed"},
 		{name: "terminal failure", err: runtime.NewTerminalFailure("provider rejected request", errors.New("private cause")), want: "provider rejected request"},
 		{name: "cancellation wins", err: runtime.NewTerminalFailure("provider rejected request", context.Canceled)},
-		{name: "deadline wins", err: runtime.NewTerminalFailure("provider rejected request", context.DeadlineExceeded)},
+		{name: "deadline reports failure", err: context.DeadlineExceeded, want: "Harness execution deadline exceeded"},
+		{name: "terminal deadline keeps message", err: runtime.NewTerminalFailure("provider rejected request", context.DeadlineExceeded), want: "provider rejected request"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			executor, err := New(fakeRunner{run: func(context.Context, runtime.Turn, runtime.EventSink) (runtime.Outcome, error) {

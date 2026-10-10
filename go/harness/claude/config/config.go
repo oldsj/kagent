@@ -41,6 +41,8 @@ const (
 	VertexRegionEnvName                 = "CLOUD_ML_REGION"
 	SandboxEnvName                      = "IS_SANDBOX"
 	MCPCredentialEnvPrefix              = "KAGENT_CLAUDE_MCP_CREDENTIAL_"
+	DefaultPostResultGrace              = 120 * time.Second
+	DefaultTurnTimeout                  = 2 * time.Hour
 )
 
 // OwnsEnvironment reports whether the compiler or adapter reserves name for
@@ -87,10 +89,12 @@ type Config struct {
 	// RuntimeTelemetry carries the compiler-owned span identity and content
 	// capture policy. It is absent for standalone runs, which fall back to the
 	// environment for service identity and leave capture disabled.
-	RuntimeTelemetry     tracing.RuntimeTelemetry `json:"runtime_telemetry,omitzero"`
-	MaxEventBytes        int                      `json:"max_event_bytes"`
-	MaxStderrBytes       int                      `json:"max_stderr_bytes"`
-	InterruptGraceMillis int                      `json:"interrupt_grace_millis"`
+	RuntimeTelemetry      tracing.RuntimeTelemetry `json:"runtime_telemetry,omitzero"`
+	MaxEventBytes         int                      `json:"max_event_bytes"`
+	MaxStderrBytes        int                      `json:"max_stderr_bytes"`
+	InterruptGraceMillis  int                      `json:"interrupt_grace_millis"`
+	PostResultGraceMillis int                      `json:"post_result_grace_millis"`
+	TurnTimeoutMillis     int                      `json:"turn_timeout_millis"`
 }
 
 // MCPServer is one compiler-owned direct remote server. Claude's strict MCP
@@ -122,7 +126,9 @@ func Production(model, instruction string) Config {
 		Model: model, AppendSystemPrompt: instruction,
 		DisallowedTools: defaultDisallowedTools(),
 		MaxEventBytes:   1 << 20, MaxStderrBytes: 64 << 10,
-		InterruptGraceMillis: 2000,
+		InterruptGraceMillis:  2000,
+		PostResultGraceMillis: int(DefaultPostResultGrace / time.Millisecond),
+		TurnTimeoutMillis:     int(DefaultTurnTimeout / time.Millisecond),
 	}
 }
 
@@ -131,7 +137,11 @@ func defaultDisallowedTools() []string {
 }
 
 func Parse(b []byte) (Config, error) {
-	cfg := Config{DisallowedTools: defaultDisallowedTools()}
+	cfg := Config{
+		DisallowedTools:       defaultDisallowedTools(),
+		PostResultGraceMillis: int(DefaultPostResultGrace / time.Millisecond),
+		TurnTimeoutMillis:     int(DefaultTurnTimeout / time.Millisecond),
+	}
 	dec := json.NewDecoder(strings.NewReader(string(b)))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&cfg); err != nil {
@@ -158,6 +168,17 @@ func (c Config) Validate() error {
 	}
 	if c.MaxEventBytes <= 0 || c.MaxStderrBytes <= 0 || c.InterruptGraceMillis <= 0 {
 		return fmt.Errorf("event, stderr, and interrupt grace limits must be positive")
+	}
+	for _, limit := range []struct {
+		name   string
+		millis int
+	}{
+		{"post_result_grace_millis", c.PostResultGraceMillis},
+		{"turn_timeout_millis", c.TurnTimeoutMillis},
+	} {
+		if limit.millis <= 0 || int64(limit.millis) > math.MaxInt64/int64(time.Millisecond) {
+			return fmt.Errorf("%s must be a positive duration in milliseconds", limit.name)
+		}
 	}
 	if err := c.RuntimeTelemetry.Validate(); err != nil {
 		return err
@@ -243,6 +264,14 @@ func (c Config) MCPConfigJSON() ([]byte, error) {
 
 func (c Config) InterruptGrace() time.Duration {
 	return time.Duration(c.InterruptGraceMillis) * time.Millisecond
+}
+
+func (c Config) PostResultGrace() time.Duration {
+	return time.Duration(c.PostResultGraceMillis) * time.Millisecond
+}
+
+func (c Config) TurnTimeout() time.Duration {
+	return time.Duration(c.TurnTimeoutMillis) * time.Millisecond
 }
 
 // PinnedClaudeVersion comes from the central runtime release lock.

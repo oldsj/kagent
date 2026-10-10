@@ -2,9 +2,12 @@ package config
 
 import (
 	"encoding/json"
+	"math"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kagent-dev/kagent/go/api/agentplugin"
 	"github.com/kagent-dev/kagent/go/pkg/tracing"
@@ -43,6 +46,53 @@ func TestProductionRoundTrip(t *testing.T) {
 	}
 	if cfg.ExpectedClaudeVersion != PinnedClaudeVersion || cfg.Model != "claude-test" || cfg.AppendSystemPrompt != "help" {
 		t.Errorf("production config = %#v", cfg)
+	}
+}
+
+func TestExecutionLimits(t *testing.T) {
+	for _, test := range []struct {
+		name, limits   string
+		grace, ceiling time.Duration
+		wantError      string
+	}{
+		{name: "defaults", grace: DefaultPostResultGrace, ceiling: DefaultTurnTimeout},
+		{name: "custom", limits: `,"post_result_grace_millis":250,"turn_timeout_millis":9000`, grace: 250 * time.Millisecond, ceiling: 9 * time.Second},
+		{name: "zero grace", limits: `,"post_result_grace_millis":0`, wantError: "post_result_grace_millis"},
+		{name: "negative ceiling", limits: `,"turn_timeout_millis":-1`, wantError: "turn_timeout_millis"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg, err := Parse([]byte(`{"version":5,"claude_executable":"claude","max_event_bytes":100,"max_stderr_bytes":100,"interrupt_grace_millis":100` + test.limits + `}`))
+			if test.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantError) {
+					t.Fatalf("Parse error = %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.PostResultGrace() != test.grace || cfg.TurnTimeout() != test.ceiling {
+				t.Fatalf("execution limits = %#v", cfg)
+			}
+			raw, err := json.Marshal(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			parsed, err := Parse(raw)
+			if err != nil || !reflect.DeepEqual(parsed, cfg) {
+				t.Fatalf("limits round trip = %#v, %v", parsed, err)
+			}
+		})
+	}
+	cfg := Production("", "")
+	if cfg.PostResultGrace() != DefaultPostResultGrace || cfg.TurnTimeout() != DefaultTurnTimeout {
+		t.Fatalf("production execution limits = %#v", cfg)
+	}
+	if strconv.IntSize == 64 {
+		cfg.PostResultGraceMillis = int(int64(math.MaxInt64)/int64(time.Millisecond)) + 1
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("Validate accepted an overflowing duration")
+		}
 	}
 }
 

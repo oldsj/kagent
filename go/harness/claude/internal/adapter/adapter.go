@@ -200,6 +200,7 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 		SkillRoot: skillRoot, PluginDirs: pluginDirs, Environment: environment,
 		MaxEventBytes: cfg.MaxEventBytes, MaxStderrBytes: cfg.MaxStderrBytes,
 		InterruptGrace: cfg.InterruptGrace(), AwaitTelemetry: awaitTelemetry,
+		PostResultGrace: cfg.PostResultGrace(), TurnTimeout: cfg.TurnTimeout(),
 	}), nil
 }
 

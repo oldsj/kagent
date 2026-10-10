@@ -348,9 +348,14 @@ database handles; each later operation opens the current backing file.
 The Claude harness owns one native process per turn, retaining that process
 across human approval waits. Claude's `result` closes an iteration; background
 completion can start further activity in the same process. The harness consumes
-all iterations until stdout closes and the process exits, and returns only the
-last result as the turn outcome. The turn context bounds the stream and exit
-wait, and cleanup reaps the process group. Headless harness configuration
+further iterations until process exit or a driver-owned 120-second post-result
+grace expires, returning only the last result. A separate two-hour active
+execution ceiling ends the turn as a failure. Both limits are configurable in
+harness JSON, exclude approval waits, and apply inside the SDK's detached
+execution. Explicit cancellation remains canceled. Linux child subreaping and
+`/proc` ancestry tracking let cleanup kill and reap detached descendants as well
+as the original process group. The dedicated Actor owns one native tree at a
+time and starts no unrelated children during a turn. Headless harness configuration
 disables native background tasks and scheduling by default and removes wakeup,
 monitor, cron, and remote scheduling tools. Workspaces can therefore pause
 between turns without depending on later native wakeups. See the

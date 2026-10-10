@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	claudeconfig "github.com/kagent-dev/kagent/go/harness/claude/config"
 	"github.com/kagent-dev/kagent/go/harness/internal/utils"
 	"github.com/kagent-dev/kagent/go/harness/runtime"
 	"github.com/kagent-dev/kagent/go/pkg/logging"
@@ -39,6 +40,8 @@ type ProcessConfig struct {
 	MaxEventBytes        int
 	MaxStderrBytes       int
 	InterruptGrace       time.Duration
+	PostResultGrace      time.Duration
+	TurnTimeout          time.Duration
 	ApprovalBroker       *ApprovalBroker
 	// AwaitTelemetry holds each prompt until Claude Code telemetry has
 	// initialized.
@@ -57,14 +60,21 @@ type parseItem struct {
 }
 
 type processSession struct {
-	command    *exec.Cmd
-	items      <-chan parseItem
-	stopEmit   chan struct{}
-	wait       <-chan error
-	stderr     *utils.BoundedBuffer
-	lastResult *runtime.Outcome
-	sessionID  string
-	stopOnce   sync.Once
+	command          *exec.Cmd
+	items            <-chan parseItem
+	stopEmit         chan struct{}
+	wait             <-chan error
+	stderr           *utils.BoundedBuffer
+	lastResult       *runtime.Outcome
+	sessionID        string
+	stopOnce         sync.Once
+	streamEnded      bool
+	executionBudget  *activeBudget
+	postResultBudget *activeBudget
+	owner            *processTree
+	stdout           io.ReadCloser
+	stdin            io.WriteCloser
+	stopErr          error
 }
 
 // pendingTurn owns a Claude process blocked in the permission MCP hook. Resume
@@ -76,6 +86,8 @@ type pendingTurn struct {
 }
 
 const interruptedResponseWarning = "API Error: Connection lost mid-response. The response above may be incomplete."
+
+var errExecutionBudgetExceeded = errors.New("Claude execution budget exceeded")
 
 // resumedEventSink removes Claude Code's synthetic connection warning after an
 // intentional Actor pause. The live process and its provider stream are frozen
@@ -96,6 +108,12 @@ func (s resumedEventSink) TextDelta(event runtime.TextDelta) error {
 
 // NewProcessDriver constructs a Claude Code process driver.
 func NewProcessDriver(config ProcessConfig) *ProcessDriver {
+	if config.PostResultGrace <= 0 {
+		config.PostResultGrace = claudeconfig.DefaultPostResultGrace
+	}
+	if config.TurnTimeout <= 0 {
+		config.TurnTimeout = claudeconfig.DefaultTurnTimeout
+	}
 	return &ProcessDriver{config: config}
 }
 
@@ -169,7 +187,7 @@ func (d *ProcessDriver) Args(turn runtime.Turn) []string {
 }
 
 // Run supervises one Claude Code process and emits its ordered runtime events.
-func (d *ProcessDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime.EventSink) (runtime.Outcome, error) {
+func (d *ProcessDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime.EventSink) (outcome runtime.Outcome, runErr error) {
 	if strings.TrimSpace(turn.Prompt) == "" {
 		return runtime.Outcome{}, fmt.Errorf("Claude prompt is required")
 	}
@@ -190,17 +208,28 @@ func (d *ProcessDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime
 	utils.ConfigureProcessGroup(cmd)
 	cmd.Dir = d.config.Workspace
 	cmd.Env = environment
+	cmd.WaitDelay = d.config.InterruptGrace
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return runtime.Outcome{}, fmt.Errorf("open Claude stdin: %w", err)
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		_ = stdin.Close()
 		return runtime.Outcome{}, fmt.Errorf("open Claude stdout: %w", err)
 	}
 	stderr := utils.NewBoundedBuffer(d.config.MaxStderrBytes)
 	cmd.Stderr = stderr
+	owner, err := newProcessTree()
+	if err != nil {
+		_ = stdin.Close()
+		_ = stdout.Close()
+		return runtime.Outcome{}, err
+	}
 	if err := cmd.Start(); err != nil {
+		owner.release()
+		_ = stdin.Close()
+		_ = stdout.Close()
 		return runtime.Outcome{}, fmt.Errorf("start Claude: %w", err)
 	}
 	items := make(chan parseItem)
@@ -232,19 +261,23 @@ func (d *ProcessDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime
 	}()
 	session := &processSession{
 		command: cmd, items: items, stopEmit: stopEmit, wait: waitDone, stderr: stderr,
+		executionBudget: newActiveBudget(d.config.TurnTimeout),
+		owner:           owner, stdout: stdout, stdin: stdin,
 	}
 	go sendPrompt(ctx, stdin, message, gate, parseDone)
 	sessionOwnedByPendingTurn := false
 	defer func() {
 		if !sessionOwnedByPendingTurn {
-			d.stopSession(session)
+			if cleanupErr := d.stopSession(session); cleanupErr != nil {
+				runErr = errors.Join(runErr, cleanupErr)
+			}
 		}
 	}()
-	outcome, err := d.consume(ctx, session, sink)
+	outcome, runErr = d.consume(ctx, session, sink)
 	// A pending outcome carries this same live session. Every other return path
 	// leaves cleanup with this Run invocation.
-	sessionOwnedByPendingTurn = err == nil && outcome.Pending != nil
-	return outcome, err
+	sessionOwnedByPendingTurn = runErr == nil && outcome.Pending != nil
+	return outcome, runErr
 }
 
 // traceEnvironment injects the trace context into the environment variables.
@@ -309,25 +342,45 @@ func sendPrompt(ctx context.Context, stdin io.WriteCloser, message []byte, gate 
 func (d *ProcessDriver) consume(ctx context.Context, session *processSession, sink runtime.EventSink) (runtime.Outcome, error) {
 	var approvalPending *PendingApprovalRequest
 	for {
+		if err := ctx.Err(); err != nil {
+			return runtime.Outcome{}, err
+		}
 		if approvalPending != nil && session.sessionID != "" {
 			if !approvalPending.waiting() {
 				approvalPending = nil
+				session.executionBudget.resume()
+				session.postResultBudget.resume()
 				continue
 			}
 			return runtime.Outcome{Pending: &pendingTurn{
 				driver: d, session: session, pending: approvalPending,
 			}}, nil
 		}
+		if session.executionBudget.expired() {
+			return runtime.Outcome{}, runtime.NewTerminalFailure("Claude execution budget exceeded (approval wait time excluded)", errExecutionBudgetExceeded)
+		}
+		if session.postResultBudget.expired() {
+			logging.FromContext(ctx).WarnContext(ctx, "claude post-result grace expired; stopping remaining native work", "grace", d.config.PostResultGrace)
+			return *session.lastResult, nil
+		}
 		var approvals <-chan *PendingApprovalRequest
 		if d.config.ApprovalBroker != nil && approvalPending == nil {
 			approvals = d.config.ApprovalBroker.Requests()
+		}
+		items := session.items
+		var exited <-chan error
+		if session.streamEnded {
+			items = nil
+			exited = session.wait
 		}
 		select {
 		case request := <-approvals:
 			// A result ends a Claude iteration, not necessarily this process.
 			// Background completion can start another iteration with approvals.
 			approvalPending = request
-		case item, ok := <-session.items:
+			session.executionBudget.pause()
+			session.postResultBudget.pause()
+		case item, ok := <-items:
 			if !ok {
 				return runtime.Outcome{}, fmt.Errorf("claude parser stopped without a result")
 			}
@@ -341,8 +394,14 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 						session.sessionID = item.event.SessionID
 					}
 					if outcome != nil {
-						// Only process exit settles the turn. Keep the last result
-						// while consuming any subsequent iterations in order.
+						// The first result starts a finite allowance for any further
+						// iterations. Later results do not reset that allowance.
+						if session.postResultBudget == nil {
+							session.postResultBudget = newActiveBudget(d.config.PostResultGrace)
+							if approvalPending != nil {
+								session.postResultBudget.pause()
+							}
+						}
 						session.lastResult = outcome
 					}
 					continue
@@ -353,18 +412,16 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 				// A process that exits before its result can explain the failure
 				// only on stderr. Reap it to finish draining stderr; malformed
 				// output can also stop the parser while the process is still alive.
-				d.stopSession(session)
+				if err := d.stopSession(session); err != nil {
+					return runtime.Outcome{}, errors.Join(item.err, err)
+				}
 				if stderr := session.stderr.Diagnostic(); stderr != "" {
 					return runtime.Outcome{}, fmt.Errorf("%w: %s", item.err, stderr)
 				}
 				return runtime.Outcome{}, item.err
 			}
-			var waitErr error
-			select {
-			case waitErr = <-session.wait:
-			case <-ctx.Done():
-				return runtime.Outcome{}, ctx.Err()
-			}
+			session.streamEnded = true
+		case waitErr := <-exited:
 			if waitErr != nil {
 				stderr := session.stderr.Diagnostic()
 				if stderr != "" {
@@ -376,6 +433,11 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 				return runtime.Outcome{}, fmt.Errorf("claude process exited without a terminal result")
 			}
 			return *session.lastResult, nil
+		case <-session.executionBudget.done():
+			return runtime.Outcome{}, runtime.NewTerminalFailure("Claude execution budget exceeded (approval wait time excluded)", errExecutionBudgetExceeded)
+		case <-session.postResultBudget.done():
+			// Recheck priority and the remaining budget at the top of the loop.
+			continue
 		case <-ctx.Done():
 			return runtime.Outcome{}, ctx.Err()
 		}
@@ -399,11 +461,13 @@ func (p *pendingTurn) Request() runtime.InputRequest { return p.pending.approval
 
 // Resume resolves the permission MCP call and continues consuming the same process
 // until it completes, fails, or returns another PendingTurn.
-func (p *pendingTurn) Resume(ctx context.Context, response runtime.InputResponse, sink runtime.EventSink) (runtime.Outcome, error) {
+func (p *pendingTurn) Resume(ctx context.Context, response runtime.InputResponse, sink runtime.EventSink) (outcome runtime.Outcome, runErr error) {
 	sessionOwnedByPendingTurn := false
 	defer func() {
 		if !sessionOwnedByPendingTurn {
-			p.driver.stopSession(p.session)
+			if cleanupErr := p.driver.stopSession(p.session); cleanupErr != nil {
+				runErr = errors.Join(runErr, cleanupErr)
+			}
 		}
 	}()
 	decision, ok := response.(*runtime.ApprovalDecision)
@@ -416,9 +480,11 @@ func (p *pendingTurn) Resume(ctx context.Context, response runtime.InputResponse
 	if err := p.pending.resolve(*decision); err != nil {
 		return runtime.Outcome{}, err
 	}
-	outcome, err := p.driver.consume(ctx, p.session, resumedEventSink{EventSink: sink})
-	sessionOwnedByPendingTurn = err == nil && outcome.Pending != nil
-	return outcome, err
+	p.session.executionBudget.resume()
+	p.session.postResultBudget.resume()
+	outcome, runErr = p.driver.consume(ctx, p.session, resumedEventSink{EventSink: sink})
+	sessionOwnedByPendingTurn = runErr == nil && outcome.Pending != nil
+	return outcome, runErr
 }
 
 // Cancel denies the outstanding permission MCP call and reaps the Claude process.
@@ -426,8 +492,7 @@ func (p *pendingTurn) Cancel(_ context.Context) error {
 	_ = p.pending.resolve(runtime.ApprovalDecision{
 		ID: p.pending.request.ID, Approved: false, RejectionReason: "The task was canceled.",
 	})
-	p.driver.stopSession(p.session)
-	return nil
+	return p.driver.stopSession(p.session)
 }
 
 // Close releases the Actor-local permission MCP listener. Pending process ownership is
@@ -469,9 +534,16 @@ func emitEvent(event Event, sink runtime.EventSink) (*runtime.Outcome, error) {
 	}
 }
 
-func (d *ProcessDriver) stopSession(session *processSession) {
+func (d *ProcessDriver) stopSession(session *processSession) error {
 	session.stopOnce.Do(func() {
+		session.executionBudget.pause()
+		session.postResultBudget.pause()
 		close(session.stopEmit)
+		// Unblock the parser and prompt sender independently of descendants
+		// holding inherited pipes. WaitDelay bounds stderr drain on cleanup.
+		_ = session.stdin.Close()
+		_ = session.stdout.Close()
+		interruptErr := session.owner.interrupt()
 		_ = utils.InterruptProcessGroup(session.command.Process)
 		timer := time.NewTimer(d.config.InterruptGrace)
 		defer timer.Stop()
@@ -482,11 +554,17 @@ func (d *ProcessDriver) stopSession(session *processSession) {
 			_ = utils.KillProcessGroup(session.command.Process)
 		case <-timer.C:
 			_ = utils.KillProcessGroup(session.command.Process)
-			<-session.wait
 		}
+		cleanupErr := session.owner.killAndReap(session.command.Process.Pid)
+		<-session.wait
 		for range session.items {
 		}
+		session.stopErr = errors.Join(interruptErr, cleanupErr)
+		if session.stopErr == nil {
+			session.owner.release()
+		}
 	})
+	return session.stopErr
 }
 
 var _ runtime.PendingTurn = (*pendingTurn)(nil)

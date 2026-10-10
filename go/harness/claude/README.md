@@ -57,12 +57,30 @@ See Claude's [environment variables](https://code.claude.com/docs/en/env-vars),
 [CLI reference](https://code.claude.com/docs/en/cli-reference).
 
 Claude can continue after an iteration's `result` when background work finishes.
-The driver consumes that activity and any further approvals until stdout ends
-and the process exits, then returns the last result once. Results whose origin
-is `task-notification` also describe a root follow-up iteration and participate
-in that outcome. The existing turn context bounds both stream consumption and
-the exit wait; cancellation interrupts, kills, and reaps the process group.
-Malformed streams and unexpected process exits still fail the turn.
+The first result starts the driver's `post_result_grace_millis` allowance,
+defaulting to 120 seconds. The driver consumes further activity and approvals
+until the process exits or that grace expires, then returns the last result
+once. Grace expiry logs a warning and stops remaining native work; it preserves
+the last result's success or failure. Later results do not reset the allowance.
+Results whose origin is `task-notification` describe a root follow-up iteration
+and participate in that outcome.
+
+The driver also enforces `turn_timeout_millis`, defaulting to two hours, from
+process start. Both budgets pause while tool approval is pending and resume with
+their remaining time after a decision. They apply even when the A2A SDK detaches
+execution from the caller's context, and bound both stream consumption and the
+exit wait. Overall budget expiry reports a terminal A2A failure with an execution
+budget message. Explicit CancelTask retains its canceled state. Malformed
+streams and unexpected process exits still fail the turn.
+
+Linux child subreaping and `/proc` ancestry tracking keep native descendants
+owned by the harness even after `setsid`, double-fork, or environment reset.
+Cleanup interrupts, kills, and reaps them on completion, cancellation, and
+expiry, including children holding inherited pipes open. One active native
+process tree is allowed per harness process, including parked approvals;
+preexisting child trees are excluded. The dedicated Actor must not launch
+unrelated child trees during native execution. Unsupported platforms or a
+failure to establish process ownership reject execution.
 See [Claude's headless exit behavior](https://code.claude.com/docs/en/headless#background-tasks-at-exit).
 
 ## Telemetry
