@@ -65,6 +65,17 @@ the last result's success or failure. Later results do not reset the allowance.
 Results whose origin is `task-notification` describe a root follow-up iteration
 and participate in that outcome.
 
+When background tasks are enabled, Claude waits after a result for background
+commands, subagents, and Monitor watches, then starts another iteration with
+their outcome. The driver tracks the live set from Claude's `task_started`,
+`task_updated`, `task_notification`, and `background_tasks_changed` events, as
+Claude Code's SDK does. Foreground tasks and in-process teammates are not
+counted. The post-result grace pauses while any task is live, so a long check
+can finish and report back in the same turn; the overall turn timeout still
+bounds the wait. If Claude exits while tasks are still live, for example at its
+own idle ceiling, the turn reports an A2A failure naming how many were lost
+instead of the earlier result's success.
+
 The driver also enforces `turn_timeout_millis`, defaulting to two hours, from
 process start. Both budgets pause while tool approval is pending and resume with
 their remaining time after a decision. They apply even when the A2A SDK detaches

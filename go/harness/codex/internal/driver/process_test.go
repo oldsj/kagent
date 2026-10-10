@@ -414,3 +414,62 @@ func TestApprovalResponseAcceptsWithEmptyRequestedContent(t *testing.T) {
 		t.Fatalf("approval content = %#v", response["content"])
 	}
 }
+
+func TestProcessDriverReportsLiveBackgroundTerminals(t *testing.T) {
+	for _, test := range []struct {
+		name, response, wantFailure string
+	}{
+		{name: "live terminal", response: `{"id":5,"result":{"data":[{"processId":"1","itemId":"item-1","command":"make check","cwd":"/workspace"}],"nextCursor":null}}`, wantFailure: "Codex ended the turn with 1 background terminal still running; their results were lost"},
+		{name: "no terminals", response: `{"id":5,"result":{"data":[],"nextCursor":null}}`},
+		{name: "probe error", response: `{"id":5,"error":{"code":-32601,"message":"method not found"}}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			directory := t.TempDir()
+			executable := filepath.Join(directory, "codex")
+			capture := filepath.Join(directory, "probe")
+			script := `#!/bin/sh
+read initialize
+printf '%s\n' '{"id":1,"result":{}}'
+read initialized
+read thread
+printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-1"}}}'
+read turn
+printf '%s\n' '{"id":3,"result":{"turn":{"id":"turn-1"}}}'
+printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}}'
+read probe
+printf '%s\n' "$probe" > "$CAPTURE"
+printf '%s\n' "$RESPONSE"
+while read ignored; do :; done
+`
+			if err := os.WriteFile(executable, []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			workspace := filepath.Join(directory, "workspace")
+			if err := os.Mkdir(workspace, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			driver := NewProcessDriver(ProcessConfig{
+				Executable: executable, Workspace: workspace, Model: "model", Provider: "provider",
+				Environment: append(os.Environ(), "CAPTURE="+capture, "RESPONSE="+test.response), MaxFrameBytes: 4096,
+				MaxStderrBytes: 1024, InterruptGrace: 2 * time.Second,
+			})
+			outcome, err := driver.Run(t.Context(), runtime.Turn{Prompt: "run checks"}, &recordingSink{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.wantFailure == "" && outcome.Failure != nil {
+				t.Fatalf("outcome = %#v", outcome.Failure)
+			}
+			if test.wantFailure != "" && (outcome.Failure == nil || outcome.Failure.Message != test.wantFailure) {
+				t.Fatalf("outcome = %#v, want failure %q", outcome.Failure, test.wantFailure)
+			}
+			probe, err := os.ReadFile(capture)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Contains(probe, []byte(`"method":"thread/backgroundTerminals/list"`)) || !bytes.Contains(probe, []byte(`"threadId":"thread-1"`)) {
+				t.Fatalf("probe = %s", probe)
+			}
+		})
+	}
+}

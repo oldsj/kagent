@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -197,6 +198,57 @@ func TestParseJSONLErrors(t *testing.T) {
 				t.Fatalf("ParseJSONL() error = %v, want containing %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestParseJSONLTracksLiveBackgroundTasks(t *testing.T) {
+	fixture, err := os.ReadFile("../../testdata/stream-background-task.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		startedBackground = `{"type":"system","subtype":"task_started","task_id":"bash-1","task_type":"local_bash","is_backgrounded":true}`
+		startedLegacy     = `{"type":"system","subtype":"task_started","task_id":"bash-2","task_type":"local_bash"}`
+		startedForeground = `{"type":"system","subtype":"task_started","task_id":"agent-1","task_type":"local_agent","is_backgrounded":false}`
+		result            = `{"type":"result","subtype":"success"}`
+	)
+	for _, test := range []struct {
+		name  string
+		input string
+		want  []int
+	}{
+		{name: "fixture", input: string(fixture), want: []int{1, 0}},
+		{name: "unset backgrounding counts", input: startedLegacy + "\n" + `{"type":"system","subtype":"task_notification","task_id":"bash-2","status":"stopped"}`, want: []int{1, 0}},
+		{name: "foreground moved to background", input: startedForeground + "\n" + `{"type":"system","subtype":"task_updated","task_id":"agent-1","patch":{"is_backgrounded":true}}` + "\n" + `{"type":"system","subtype":"task_updated","task_id":"agent-1","patch":{"status":"killed"}}`, want: []int{1, 0}},
+		{name: "in-process teammates excluded", input: `{"type":"system","subtype":"task_started","task_id":"mate-1","task_type":"in_process_teammate"}`, want: nil},
+		{name: "replace set", input: startedBackground + "\n" + `{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"bash-1","task_type":"local_bash"},{"task_id":"monitor-1","task_type":"monitor"},{"task_id":"mate-1","task_type":"in_process_teammate"}]}` + "\n" + `{"type":"system","subtype":"background_tasks_changed","tasks":[]}`, want: []int{1, 2, 0}},
+		{name: "running update keeps task", input: startedBackground + "\n" + `{"type":"system","subtype":"task_updated","task_id":"bash-1","patch":{"status":"running"}}`, want: []int{1}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input := test.input
+			if test.name != "fixture" {
+				input += "\n" + result + "\n"
+			}
+			var counts []int
+			if err := ParseJSONL(strings.NewReader(input), 4096, func(event Event) error {
+				if event.Kind == EventBackgroundTasks {
+					counts = append(counts, event.BackgroundTasks)
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(counts, test.want) {
+				t.Fatalf("background task counts = %v, want %v", counts, test.want)
+			}
+		})
+	}
+}
+
+func TestParseJSONLRejectsTaskEventWithoutID(t *testing.T) {
+	input := `{"type":"system","subtype":"task_started","task_type":"local_bash"}` + "\n"
+	if err := ParseJSONL(strings.NewReader(input), 1024, func(Event) error { return nil }); err == nil || !strings.Contains(err.Error(), "requires a task_id") {
+		t.Fatalf("ParseJSONL() error = %v", err)
 	}
 }
 

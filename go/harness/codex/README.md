@@ -45,6 +45,14 @@ App Server elicitation, while other MCP servers remain automatically approved.
 Account login, API-key passthrough, custom TLS, legacy SSE MCP, Dedicated agents,
 checkpoint/fork guarantees, and configurable native policy are not advertised.
 
+Codex does not resume a completed turn when a background terminal exits, and
+stopping the App Server after the turn ends those terminals. After
+`turn/completed`, the driver lists the thread's background terminals with the
+experimental `thread/backgroundTerminals/list` request. A successful turn that
+leaves any running reports an A2A failure naming how many were lost. A list
+request that fails or does not answer within the interrupt grace keeps the
+turn's outcome and logs a warning.
+
 Runtime configuration is supplied through `KAGENT_CONFIG_JSON` and
 `KAGENT_AGENT_CARD_JSON`. Private A2A is served on port 80 and readiness on
 `/readyz` at port 8081.

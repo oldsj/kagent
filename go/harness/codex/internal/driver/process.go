@@ -15,6 +15,7 @@ import (
 
 	"github.com/kagent-dev/kagent/go/harness/internal/utils"
 	"github.com/kagent-dev/kagent/go/harness/runtime"
+	"github.com/kagent-dev/kagent/go/pkg/logging"
 )
 
 // ProcessConfig contains validated, compiler-owned inputs for one Codex App
@@ -250,10 +251,46 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 				if err := translator.rejectBufferedPostTerminalActivity(client.frames); err != nil {
 					return runtime.Outcome{}, err
 				}
+				if outcome.Failure == nil {
+					outcome = d.checkBackgroundTerminals(ctx, client, translator.threadID, outcome)
+				}
 				return outcome, nil
 			}
 		}
 	}
+}
+
+// checkBackgroundTerminals fails a completed turn that leaves background
+// terminals running. Codex does not resume a finished turn when a terminal
+// exits, and stopping the App Server after the turn ends them, so their output
+// never reaches the agent. A probe that fails or times out keeps the outcome:
+// it cannot show that work was lost.
+func (d *ProcessDriver) checkBackgroundTerminals(ctx context.Context, client *rpcClient, threadID string, outcome runtime.Outcome) runtime.Outcome {
+	probeCtx, cancel := context.WithTimeout(ctx, d.config.InterruptGrace)
+	defer cancel()
+	result, err := client.call(probeCtx, 5, "thread/backgroundTerminals/list", map[string]string{"threadId": threadID})
+	if err != nil {
+		logging.FromContext(ctx).WarnContext(ctx, "could not list Codex background terminals", "error", err)
+		return outcome
+	}
+	var terminals struct {
+		Data []json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(result, &terminals); err != nil {
+		logging.FromContext(ctx).WarnContext(ctx, "could not decode Codex background terminals", "error", err)
+		return outcome
+	}
+	if len(terminals.Data) == 0 {
+		return outcome
+	}
+	noun := "terminals"
+	if len(terminals.Data) == 1 {
+		noun = "terminal"
+	}
+	logging.FromContext(ctx).WarnContext(ctx, "codex turn completed with live background terminals", "terminals", len(terminals.Data))
+	return runtime.Outcome{Failure: &runtime.Failure{Message: fmt.Sprintf(
+		"Codex ended the turn with %d background %s still running; their results were lost", len(terminals.Data), noun,
+	)}}
 }
 
 // handleServerRequest handles a Codex server request.

@@ -19,6 +19,10 @@ type parser struct {
 	emittedToolCalls map[string]struct{}
 	emittedResults   map[string]struct{}
 	terminal         bool
+	// backgroundTasks holds the IDs of tasks Claude reports as live. Claude
+	// waits for them after a result and starts another iteration with their
+	// outcome, so their results are still part of this turn.
+	backgroundTasks map[string]struct{}
 }
 
 type contentBlockRef struct {
@@ -35,6 +39,7 @@ func ParseJSONL(r io.Reader, maxEventBytes int, emit func(Event) error) error {
 	p := parser{
 		emitted: map[string]string{}, tools: map[string]string{},
 		emittedToolCalls: map[string]struct{}{}, emittedResults: map[string]struct{}{},
+		backgroundTasks: map[string]struct{}{},
 	}
 	reader := bufio.NewReaderSize(r, min(maxEventBytes+1, 64*1024))
 	for {
@@ -89,6 +94,7 @@ func (p *parser) parseLine(line []byte, emit func(Event) error) error {
 		if envelope.Subtype == "init" && envelope.SessionID != "" {
 			return emit(Event{Kind: EventSessionStarted, SessionID: envelope.SessionID})
 		}
+		return p.parseBackgroundTask(envelope.Subtype, line, emit)
 	case "stream_event":
 		return p.parseStreamEvent(envelope.Event, emit)
 	case "assistant":
@@ -109,6 +115,71 @@ func (p *parser) parseLine(line []byte, emit func(Event) error) error {
 		return emit(Event{Kind: EventCompleted, SessionID: envelope.SessionID, Result: envelope.Result})
 	}
 	return nil
+}
+
+// inProcessTeammate tasks run inside the Claude process and do not hold the
+// headless run open. Claude Code's own SDK task tracker excludes them too.
+const inProcessTeammate = "in_process_teammate"
+
+// parseBackgroundTask tracks Claude's live background tasks from its task
+// lifecycle events and emits the live count whenever it changes. A task stays
+// live from task_started until task_notification or a terminal task_updated;
+// background_tasks_changed replaces the whole set. Tasks registered in the
+// foreground block their tool call and end before that iteration's result.
+func (p *parser) parseBackgroundTask(subtype string, line []byte, emit func(Event) error) error {
+	var task struct {
+		TaskID         string `json:"task_id"`
+		TaskType       string `json:"task_type"`
+		IsBackgrounded *bool  `json:"is_backgrounded"`
+		Patch          struct {
+			Status         string `json:"status"`
+			IsBackgrounded *bool  `json:"is_backgrounded"`
+		} `json:"patch"`
+		Tasks []struct {
+			TaskID   string `json:"task_id"`
+			TaskType string `json:"task_type"`
+		} `json:"tasks"`
+	}
+	switch subtype {
+	case "task_started", "task_updated", "task_notification", "background_tasks_changed":
+	default:
+		return nil
+	}
+	if err := json.Unmarshal(line, &task); err != nil {
+		return fmt.Errorf("decode Claude %s event: %w", subtype, err)
+	}
+	if subtype != "background_tasks_changed" && task.TaskID == "" {
+		return fmt.Errorf("claude %s event requires a task_id", subtype)
+	}
+	before := len(p.backgroundTasks)
+	switch subtype {
+	case "task_started":
+		if task.TaskType != inProcessTeammate && (task.IsBackgrounded == nil || *task.IsBackgrounded) {
+			p.backgroundTasks[task.TaskID] = struct{}{}
+		}
+	case "task_updated":
+		switch task.Patch.Status {
+		case "completed", "failed", "killed":
+			delete(p.backgroundTasks, task.TaskID)
+		default:
+			if task.Patch.IsBackgrounded != nil && *task.Patch.IsBackgrounded {
+				p.backgroundTasks[task.TaskID] = struct{}{}
+			}
+		}
+	case "task_notification":
+		delete(p.backgroundTasks, task.TaskID)
+	case "background_tasks_changed":
+		clear(p.backgroundTasks)
+		for _, live := range task.Tasks {
+			if live.TaskID != "" && live.TaskType != inProcessTeammate {
+				p.backgroundTasks[live.TaskID] = struct{}{}
+			}
+		}
+	}
+	if len(p.backgroundTasks) == before {
+		return nil
+	}
+	return emit(Event{Kind: EventBackgroundTasks, BackgroundTasks: len(p.backgroundTasks)})
 }
 
 func (p *parser) parseStreamEvent(raw json.RawMessage, emit func(Event) error) error {

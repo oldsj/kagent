@@ -75,6 +75,8 @@ type processSession struct {
 	stdout           io.ReadCloser
 	stdin            io.WriteCloser
 	stopErr          error
+	// backgroundTasks is the number of background tasks Claude reports as live.
+	backgroundTasks int
 }
 
 // pendingTurn owns a Claude process blocked in the permission MCP hook. Resume
@@ -349,7 +351,7 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 			if !approvalPending.waiting() {
 				approvalPending = nil
 				session.executionBudget.resume()
-				session.postResultBudget.resume()
+				session.holdPostResultGrace(false)
 				continue
 			}
 			return runtime.Outcome{Pending: &pendingTurn{
@@ -379,12 +381,17 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 			// Background completion can start another iteration with approvals.
 			approvalPending = request
 			session.executionBudget.pause()
-			session.postResultBudget.pause()
+			session.holdPostResultGrace(true)
 		case item, ok := <-items:
 			if !ok {
 				return runtime.Outcome{}, fmt.Errorf("claude parser stopped without a result")
 			}
 			if item.event != nil {
+				if item.event.Kind == EventBackgroundTasks {
+					session.backgroundTasks = item.event.BackgroundTasks
+					session.holdPostResultGrace(approvalPending != nil)
+					continue
+				}
 				outcome, err := emitEvent(*item.event, sink)
 				if err == nil {
 					if item.event.Kind == EventSessionStarted {
@@ -398,9 +405,7 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 						// iterations. Later results do not reset that allowance.
 						if session.postResultBudget == nil {
 							session.postResultBudget = newActiveBudget(d.config.PostResultGrace)
-							if approvalPending != nil {
-								session.postResultBudget.pause()
-							}
+							session.holdPostResultGrace(approvalPending != nil)
 						}
 						session.lastResult = outcome
 					}
@@ -432,6 +437,12 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 			if session.lastResult == nil {
 				return runtime.Outcome{}, fmt.Errorf("claude process exited without a terminal result")
 			}
+			if session.backgroundTasks > 0 && session.lastResult.Failure == nil {
+				// Claude stopped waiting, for example at its own idle ceiling, and
+				// the results never reached the conversation. The turn is incomplete.
+				logging.FromContext(ctx).WarnContext(ctx, "claude exited with live background tasks", "tasks", session.backgroundTasks)
+				return runtime.Outcome{Failure: &runtime.Failure{Message: backgroundTasksLostMessage(session.backgroundTasks)}}, nil
+			}
 			return *session.lastResult, nil
 		case <-session.executionBudget.done():
 			return runtime.Outcome{}, runtime.NewTerminalFailure("Claude execution budget exceeded (approval wait time excluded)", errExecutionBudgetExceeded)
@@ -442,6 +453,26 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 			return runtime.Outcome{}, ctx.Err()
 		}
 	}
+}
+
+// holdPostResultGrace pauses the post-result grace while an approval is
+// pending or Claude still runs background tasks. Claude feeds a background
+// task's outcome back as another iteration of this turn, so only the overall
+// execution budget bounds that wait.
+func (s *processSession) holdPostResultGrace(approvalPending bool) {
+	if approvalPending || s.backgroundTasks > 0 {
+		s.postResultBudget.pause()
+	} else {
+		s.postResultBudget.resume()
+	}
+}
+
+func backgroundTasksLostMessage(tasks int) string {
+	noun := "tasks"
+	if tasks == 1 {
+		noun = "task"
+	}
+	return fmt.Sprintf("Claude ended the turn with %d background %s still running; their results were lost", tasks, noun)
 }
 
 // exitError preserves a terminal failure for the shared executor while keeping
@@ -481,7 +512,7 @@ func (p *pendingTurn) Resume(ctx context.Context, response runtime.InputResponse
 		return runtime.Outcome{}, err
 	}
 	p.session.executionBudget.resume()
-	p.session.postResultBudget.resume()
+	p.session.holdPostResultGrace(false)
 	outcome, runErr = p.driver.consume(ctx, p.session, resumedEventSink{EventSink: sink})
 	sessionOwnedByPendingTurn = runErr == nil && outcome.Pending != nil
 	return outcome, runErr
