@@ -109,6 +109,19 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 	// The image and compiler pin an exact Claude version. Prevent both automatic
 	// and manual update paths from changing that runtime after validation.
 	environment = setEnvironment(environment, config.DisableUpdatesEnvName, "1")
+	for _, policy := range []struct {
+		name    string
+		allowed bool
+	}{
+		{config.DisableBackgroundTasksEnvName, cfg.AllowBackgroundTasks},
+		{config.DisableCronEnvName, cfg.AllowScheduledTasks},
+	} {
+		value := "1"
+		if policy.allowed {
+			value = "0"
+		}
+		environment = setEnvironment(environment, policy.name, value)
+	}
 	environment, err = materializeGoogleCredentials(environment, input.EphemeralDir)
 	if err != nil {
 		return nil, err
@@ -182,7 +195,8 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 		Executable: cfg.ClaudeExecutable, ExpectedVersion: cfg.ExpectedClaudeVersion,
 		StrictVersion: cfg.StrictVersion, Workspace: input.Workspace, Model: cfg.Model,
 		AppendSystemPrompt: cfg.AppendSystemPrompt, AgentsJSON: agentsJSON, MCPConfigPath: mcpConfigPath,
-		SettingsPath: settingsPath, PermissionPromptTool: permissionPromptTool, ApprovalBroker: approvalBroker,
+		DisallowedTools: cfg.DisallowedTools,
+		SettingsPath:    settingsPath, PermissionPromptTool: permissionPromptTool, ApprovalBroker: approvalBroker,
 		SkillRoot: skillRoot, PluginDirs: pluginDirs, Environment: environment,
 		MaxEventBytes: cfg.MaxEventBytes, MaxStderrBytes: cfg.MaxStderrBytes,
 		InterruptGrace: cfg.InterruptGrace(), AwaitTelemetry: awaitTelemetry,

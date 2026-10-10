@@ -23,6 +23,8 @@ const (
 	Version                             = 5
 	ClaudeConfigDirEnvName              = "CLAUDE_CONFIG_DIR"
 	DisableUpdatesEnvName               = "DISABLE_UPDATES"
+	DisableBackgroundTasksEnvName       = "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"
+	DisableCronEnvName                  = "CLAUDE_CODE_DISABLE_CRON"
 	GoogleApplicationCredentialsEnvName = "GOOGLE_APPLICATION_CREDENTIALS"
 	GoogleCredentialsJSONEnvName        = "KAGENT_CLAUDE_GOOGLE_CREDENTIALS_JSON"
 	UseBedrockEnvName                   = "CLAUDE_CODE_USE_BEDROCK"
@@ -48,7 +50,7 @@ func OwnsEnvironment(name string) bool {
 		return true
 	}
 	switch name {
-	case ClaudeConfigDirEnvName, DisableUpdatesEnvName, GoogleApplicationCredentialsEnvName,
+	case ClaudeConfigDirEnvName, DisableUpdatesEnvName, DisableBackgroundTasksEnvName, DisableCronEnvName, GoogleApplicationCredentialsEnvName,
 		GoogleCredentialsJSONEnvName, UseBedrockEnvName, UseVertexEnvName, AWSRegionEnvName,
 		AWSAccessKeyEnvName, AWSSecretKeyEnvName, AWSSessionTokenEnvName, AWSBedrockTokenEnvName,
 		AnthropicAPIKeyEnvName, ClaudeCodeOAuthTokenEnvName, AnthropicBaseURLEnvName, VertexProjectEnvName, VertexRegionEnvName,
@@ -74,6 +76,11 @@ type Config struct {
 	Agents                map[string]Agent       `json:"agents,omitempty"`
 	SkillResources        *agentplugin.Resources `json:"skill_resources,omitempty"`
 	MCPServers            map[string]MCPServer   `json:"mcp_servers,omitempty"`
+	// Headless turns cannot depend on work that wakes the process later. These
+	// opt-ins and the native tool deny list are harness-owned execution policy.
+	AllowBackgroundTasks bool     `json:"allow_background_tasks,omitempty"`
+	AllowScheduledTasks  bool     `json:"allow_scheduled_tasks,omitempty"`
+	DisallowedTools      []string `json:"disallowed_tools"`
 	// Git is the repository policy for Session workspaces. Absent means Sessions
 	// cannot request a workspace.
 	Git *workspace.Git `json:"git,omitempty"`
@@ -113,13 +120,18 @@ func Production(model, instruction string) Config {
 		Version: Version, ClaudeExecutable: "claude",
 		ExpectedClaudeVersion: PinnedClaudeVersion, StrictVersion: true,
 		Model: model, AppendSystemPrompt: instruction,
-		MaxEventBytes: 1 << 20, MaxStderrBytes: 64 << 10,
+		DisallowedTools: defaultDisallowedTools(),
+		MaxEventBytes:   1 << 20, MaxStderrBytes: 64 << 10,
 		InterruptGraceMillis: 2000,
 	}
 }
 
+func defaultDisallowedTools() []string {
+	return []string{"ScheduleWakeup", "Monitor", "CronCreate", "CronList", "CronDelete", "RemoteTrigger"}
+}
+
 func Parse(b []byte) (Config, error) {
-	var cfg Config
+	cfg := Config{DisallowedTools: defaultDisallowedTools()}
 	dec := json.NewDecoder(strings.NewReader(string(b)))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&cfg); err != nil {
@@ -157,6 +169,11 @@ func (c Config) Validate() error {
 	}
 	if runtime := c.RuntimeTelemetry.Runtime; runtime != "" && runtime != tracing.RuntimeClaude {
 		return fmt.Errorf("claude runtime telemetry names runtime %q", runtime)
+	}
+	for _, tool := range c.DisallowedTools {
+		if !agentNamePattern.MatchString(tool) {
+			return fmt.Errorf("disallowed tool %q must be a bare tool name", tool)
+		}
 	}
 	for name, agent := range c.Agents {
 		if !agentNamePattern.MatchString(name) {

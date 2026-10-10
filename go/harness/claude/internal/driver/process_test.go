@@ -18,6 +18,8 @@ import (
 type recordingSink struct {
 	sessions []runtime.SessionStarted
 	text     strings.Builder
+	calls    []runtime.ToolCall
+	results  []runtime.ToolResult
 }
 
 func (s *recordingSink) SessionStarted(event runtime.SessionStarted) error {
@@ -28,8 +30,91 @@ func (s *recordingSink) TextDelta(event runtime.TextDelta) error {
 	s.text.WriteString(event.Text)
 	return nil
 }
-func (*recordingSink) ToolCall(runtime.ToolCall) error     { return nil }
-func (*recordingSink) ToolResult(runtime.ToolResult) error { return nil }
+func (s *recordingSink) ToolCall(event runtime.ToolCall) error {
+	s.calls = append(s.calls, event)
+	return nil
+}
+func (s *recordingSink) ToolResult(event runtime.ToolResult) error {
+	s.results = append(s.results, event)
+	return nil
+}
+
+func TestProcessDriverConsumesActivityAfterResult(t *testing.T) {
+	fixture, err := os.ReadFile("../../testdata/stream-post-result.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name    string
+		stream  string
+		failure bool
+	}{
+		{name: "success then success", stream: string(fixture)},
+		{name: "failure then success", stream: strings.Replace(string(fixture), `"subtype":"success","result":"first"`, `"subtype":"error_during_execution","result":"first"`, 1)},
+		{name: "success then failure", stream: strings.Replace(string(fixture), `"subtype":"success","result":"last"`, `"subtype":"error_during_execution","result":"last"`, 1), failure: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			streamPath := filepath.Join(dir, "stream.jsonl")
+			if err := os.WriteFile(streamPath, []byte(test.stream), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			executable := filepath.Join(dir, "claude")
+			if err := os.WriteFile(executable, []byte("#!/bin/sh\ncat >/dev/null\ncat \"$STREAM\"\n"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			driver := NewProcessDriver(ProcessConfig{
+				Executable: executable, Workspace: dir, Environment: []string{"STREAM=" + streamPath},
+				MaxEventBytes: 4096, MaxStderrBytes: 1024, InterruptGrace: 50 * time.Millisecond,
+			})
+			sink := &recordingSink{}
+			outcome, err := driver.Run(t.Context(), runtime.Turn{Prompt: "hello"}, sink)
+			if err != nil || outcome.Pending != nil || (outcome.Failure != nil) != test.failure {
+				t.Fatalf("Run() = %#v, %v", outcome, err)
+			}
+			if test.failure && outcome.Failure.Message != "last" {
+				t.Fatalf("failure = %q, want last result", outcome.Failure.Message)
+			}
+			if sink.text.String() != "firstlast" || len(sink.sessions) != 1 || len(sink.calls) != 1 || len(sink.results) != 1 {
+				t.Fatalf("streamed events = %#v, text = %q", sink, sink.text.String())
+			}
+		})
+	}
+}
+
+func TestProcessDriverDeadlineAfterResult(t *testing.T) {
+	for _, closeOutput := range []bool{false, true} {
+		t.Run(map[bool]string{false: "stream remains open", true: "stream closed before process exit"}[closeOutput], func(t *testing.T) {
+			dir := t.TempDir()
+			executable := filepath.Join(dir, "claude")
+			script := "#!/bin/sh\ntrap '' INT\ncat >/dev/null\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\"}' '{\"type\":\"assistant\",\"message\":{\"id\":\"msg_waiting\",\"content\":[{\"type\":\"text\",\"text\":\"waiting\"}]}}'\n"
+			if closeOutput {
+				script += "exec 1>&-\n"
+			}
+			script += "exec sleep 30\n"
+			if err := os.WriteFile(executable, []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			driver := NewProcessDriver(ProcessConfig{
+				Executable: executable, Workspace: dir, MaxEventBytes: 4096, MaxStderrBytes: 1024, InterruptGrace: 50 * time.Millisecond,
+			})
+			ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+			defer cancel()
+			started := time.Now()
+			sink := &recordingSink{}
+			outcome, err := driver.Run(ctx, runtime.Turn{Prompt: "hello"}, sink)
+			if !errors.Is(err, context.DeadlineExceeded) || outcome.Pending != nil {
+				t.Fatalf("Run() = %#v, %v, want deadline exceeded", outcome, err)
+			}
+			if time.Since(started) > time.Second {
+				t.Fatal("deadline did not reap the process promptly")
+			}
+			if sink.text.String() != "waiting" {
+				t.Fatal("deadline fired before the result and subsequent activity were consumed")
+			}
+		})
+	}
+}
 
 func TestResumedEventSinkDropsOnlyInterruptedResponseWarning(t *testing.T) {
 	underlying := &recordingSink{}
@@ -45,7 +130,7 @@ func TestResumedEventSinkDropsOnlyInterruptedResponseWarning(t *testing.T) {
 		t.Fatalf("resumed text = %q, want continued", underlying.text.String())
 	}
 
-	if _, err := emitEvent(Event{Kind: EventTextDelta, Text: interruptedResponseWarning}, underlying, false); err != nil {
+	if _, err := emitEvent(Event{Kind: EventTextDelta, Text: interruptedResponseWarning}, underlying); err != nil {
 		t.Fatal(err)
 	}
 	if underlying.text.String() != "continued"+interruptedResponseWarning {

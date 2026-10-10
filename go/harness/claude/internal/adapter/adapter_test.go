@@ -42,6 +42,58 @@ func TestNewMaterializesDurableDirectories(t *testing.T) {
 	}
 }
 
+func TestHeadlessPolicyReachesClaudeProcess(t *testing.T) {
+	for _, allow := range []bool{false, true} {
+		t.Run(map[bool]string{false: "safe defaults", true: "explicit opt in"}[allow], func(t *testing.T) {
+			dir := t.TempDir()
+			capture := filepath.Join(dir, "launch")
+			executable := filepath.Join(dir, "claude")
+			script := `#!/bin/sh
+printf '%s\n' "$CLAUDE_CODE_DISABLE_BACKGROUND_TASKS" "$CLAUDE_CODE_DISABLE_CRON" "$@" > "$CAPTURE"
+cat >/dev/null
+printf '%s\n' '{"type":"result","subtype":"success"}'
+`
+			if err := os.WriteFile(executable, []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			cfg := config.Production("", "")
+			cfg.ClaudeExecutable = executable
+			cfg.AllowBackgroundTasks, cfg.AllowScheduledTasks = allow, allow
+			if allow {
+				cfg.DisallowedTools = []string{}
+			}
+			raw, err := json.Marshal(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			runner, err := New(t.Context(), Input{
+				ConfigJSON: raw, Workspace: filepath.Join(dir, "workspace"), DurableDir: filepath.Join(dir, "data"), EphemeralDir: filepath.Join(dir, "generated"),
+				Environment: []string{"CAPTURE=" + capture, "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=wrong", "CLAUDE_CODE_DISABLE_CRON=wrong"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = runner.Close() })
+			// This fake emits only a result, which is returned as an outcome.
+			outcome, err := runner.Run(t.Context(), runtime.Turn{Prompt: "hello"}, nil)
+			if err != nil || outcome.Failure != nil || outcome.Pending != nil {
+				t.Fatalf("Run() = %#v, %v", outcome, err)
+			}
+			launch, err := os.ReadFile(capture)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if allow {
+				if !strings.HasPrefix(string(launch), "0\n0\n") || strings.Contains(string(launch), "--disallowedTools") {
+					t.Fatalf("opt-in launch = %s", launch)
+				}
+			} else if !strings.HasPrefix(string(launch), "1\n1\n") || !strings.Contains(string(launch), "--disallowedTools\nScheduleWakeup,Monitor,CronCreate,CronList,CronDelete,RemoteTrigger\n") {
+				t.Fatalf("headless launch = %s", launch)
+			}
+		})
+	}
+}
+
 func TestNewMaterializesSkillsAndMCPConfig(t *testing.T) {
 	durableDir := filepath.Join(t.TempDir(), "data")
 	claudeDir := filepath.Join(durableDir, "claude")

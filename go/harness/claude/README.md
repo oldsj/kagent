@@ -34,6 +34,37 @@ Credentials use [Substrate gateway injection](../../../docs/architecture/credent
 AWS IAM keys and Vertex service-account keys require local signing and are rejected
 by the compiler. Harness environment entries accept only literal values.
 
+## Turn completion and background work
+
+Each runtime turn starts one `claude -p` process with stream-JSON input and
+output, verbose output, and partial messages. The driver sends one user message
+and closes stdin. Later turns start another process with `--resume` and the
+exact durable conversation ID. A human approval parks the current live process
+and resumes it after the decision.
+
+Headless configuration defaults to `allow_background_tasks: false` and
+`allow_scheduled_tasks: false`. The adapter sets
+`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` and `CLAUDE_CODE_DISABLE_CRON=1`,
+overriding inherited environment values. The default `disallowed_tools` list
+contains `ScheduleWakeup`, `Monitor`, `CronCreate`, `CronList`, `CronDelete`,
+and `RemoteTrigger`, passed through `--disallowedTools` to remove those tools.
+These are versioned harness JSON settings; the compiler emits the safe defaults.
+Standalone configurations can opt in and replace the deny list (an explicit
+empty list clears it). Enabling background or scheduled work also requires
+removing the corresponding tools from that list. No public CRD fields are added.
+See Claude's [environment variables](https://code.claude.com/docs/en/env-vars),
+[tool reference](https://code.claude.com/docs/en/tools-reference), and
+[CLI reference](https://code.claude.com/docs/en/cli-reference).
+
+Claude can continue after an iteration's `result` when background work finishes.
+The driver consumes that activity and any further approvals until stdout ends
+and the process exits, then returns the last result once. Results whose origin
+is `task-notification` also describe a root follow-up iteration and participate
+in that outcome. The existing turn context bounds both stream consumption and
+the exit wait; cancellation interrupts, kills, and reaps the process group.
+Malformed streams and unexpected process exits still fail the turn.
+See [Claude's headless exit behavior](https://code.claude.com/docs/en/headless#background-tasks-at-exit).
+
 ## Telemetry
 
 The driver passes each prompt to Claude Code on stdin as stream-JSON. When

@@ -1,6 +1,7 @@
 package driver
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -11,6 +12,71 @@ import (
 	"github.com/kagent-dev/kagent/go/harness/runtime"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+type approvalAfterResultSink struct {
+	recordingSink
+	broker  *ApprovalBroker
+	pending *PendingApprovalRequest
+}
+
+func (s *approvalAfterResultSink) TextDelta(event runtime.TextDelta) error {
+	if event.Text == "continued after result" {
+		s.broker.requests <- s.pending
+	}
+	return s.recordingSink.TextDelta(event)
+}
+
+func TestProcessDriverApprovalAfterResult(t *testing.T) {
+	for _, approved := range []bool{true, false} {
+		t.Run(map[bool]string{true: "allowed", false: "denied"}[approved], func(t *testing.T) {
+			dir := t.TempDir()
+			decisionPath := filepath.Join(dir, "decision")
+			executable := filepath.Join(dir, "claude")
+			script := `#!/bin/sh
+cat >/dev/null
+printf '%s\n' '{"type":"system","subtype":"init","session_id":"11111111-1111-4111-8111-111111111111"}' '{"type":"result","subtype":"success"}' '{"type":"assistant","message":{"id":"msg_after","content":[{"type":"text","text":"continued after result"}]}}'
+while [ ! -f "$DECISION" ]; do sleep 0.01; done
+printf '%s\n' '{"type":"assistant","message":{"id":"msg_final","content":[{"type":"text","text":"finished"}]}}' '{"type":"result","subtype":"success","origin":{"kind":"task-notification"}}'
+`
+			if err := os.WriteFile(executable, []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			broker := &ApprovalBroker{requests: make(chan *PendingApprovalRequest, 1)}
+			pending := newTestPending("approval-after-result", "call-after-result")
+			driver := NewProcessDriver(ProcessConfig{
+				Executable: executable, Workspace: dir, Environment: []string{"DECISION=" + decisionPath},
+				MaxEventBytes: 4096, MaxStderrBytes: 1024, InterruptGrace: 50 * time.Millisecond, ApprovalBroker: broker,
+			})
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			sink := &approvalAfterResultSink{broker: broker, pending: pending}
+			outcome, err := driver.Run(ctx, runtime.Turn{Prompt: "hello"}, sink)
+			if err != nil || outcome.Pending == nil || outcome.Failure != nil {
+				t.Fatalf("Run() = %#v, %v, want parked approval", outcome, err)
+			}
+			parked := outcome.Pending
+			defer func() { _ = parked.Cancel(t.Context()) }()
+			decisionSeen := make(chan runtime.ApprovalDecision, 1)
+			go func() {
+				decision := <-pending.decision
+				decisionSeen <- decision
+				if err := os.WriteFile(decisionPath, []byte("decision\n"), 0o600); err != nil {
+					t.Errorf("write decision file: %v", err)
+				}
+			}()
+			outcome, err = parked.Resume(ctx, &runtime.ApprovalDecision{ID: pending.request.ID, Approved: approved}, sink)
+			if err != nil || outcome.Pending != nil || outcome.Failure != nil {
+				t.Fatalf("Resume() = %#v, %v", outcome, err)
+			}
+			if decision := <-decisionSeen; decision.Approved != approved {
+				t.Fatalf("permission decision = %#v", decision)
+			}
+			if sink.text.String() != "continued after resultfinished" || len(sink.sessions) != 1 {
+				t.Fatalf("resumed events = %#v", sink.recordingSink)
+			}
+		})
+	}
+}
 
 func TestApprovalBrokerAllowsAndDeniesProtectedCalls(t *testing.T) {
 	broker, err := NewApprovalBroker([]string{"production_db"}, 4096)

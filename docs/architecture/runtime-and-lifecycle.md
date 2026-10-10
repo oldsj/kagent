@@ -345,6 +345,17 @@ can retain a stale file identity and reject writes with `SQLITE_READONLY_DBMOVED
 Closing connections when returned to the pool keeps quiescent snapshots free of
 database handles; each later operation opens the current backing file.
 
+The Claude harness owns one native process per turn, retaining that process
+across human approval waits. Claude's `result` closes an iteration; background
+completion can start further activity in the same process. The harness consumes
+all iterations until stdout closes and the process exits, and returns only the
+last result as the turn outcome. The turn context bounds the stream and exit
+wait, and cleanup reaps the process group. Headless harness configuration
+disables native background tasks and scheduling by default and removes wakeup,
+monitor, cron, and remote scheduling tools. Workspaces can therefore pause
+between turns without depending on later native wakeups. See the
+[Claude harness contract](../../go/harness/claude/README.md#turn-completion-and-background-work).
+
 ## Runtime revision cleanup metrics
 
 GC uses the controller's shared OpenTelemetry provider and configured OTLP export.

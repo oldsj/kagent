@@ -80,9 +80,6 @@ func (p *parser) parseLine(line []byte, emit func(Event) error) error {
 		Result    string          `json:"result"`
 		Event     json.RawMessage `json:"event"`
 		Message   json.RawMessage `json:"message"`
-		Origin    struct {
-			Kind string `json:"kind"`
-		} `json:"origin"`
 	}
 	if err := json.Unmarshal(line, &envelope); err != nil {
 		return fmt.Errorf("decode Claude event: %w", err)
@@ -99,9 +96,8 @@ func (p *parser) parseLine(line []byte, emit func(Event) error) error {
 	case "user":
 		return p.parseUser(envelope.Message, emit)
 	case "result":
-		if envelope.Origin.Kind == "task-notification" {
-			return nil
-		}
+		// A task-notification origin identifies a follow-up iteration of the
+		// root conversation. Its result can supersede the earlier iteration.
 		p.terminal = true
 		if envelope.IsError || envelope.Subtype != "success" {
 			message := utils.SafeDiagnostic(envelope.Result)

@@ -14,6 +14,8 @@ func TestOwnsEnvironment(t *testing.T) {
 	for _, name := range []string{
 		AnthropicAPIKeyEnvName,
 		ClaudeConfigDirEnvName,
+		DisableBackgroundTasksEnvName,
+		DisableCronEnvName,
 		"CLAUDE_CODE_ENHANCED_TELEMETRY_BETA",
 		"OTEL_TRACES_EXPORTER",
 		"OTEL_LOG_RAW_API_BODIES",
@@ -41,6 +43,48 @@ func TestProductionRoundTrip(t *testing.T) {
 	}
 	if cfg.ExpectedClaudeVersion != PinnedClaudeVersion || cfg.Model != "claude-test" || cfg.AppendSystemPrompt != "help" {
 		t.Errorf("production config = %#v", cfg)
+	}
+}
+
+func TestHeadlessPolicyDefaultsAndOverrides(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		policy string
+		allow  bool
+		tools  []string
+	}{
+		{name: "default", tools: []string{"ScheduleWakeup", "Monitor", "CronCreate", "CronList", "CronDelete", "RemoteTrigger"}},
+		{name: "explicit opt in", policy: `,"allow_background_tasks":true,"allow_scheduled_tasks":true,"disallowed_tools":[]`, allow: true, tools: []string{}},
+		{name: "custom deny list", policy: `,"disallowed_tools":["Monitor","RemoteTrigger"]`, tools: []string{"Monitor", "RemoteTrigger"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg, err := Parse([]byte(`{"version":5,"claude_executable":"claude","max_event_bytes":100,"max_stderr_bytes":100,"interrupt_grace_millis":100` + test.policy + `}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.AllowBackgroundTasks != test.allow || cfg.AllowScheduledTasks != test.allow || !reflect.DeepEqual(cfg.DisallowedTools, test.tools) {
+				t.Fatalf("headless policy = %#v", cfg)
+			}
+			raw, err := json.Marshal(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			parsed, err := Parse(raw)
+			if err != nil || !reflect.DeepEqual(parsed, cfg) {
+				t.Fatalf("policy round trip = %#v, %v, want %#v", parsed, err, cfg)
+			}
+		})
+	}
+	production := Production("", "")
+	if production.AllowBackgroundTasks || production.AllowScheduledTasks || !reflect.DeepEqual(production.DisallowedTools, defaultDisallowedTools()) {
+		t.Fatalf("production headless policy = %#v", production)
+	}
+	for _, tool := range []string{"", " Monitor", "Monitor,CronCreate", "Bash(sleep *)"} {
+		cfg := Production("", "")
+		cfg.DisallowedTools = []string{tool}
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("Validate() accepted disallowed tool %q", tool)
+		}
 	}
 }
 

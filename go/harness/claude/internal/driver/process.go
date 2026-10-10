@@ -34,6 +34,7 @@ type ProcessConfig struct {
 	PermissionPromptTool string
 	SkillRoot            string
 	PluginDirs           []string
+	DisallowedTools      []string
 	Environment          []string
 	MaxEventBytes        int
 	MaxStderrBytes       int
@@ -56,14 +57,14 @@ type parseItem struct {
 }
 
 type processSession struct {
-	command   *exec.Cmd
-	items     <-chan parseItem
-	stopEmit  chan struct{}
-	wait      <-chan error
-	stderr    *utils.BoundedBuffer
-	terminal  *runtime.Outcome
-	sessionID string
-	stopOnce  sync.Once
+	command    *exec.Cmd
+	items      <-chan parseItem
+	stopEmit   chan struct{}
+	wait       <-chan error
+	stderr     *utils.BoundedBuffer
+	lastResult *runtime.Outcome
+	sessionID  string
+	stopOnce   sync.Once
 }
 
 // pendingTurn owns a Claude process blocked in the permission MCP hook. Resume
@@ -138,6 +139,9 @@ func (d *ProcessDriver) Args(turn runtime.Turn) []string {
 	}
 	if d.config.Model != "" {
 		args = append(args, "--model", d.config.Model)
+	}
+	if len(d.config.DisallowedTools) != 0 {
+		args = append(args, "--disallowedTools", strings.Join(d.config.DisallowedTools, ","))
 	}
 	if d.config.AppendSystemPrompt != "" {
 		args = append(args, "--append-system-prompt", d.config.AppendSystemPrompt)
@@ -320,16 +324,15 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 		}
 		select {
 		case request := <-approvals:
-			if session.terminal != nil {
-				return runtime.Outcome{}, fmt.Errorf("Claude requested approval after its terminal result")
-			}
+			// A result ends a Claude iteration, not necessarily this process.
+			// Background completion can start another iteration with approvals.
 			approvalPending = request
 		case item, ok := <-session.items:
 			if !ok {
 				return runtime.Outcome{}, fmt.Errorf("claude parser stopped without a result")
 			}
 			if item.event != nil {
-				outcome, err := emitEvent(*item.event, sink, session.terminal != nil)
+				outcome, err := emitEvent(*item.event, sink)
 				if err == nil {
 					if item.event.Kind == EventSessionStarted {
 						if session.sessionID != "" && session.sessionID != item.event.SessionID {
@@ -338,7 +341,9 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 						session.sessionID = item.event.SessionID
 					}
 					if outcome != nil {
-						session.terminal = outcome
+						// Only process exit settles the turn. Keep the last result
+						// while consuming any subsequent iterations in order.
+						session.lastResult = outcome
 					}
 					continue
 				}
@@ -354,17 +359,23 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 				}
 				return runtime.Outcome{}, item.err
 			}
-			if waitErr := <-session.wait; waitErr != nil {
+			var waitErr error
+			select {
+			case waitErr = <-session.wait:
+			case <-ctx.Done():
+				return runtime.Outcome{}, ctx.Err()
+			}
+			if waitErr != nil {
 				stderr := session.stderr.Diagnostic()
 				if stderr != "" {
 					logging.FromContext(ctx).WarnContext(ctx, "claude exited with an error", "error", waitErr, "stderr", stderr)
 				}
-				return runtime.Outcome{}, exitError(waitErr, session.terminal, stderr)
+				return runtime.Outcome{}, exitError(waitErr, session.lastResult, stderr)
 			}
-			if session.terminal == nil {
+			if session.lastResult == nil {
 				return runtime.Outcome{}, fmt.Errorf("claude process exited without a terminal result")
 			}
-			return *session.terminal, nil
+			return *session.lastResult, nil
 		case <-ctx.Done():
 			return runtime.Outcome{}, ctx.Err()
 		}
@@ -430,10 +441,7 @@ func (d *ProcessDriver) Close() error {
 
 // emitEvent translates a Claude event to a runtime event and emits it to the
 // provided event sink, which is then consumed by the shared A2A executor.
-func emitEvent(event Event, sink runtime.EventSink, terminal bool) (*runtime.Outcome, error) {
-	if terminal {
-		return nil, fmt.Errorf("claude emitted activity after its terminal result")
-	}
+func emitEvent(event Event, sink runtime.EventSink) (*runtime.Outcome, error) {
 	switch event.Kind {
 	case EventSessionStarted:
 		return nil, sink.SessionStarted(runtime.SessionStarted{ContinuationID: event.SessionID})
