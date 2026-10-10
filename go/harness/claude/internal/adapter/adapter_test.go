@@ -49,7 +49,7 @@ func TestHeadlessPolicyReachesClaudeProcess(t *testing.T) {
 			capture := filepath.Join(dir, "launch")
 			executable := filepath.Join(dir, "claude")
 			script := `#!/bin/sh
-printf '%s\n' "$CLAUDE_CODE_DISABLE_BACKGROUND_TASKS" "$CLAUDE_CODE_DISABLE_CRON" "$@" > "$CAPTURE"
+printf '%s\n' "$CLAUDE_CODE_DISABLE_BACKGROUND_TASKS" "$CLAUDE_CODE_DISABLE_CRON" "$CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST" "$@" > "$CAPTURE"
 cat >/dev/null
 printf '%s\n' '{"type":"result","subtype":"success"}'
 `
@@ -68,7 +68,7 @@ printf '%s\n' '{"type":"result","subtype":"success"}'
 			}
 			runner, err := New(t.Context(), Input{
 				ConfigJSON: raw, Workspace: filepath.Join(dir, "workspace"), DurableDir: filepath.Join(dir, "data"), EphemeralDir: filepath.Join(dir, "generated"),
-				Environment: []string{"CAPTURE=" + capture, "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=wrong", "CLAUDE_CODE_DISABLE_CRON=wrong"},
+				Environment: []string{"CAPTURE=" + capture, "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=wrong", "CLAUDE_CODE_DISABLE_CRON=wrong", "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=0"},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -84,10 +84,10 @@ printf '%s\n' '{"type":"result","subtype":"success"}'
 				t.Fatal(err)
 			}
 			if allow {
-				if !strings.HasPrefix(string(launch), "0\n0\n") || strings.Contains(string(launch), "--disallowedTools") {
+				if !strings.HasPrefix(string(launch), "0\n0\n1\n") || strings.Contains(string(launch), "--disallowedTools") {
 					t.Fatalf("opt-in launch = %s", launch)
 				}
-			} else if !strings.HasPrefix(string(launch), "1\n1\n") || !strings.Contains(string(launch), "--disallowedTools\nScheduleWakeup,Monitor,CronCreate,CronList,CronDelete,RemoteTrigger\n") {
+			} else if !strings.HasPrefix(string(launch), "1\n1\n1\n") || !strings.Contains(string(launch), "--disallowedTools\nScheduleWakeup,Monitor,CronCreate,CronList,CronDelete,RemoteTrigger\n") {
 				t.Fatalf("headless launch = %s", launch)
 			}
 		})
@@ -162,7 +162,7 @@ func TestNewMaterializesApprovalSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := string(settings), `{"permissions":{"ask":["mcp__protected__*"]}}`; got != want {
+	if got, want := string(settings), `{"disableAllHooks":true,"permissions":{"ask":["mcp__protected__*"]}}`; got != want {
 		t.Fatalf("approval settings = %s, want %s", got, want)
 	}
 	mcpConfig, err := os.ReadFile(filepath.Join(ephemeralDir, "mcp.json"))
@@ -203,7 +203,7 @@ func TestNewMaterializesApprovalSettings(t *testing.T) {
 	}
 	args := strings.Join(runner.Args(runtime.Turn{Prompt: "test"}), "\n")
 	for _, required := range []string{
-		"--setting-sources\n\n",
+		"--setting-sources\nuser,project\n",
 		"--settings\n" + filepath.Join(ephemeralDir, "settings.json"),
 		"--dangerously-skip-permissions",
 		"--strict-mcp-config",

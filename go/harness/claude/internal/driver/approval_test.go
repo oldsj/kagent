@@ -89,7 +89,7 @@ func TestApprovalBrokerAllowsAndDeniesProtectedCalls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := string(settings), `{"permissions":{"ask":["mcp__production_db__*"]}}`; got != want {
+	if got, want := string(settings), `{"disableAllHooks":true,"permissions":{"ask":["mcp__production_db__*"]}}`; got != want {
 		t.Fatalf("settings = %s, want %s", got, want)
 	}
 

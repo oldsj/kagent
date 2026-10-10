@@ -109,6 +109,10 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 	// The image and compiler pin an exact Claude version. Prevent both automatic
 	// and manual update paths from changing that runtime after validation.
 	environment = setEnvironment(environment, config.DisableUpdatesEnvName, "1")
+	// The compiler owns the model provider, endpoint, and credentials. This
+	// makes Claude ignore provider, auth, proxy, and TLS variables from the
+	// env of user and project settings, which a checkout can supply.
+	environment = setEnvironment(environment, config.ProviderManagedByHostEnvName, "1")
 	for _, policy := range []struct {
 		name    string
 		allowed bool

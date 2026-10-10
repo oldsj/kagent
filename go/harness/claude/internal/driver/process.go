@@ -148,12 +148,13 @@ func (d *ProcessDriver) Args(turn runtime.Turn) []string {
 		"--strict-mcp-config",
 		"--dangerously-skip-permissions",
 	}
+	settings := d.config.SettingsPath
+	if settings == "" {
+		settings = defaultHarnessSettings
+	}
+	args = append(args, "--setting-sources", settingSources, "--settings", settings)
 	if d.config.ApprovalBroker != nil {
-		args = append(args,
-			"--setting-sources", "",
-			"--settings", d.config.SettingsPath,
-			"--permission-prompt-tool", d.config.PermissionPromptTool,
-		)
+		args = append(args, "--permission-prompt-tool", d.config.PermissionPromptTool)
 	}
 	if d.config.Model != "" {
 		args = append(args, "--model", d.config.Model)
