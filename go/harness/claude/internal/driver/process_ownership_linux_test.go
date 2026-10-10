@@ -118,6 +118,18 @@ func TestReReviewCleanupRejectsReusedLeaderGroup(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer owner.release()
+		leader := exec.Command("/bin/sleep", "30")
+		if err := owner.start(leader); err != nil {
+			t.Fatal(err)
+		}
+		fd := owner.leader.fd
+		if err := owner.leader.signal(unix.SIGKILL); err != nil {
+			t.Fatal(err)
+		}
+		_ = leader.Wait()
+		// The retained numeric PID now names the peer, while the pidfd stays
+		// bound to the original, reaped leader.
+		owner.leader.pid = pid
 		staleLeader, err := os.FindProcess(pid)
 		if err != nil {
 			t.Fatal(err)
@@ -139,6 +151,9 @@ func TestReReviewCleanupRejectsReusedLeaderGroup(t *testing.T) {
 		driver := NewProcessDriver(ProcessConfig{InterruptGrace: 20 * time.Millisecond})
 		if err := driver.stopSession(session); err != nil {
 			t.Fatal(err)
+		}
+		if _, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0); !errors.Is(err, unix.EBADF) {
+			t.Fatalf("cleanup did not close the retained leader pidfd: %v", err)
 		}
 		return
 	}

@@ -77,10 +77,15 @@ Linux child subreaping and `/proc` ancestry tracking keep native descendants
 owned by the harness even after `setsid`, double-fork, or environment reset.
 Cleanup interrupts, kills, and reaps them on completion, cancellation, and
 expiry, including children holding inherited pipes open. Every signal uses
-`pidfd_send_signal` on a handle opened with `pidfd_open` before rechecking the
-observed process identity. Cleanup never signals a retained leader PID or a
+`pidfd_send_signal`. Launch captures and retains the leader pidfd through
+`SysProcAttr.PidFD`, so terminating it needs no fresh `/proc` scan or descriptor
+allocation. Descendant handles are opened with `pidfd_open` before rechecking
+their observed identity. Cleanup never signals a retained leader PID or a
 numeric process group. Adopted children are reaped with `waitid(P_PIDFD)`;
-`exec.Cmd.Wait` alone reaps the native leader.
+`exec.Cmd.Wait` alone reaps the native leader. After the interrupt allowance,
+cleanup kills remaining processes and waits at most one more interrupt allowance
+for the leader's wait and stderr drain. Discovery, signaling, or exit-wait
+failures return a cleanup error.
 
 One active native process tree is allowed per harness process, including
 parked approvals. Execution is rejected before launching Claude if the harness
@@ -91,6 +96,9 @@ before a turn. The Actor has one harness container; the payload launcher
 replaces itself with the harness, and workspace bootstrap finishes before
 calling the native driver. The dedicated Actor must not launch unrelated child
 trees during native execution. A failed cleanup retains the ownership slot.
+The leader pidfd closes after its wait completes; an unconfirmed exit retains
+the handle as well. A failed cleanup requires Actor replacement before another
+native turn can start.
 
 The pinned Substrate September 2, 2026 gVisor nightly reports
 `release-20260824.0-120-g727c8c389c36-dirty`. Its

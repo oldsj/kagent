@@ -226,7 +226,7 @@ func (d *ProcessDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime
 		_ = stdout.Close()
 		return runtime.Outcome{}, err
 	}
-	if err := cmd.Start(); err != nil {
+	if err := owner.start(cmd); err != nil {
 		owner.release()
 		_ = stdin.Close()
 		_ = stdout.Close()
@@ -551,13 +551,20 @@ func (d *ProcessDriver) stopSession(session *processSession) error {
 		case <-timer.C:
 		}
 		killErr := session.owner.kill()
-		// Finish exec.Cmd's wait before reaping adopted children. No retained
-		// leader PID is needed to decide which wait belongs to exec.Cmd.
-		<-session.wait
+		// Finish exec.Cmd's wait before reaping adopted children, but keep a
+		// failed signal or unresponsive leader from blocking this task forever.
+		timer.Reset(d.config.InterruptGrace)
+		select {
+		case <-session.wait:
+		case <-timer.C:
+			session.stopErr = errors.Join(interruptErr, killErr, fmt.Errorf("Claude leader cleanup did not finish"))
+			return
+		}
 		cleanupErr := session.owner.killAndReap()
+		closeErr := session.owner.closeLeader()
 		for range session.items {
 		}
-		session.stopErr = errors.Join(interruptErr, killErr, cleanupErr)
+		session.stopErr = errors.Join(interruptErr, killErr, cleanupErr, closeErr)
 		if session.stopErr == nil {
 			session.owner.release()
 		}

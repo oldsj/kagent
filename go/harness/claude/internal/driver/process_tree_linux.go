@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -27,6 +29,7 @@ type processIdentity struct {
 
 type processTree struct {
 	released bool
+	leader   *processHandle
 }
 
 func newProcessTree() (_ *processTree, err error) {
@@ -76,6 +79,36 @@ func (p *processTree) release() {
 	}
 }
 
+// Capture the leader's pidfd atomically with launch. Cleanup must be able to
+// signal it even when /proc discovery or new descriptor allocation fails.
+func (p *processTree) start(cmd *exec.Cmd) error {
+	leader := &processHandle{fd: -1}
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.PidFD = &leader.fd
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	leader.pid = cmd.Process.Pid
+	p.leader = leader
+	return nil
+}
+
+// Only close after exec.Cmd.Wait has finished. A failed exit wait retains both
+// the handle and the ownership slot, preventing admission over a live leader.
+func (p *processTree) closeLeader() error {
+	if p.leader == nil {
+		return nil
+	}
+	err := unix.Close(p.leader.fd)
+	p.leader = nil
+	if err != nil {
+		return fmt.Errorf("close Claude leader pidfd: %w", err)
+	}
+	return nil
+}
+
 func (p *processTree) interrupt() error { return p.signal(unix.SIGINT) }
 func (p *processTree) kill() error      { return p.signal(unix.SIGKILL) }
 
@@ -83,12 +116,20 @@ func (p *processTree) signal(signal unix.Signal) error {
 	if p.released {
 		return fmt.Errorf("Claude process ownership has been released")
 	}
+	var failures []error
+	if p.leader != nil {
+		if err := p.leader.signal(signal); err != nil {
+			failures = append(failures, err)
+		}
+	}
 	processes, err := readProcesses()
 	if err != nil {
-		return err
+		return errors.Join(append(failures, err)...)
 	}
-	var failures []error
 	for _, process := range descendants(processes, os.Getpid()) {
+		if p.leader != nil && process.pid == p.leader.pid {
+			continue // Already signaled through the retained launch handle.
+		}
 		if err := signalProcess(process, signal); err != nil {
 			failures = append(failures, err)
 		}
