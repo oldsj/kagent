@@ -3,6 +3,7 @@ package a2a
 import (
 	"context"
 	"errors"
+	"fmt"
 	"iter"
 	"reflect"
 	"slices"
@@ -718,4 +719,87 @@ func collect(seq iter.Seq2[a2atype.Event, error]) ([]a2atype.Event, []error) {
 		}
 	}
 	return events, errs
+}
+
+func healthEvent(sequence int64) runtime.HealthEvent {
+	return runtime.HealthEvent{
+		SchemaVersion: runtime.HealthSchema, EventID: fmt.Sprintf("health-%d", sequence), Sequence: sequence, Kind: "turn",
+	}
+}
+
+// Health never yields from the caller's goroutine: the driver publishes it
+// concurrently with the turn, and a slow consumer must not stall either side.
+func TestExecuteHealthIsBufferedBoundedAndConcurrencySafe(t *testing.T) {
+	total := healthBufferSize + 7
+	executor, err := New(fakeRunner{run: func(_ context.Context, _ runtime.Turn, sink runtime.EventSink) (runtime.Outcome, error) {
+		var wg sync.WaitGroup
+		wg.Go(func() {
+			for sequence := int64(1); sequence <= int64(total); sequence++ {
+				if err := sink.Health(healthEvent(sequence)); err != nil {
+					t.Errorf("Health(%d) = %v", sequence, err)
+				}
+			}
+		})
+		for range 20 {
+			if err := sink.TextDelta(runtime.TextDelta{Text: "x"}); err != nil {
+				return runtime.Outcome{}, err
+			}
+		}
+		wg.Wait()
+		return runtime.Outcome{}, nil
+	}}, &fakeContinuation{}, tracing.RuntimeTelemetry{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, errs := collect(executor.Execute(t.Context(), requestContext("task-health", "hello")))
+	if len(errs) != 0 {
+		t.Fatalf("Execute() errors = %v", errs)
+	}
+	var sequences []int64
+	terminal := -1
+	for i, event := range events {
+		switch event := event.(type) {
+		case *a2atype.TaskArtifactUpdateEvent:
+			if event.Artifact.Name != runtime.HealthSchema {
+				continue
+			}
+			if terminal >= 0 {
+				t.Fatal("health artifact published after the terminal status")
+			}
+			data := event.Artifact.Parts[0].Data().(map[string]any)
+			if string(event.Artifact.ID) != data["event_id"] || data["a2a_task_id"] != "task-health" {
+				t.Fatalf("health identity = %v / %v", event.Artifact.ID, data)
+			}
+			sequences = append(sequences, int64(data["sequence"].(float64)))
+		case *a2atype.TaskStatusUpdateEvent:
+			if event.Status.State == a2atype.TaskStateCompleted {
+				terminal = i
+			}
+		}
+	}
+	if terminal != len(events)-1 {
+		t.Fatalf("completed status is not last: %d of %d", terminal, len(events))
+	}
+	if len(sequences) < healthBufferSize || len(sequences) > total {
+		t.Fatalf("published %d health events, want between %d and %d", len(sequences), healthBufferSize, total)
+	}
+	if !slices.IsSorted(sequences) {
+		t.Fatalf("health sequences out of order: %v", sequences)
+	}
+}
+
+func TestExecuteHealthRejectsInvalidIdentityWithoutPublishing(t *testing.T) {
+	executor, err := New(fakeRunner{run: func(_ context.Context, _ runtime.Turn, sink runtime.EventSink) (runtime.Outcome, error) {
+		if err := sink.Health(runtime.HealthEvent{}); err == nil {
+			t.Error("Health accepted an event without identity")
+		}
+		return runtime.Outcome{}, nil
+	}}, &fakeContinuation{}, tracing.RuntimeTelemetry{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, errs := collect(executor.Execute(t.Context(), requestContext("task-health", "hello")))
+	if len(errs) != 0 || len(events) != 2 {
+		t.Fatalf("events/errors = %d/%v", len(events), errs)
+	}
 }
