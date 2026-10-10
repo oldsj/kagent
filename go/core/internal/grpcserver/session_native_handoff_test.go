@@ -271,7 +271,7 @@ func nativePreparationInstalled(t *testing.T, provider, scenario, profile string
 	workflow := sessionsvc.NewActorWorkflow(store, actors, substrate.NewRuntimeCredentialIssuer(kube, "kagent"), "http://kagent-controller.kagent:8083")
 	service := sessionsvc.NewService(store, policy, workflow, sessionsvc.WithEnvironmentPolicy(policy), sessionsvc.WithEnvironmentPreparer(fixedEnvironmentPreparer{prepared.Revision, composition}))
 	listener := bufconn.Listen(DefaultMaxMessageSize)
-	server, err := New(Config{Listener: listener, Authenticator: authenticator, RuntimeAuthenticator: &taskstore.Authenticator{Store: store}, SystemService: testSystemService(), SessionService: service, TaskStoreService: taskstore.NewService(store, actors)})
+	server, err := New(Config{Listener: listener, Authenticator: authenticator, RuntimeAuthenticator: &taskstore.Authenticator{Store: store}, SystemService: testSystemService(), SessionService: service, TaskStoreService: taskstore.NewService(store, actors, 0)})
 	require.NoError(t, err)
 	serverDone := make(chan error, 1)
 	go func() { serverDone <- server.Start(ctx) }()

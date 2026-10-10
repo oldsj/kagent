@@ -124,7 +124,7 @@ func TestRuntimeTaskStoreThroughGRPC(t *testing.T) {
 	generation, err := store.GetRuntimeGeneration(t.Context(), id)
 	require.NoError(t, err)
 	actors := &taskStoreFixtureActors{binding: *generation}
-	tasks := taskstore.NewService(store, actors)
+	tasks := taskstore.NewService(store, actors, 0)
 	server, err := New(Config{
 		Listener: listener, SystemService: testSystemService(),
 		Authenticator: &authimpl.InsecureAuthenticator{}, RuntimeAuthenticator: &taskstore.Authenticator{Store: store},

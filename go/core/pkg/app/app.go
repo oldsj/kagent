@@ -341,7 +341,7 @@ func Run(ctx context.Context, opts Options) error {
 	runtimeCredentials := substrate.NewRuntimeCredentialIssuer(credentialClient, resourceNamespace)
 	callbackOrigin := fmt.Sprintf("http://%s.%s:8083", utils.GetControllerName(), resourceNamespace)
 	sessionWorkflow := sessionsvc.NewActorWorkflow(store, actors, runtimeCredentials, callbackOrigin)
-	runtimeTasks := taskstore.NewService(store, actors)
+	runtimeTasks := taskstore.NewService(store, actors, kagentenv.QuiesceDelay.Get())
 	if err := manager.Add(sessionWorkflow); err != nil {
 		return fmt.Errorf("register idle session worker: %w", err)
 	}

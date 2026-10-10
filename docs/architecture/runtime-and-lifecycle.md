@@ -137,7 +137,31 @@ level with `session_id` and `idle_time`.
 
 The runtime stages a final task update and acknowledges it after native cleanup.
 That acknowledgement publishes task state and history atomically, without waiting
-for pause/suspend. A Session lifecycle worker independently claims the idle
+for automatic quiescence. `KAGENT_QUIESCE_DELAY` (Helm
+`controller.quiesceDelay`) delays automatic pause or suspension after publication.
+It defaults to `0` and is clamped to `0`–`30m`. Publication records the deadline
+in PostgreSQL using the database clock; acknowledgement retries and controller
+restarts retain it. Configuration changes affect newly settled boundaries only.
+A new turn supersedes unclaimed work during the delay. The atomic quiescence
+claim checks the deadline alongside the existing dispatch and lifecycle fences.
+The delay grants background processes time to run until eligibility; it does not
+wait for those processes to finish.
+
+Migration 7 keeps deadlines nullable: an older controller can still publish a
+boundary without a deadline, which means immediate quiescence eligibility.
+Older workers do not inspect deadlines, so enable the delay in separate GitOps
+steps:
+
+1. Deploy the new controller with `controller.quiesceDelay: "0"`.
+2. Verify that all old controller replicas have exited. Every replica runs
+   quiescence workers, regardless of leader election.
+3. Set `controller.quiesceDelay` to the desired duration, such as `15m`.
+
+For a binary rollback, first set the delay to `"0"` and finish that configuration
+rollout, then roll back the controller image. Keep schema 7 in place; older
+writers remain compatible with it.
+
+A Session lifecycle worker independently claims the idle
 boundary in PostgreSQL. INPUT_REQUIRED/AUTH_REQUIRED pauses the actor on its node;
 terminal work suspends it and records the exact external snapshot. Waiting tasks
 are not forkable. The Session stays logically READY, and Substrate ingress

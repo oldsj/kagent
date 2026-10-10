@@ -107,7 +107,10 @@ This reference covers user-configurable settings for the controller, CLI, standa
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `KAGENT_AUTH_MODE` | String | `insecure` | Controller authentication mode: insecure or trusted-proxy. trusted-proxy requires an upstream credential-validating proxy and network isolation preventing bypass. |
+| `KAGENT_AUTH_MODE` | String | `insecure` | Controller authentication mode: insecure, trusted-proxy, or service-token. trusted-proxy requires an upstream credential-validating proxy and network isolation preventing bypass. |
+| `KAGENT_AUTH_SERVICE_POLICY` | String | `(none)` | JSON Mainloop Agent and credential allowlist; required in service-token mode. |
+| `KAGENT_AUTH_SERVICE_TOKEN_CURRENT_FILE` | String | `(none)` | Current service bearer file, read on each request. |
+| `KAGENT_AUTH_SERVICE_TOKEN_NEXT_FILE` | String | `(none)` | Optional overlapping service bearer file, read on each request. |
 | `KAGENT_AUTH_USER_ID_CLAIM` | String | `(none)` | JWT claim used for the caller identity in trusted-proxy mode. Empty uses sub; a missing or empty custom claim falls back to sub. |
 | `KAGENT_CHATGPT_REFRESH_IMAGE` | String | `(none)` | Codex Harness image containing pinned Codex 0.148.0 and kagent-credential-refresh. Empty disables scheduled credential Jobs. |
 | `KAGENT_CONTROLLER_NAME` | String | `kagent-controller` | Name of the kagent controller service. |
@@ -129,6 +132,8 @@ This reference covers user-configurable settings for the controller, CLI, standa
 | `KAGENT_POSTGRES_DATABASE_MIN_CONNS` | Integer | `0` | Minimum size of the PostgreSQL connection pool |
 | `KAGENT_POSTGRES_DATABASE_URL` | String | `postgres://postgres:kagent@kagent-postgresql.kagent.svc.cluster.local:5432/postgres` | PostgreSQL connection URL. The default applies only to the controller; kagent db requires this variable or --db-url. Helm supplies its configured connection URL. |
 | `KAGENT_POSTGRES_DATABASE_URL_FILE` | String | `(none)` | File containing the PostgreSQL connection URL; takes precedence over KAGENT_POSTGRES_DATABASE_URL in the controller. |
+| `KAGENT_QUIESCE_DELAY` | Duration | `0s` | Delay after native cleanup publishes a turn before automatic workspace pause or suspension. Clamped to 0–30m; zero keeps immediate eligibility. Stored deadlines survive restarts and are superseded by new turns. |
+| `KAGENT_RUNTIME_PAYLOAD_CATALOG` | String | `(none)` | JSON provider/platform to {image, cliVersion} native payload catalog (e.g. claude/linux/arm64); images must be digest-pinned. Empty disables composed Sessions. |
 | `KAGENT_RUNTIME_REVISION_GC_INTERVAL` | Duration | `1m0s` | Interval between unreferenced runtime revision cleanup sweeps. Must be positive. |
 | `KAGENT_SANDBOX_CPU` | String | `1` | CPU limit for standalone sandbox runtimes. |
 | `KAGENT_SANDBOX_DEFAULT_TTL` | Duration | `1h0m0s` | Default standalone sandbox lifetime. |

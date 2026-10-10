@@ -23,11 +23,12 @@ import (
 )
 
 type callbackStore struct {
-	binding database.RuntimeGeneration
-	effects int
-	gates   int
-	revoked bool
-	task    *a2a.Task
+	binding      database.RuntimeGeneration
+	effects      int
+	gates        int
+	revoked      bool
+	task         *a2a.Task
+	quiesceDelay time.Duration
 }
 
 func (s *callbackStore) WithRuntimeGeneration(_ context.Context, g database.RuntimeGeneration, fn func(database.RuntimeTaskStore) error) error {
@@ -63,8 +64,9 @@ func (s *callbackStore) ListSessionTasks(context.Context, string, string, a2a.Ta
 	s.effects++
 	return []*a2a.Task{s.task}, 1, nil
 }
-func (s *callbackStore) SettleSessionTask(_ context.Context, _ string, id string, _ int64) error {
+func (s *callbackStore) SettleSessionTask(_ context.Context, _ string, id string, _ int64, delay time.Duration) error {
 	s.effects++
+	s.quiesceDelay = delay
 	if id != "own-task" {
 		return database.ErrNotFound
 	}
@@ -110,7 +112,7 @@ func TestEveryCallbackChecksGenerationBeforeData(t *testing.T) {
 					store.revoked = true
 				}
 				ctx := auth.AuthSessionTo(t.Context(), runtimeSession{binding: binding})
-				service := NewService(store, actors)
+				service := NewService(store, actors, 0)
 				wire := &a2apb.Task{Id: "own-task", ContextId: id.String(), Status: &a2apb.TaskStatus{State: a2apb.TaskState_TASK_STATE_SUBMITTED}}
 				var err error
 				switch method {
@@ -145,13 +147,26 @@ func TestForeignTaskIDsCannotSelectAnotherHistory(t *testing.T) {
 	binding := database.RuntimeGeneration{ID: uuid.New(), SessionID: id, Atespace: "team", ActorName: "issued", ActorUID: "uid", Phase: "active"}
 	store := &callbackStore{binding: binding}
 	actors := &callbackActors{binding: binding, uid: "uid"}
-	service := NewService(store, actors)
+	service := NewService(store, actors, 0)
 	ctx := auth.AuthSessionTo(t.Context(), runtimeSession{binding: binding})
 	_, err := service.GetTask(ctx, &apiv1alpha1.TaskStoreServiceGetTaskRequest{SessionId: id.String(), TaskId: "foreign-task"})
 	require.Error(t, err)
 	_, err = service.SettleTask(ctx, &apiv1alpha1.TaskStoreServiceSettleTaskRequest{SessionId: id.String(), TaskId: "foreign-task", Version: 1})
 	require.Error(t, err)
 	require.Equal(t, 2, actors.reads, "each RPC performs an uncached observation")
+}
+
+func TestSettlementPreservesConfiguredDelayInsideAuthorization(t *testing.T) {
+	id := uuid.New()
+	binding := database.RuntimeGeneration{ID: uuid.New(), SessionID: id, Atespace: "team", ActorName: "issued", ActorUID: "uid", Phase: "active"}
+	store := &callbackStore{binding: binding}
+	actors := &callbackActors{binding: binding, uid: "uid"}
+	service := NewService(store, actors, 15*time.Minute)
+	ctx := auth.AuthSessionTo(t.Context(), runtimeSession{binding: binding})
+	_, err := service.SettleTask(ctx, &apiv1alpha1.TaskStoreServiceSettleTaskRequest{SessionId: id.String(), TaskId: "own-task", Version: 1})
+	require.NoError(t, err)
+	require.Equal(t, 15*time.Minute, store.quiesceDelay)
+	require.Equal(t, 1, store.gates)
 }
 
 func TestPreparationCallbackCannotUsePublicOrUnconfiguredAuthority(t *testing.T) {
@@ -161,7 +176,7 @@ func TestPreparationCallbackCannotUsePublicOrUnconfiguredAuthority(t *testing.T)
 	for _, name := range []string{"public", "missing", "unconfigured"} {
 		t.Run(name, func(t *testing.T) {
 			store := &callbackStore{}
-			service := NewService(store, nil)
+			service := NewService(store, nil, 0)
 			ctx := t.Context()
 			if name == "public" {
 				ctx = auth.AuthSessionTo(ctx, auth.ControlPlaneSession{})
@@ -175,7 +190,7 @@ func TestPreparationCallbackCannotUsePublicOrUnconfiguredAuthority(t *testing.T)
 		})
 	}
 	request.ProtoReflect().SetUnknown([]byte{0xf8, 0x07, 0x01})
-	_, err := NewService(&callbackStore{}, nil).CompleteWorkspacePreparation(t.Context(), request)
+	_, err := NewService(&callbackStore{}, nil, 0).CompleteWorkspacePreparation(t.Context(), request)
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
 }
 
@@ -212,7 +227,7 @@ func TestGetWorkspaceRequiresPreparationOnlyWhenStoreAdmissionDoes(t *testing.T)
 			id := uuid.New()
 			binding := database.RuntimeGeneration{ID: uuid.New(), SessionID: id, Atespace: "team-a", ActorName: "session-" + id.String() + "-0123456789abcdef", ActorUID: "uid-a", Phase: "active"}
 			store := &preparationGateStore{callbackStore: &callbackStore{binding: binding}, required: required}
-			service := NewService(store, &callbackActors{binding: binding, uid: binding.ActorUID})
+			service := NewService(store, &callbackActors{binding: binding, uid: binding.ActorUID}, 0)
 			ctx := auth.AuthSessionTo(t.Context(), runtimeSession{binding: binding})
 			result, err := service.GetWorkspace(ctx, &apiv1alpha1.TaskStoreServiceGetWorkspaceRequest{SessionId: id.String()})
 			require.NoError(t, err)

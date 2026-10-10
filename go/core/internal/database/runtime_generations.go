@@ -111,7 +111,7 @@ func (c *Client) RevokeRuntimeGeneration(ctx context.Context, sessionID string) 
 // RuntimeTaskStore is the database-only callback port. The store owns its
 // transaction; the callback must never perform external network operations.
 type RuntimeTaskStore interface {
-	SettleSessionTask(context.Context, string, string, int64) error
+	SettleSessionTask(context.Context, string, string, int64, time.Duration) error
 	GetSessionForRuntime(context.Context, string, string) (*apiv1alpha1.Session, error)
 	CreateRuntimeTask(context.Context, string, []byte, *a2a.Task, string) (int64, error)
 	GetVersionedSessionTask(context.Context, string, string) (*a2a.Task, int64, error)

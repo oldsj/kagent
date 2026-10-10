@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"time"
 
 	"buf.build/go/protovalidate"
 	sessionsvc "github.com/kagent-dev/kagent/go/core/internal/service/session"
@@ -36,13 +37,14 @@ type actorReader interface {
 	GetActor(context.Context, string, string) (*ateapipb.Actor, error)
 }
 type Service struct {
-	store     database.RuntimeTaskStore
-	authority Store
-	actors    actorReader
+	store        database.RuntimeTaskStore
+	authority    Store
+	actors       actorReader
+	quiesceDelay time.Duration
 }
 
-func NewService(store Store, actors actorReader) *Service {
-	return &Service{store: store, authority: store, actors: actors}
+func NewService(store Store, actors actorReader, quiesceDelay time.Duration) *Service {
+	return &Service{store: store, authority: store, actors: actors, quiesceDelay: quiesceDelay}
 }
 
 // runtimeCall performs fresh external identity observation before opening the
@@ -61,7 +63,7 @@ func runtimeCall[T any](ctx context.Context, s *Service, sessionID string, fn fu
 	}
 	err = s.authority.WithRuntimeGeneration(ctx, binding, func(store database.RuntimeTaskStore) error {
 		var callErr error
-		result, callErr = fn(&Service{store: store})
+		result, callErr = fn(&Service{store: store, quiesceDelay: s.quiesceDelay})
 		return callErr
 	})
 	if err != nil {
@@ -194,7 +196,7 @@ func (s *Service) settleTaskOperation(ctx context.Context, input *apiv1alpha1.Ta
 	if _, err := s.session(ctx, input.SessionId); err != nil {
 		return nil, err
 	}
-	if err := s.store.SettleSessionTask(ctx, input.SessionId, input.TaskId, input.Version); err != nil {
+	if err := s.store.SettleSessionTask(ctx, input.SessionId, input.TaskId, input.Version, s.quiesceDelay); err != nil {
 		return nil, storageError(err)
 	}
 	return &apiv1alpha1.TaskStoreServiceSettleTaskResponse{}, nil

@@ -1,9 +1,12 @@
 package database
 
+// Frozen settlement code from go/core/internal/database/task_finalization.go at
+// 711eb56fd36102f448cabd3e87ba5b18804401c3. Only function names changed so the
+// deployed writer can run alongside the current writer in compatibility tests.
+
 import (
 	"context"
 	"errors"
-	"time"
 
 	a2apb "github.com/a2aproject/a2a-go/v2/a2apb/v1"
 	"github.com/a2aproject/a2a-go/v2/a2apb/v1/pbconv"
@@ -11,12 +14,11 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// SettleSessionTask publishes a saved terminal/waiting task and its history
+// legacySettleSessionTask publishes a saved terminal/waiting task and its history
 // atomically after native cleanup. It does not wait for runtime pause or snapshots.
-// The bounded delay starts at publication and is durable; retries keep its deadline.
 // Retries cannot republish an old state over a later turn. Callers authenticate
 // runtime authority; a missing or deleted session returns ErrNotFound.
-func (c *Client) SettleSessionTask(ctx context.Context, sessionID, taskID string, version int64, quiesceDelay time.Duration) error {
+func (c *Client) legacySettleSessionTask(ctx context.Context, sessionID, taskID string, version int64) error {
 	return c.withTx(ctx, func(tx pgx.Tx) error {
 		session, err := lockSession(ctx, tx, sessionID)
 		if err != nil {
@@ -48,7 +50,7 @@ func (c *Client) SettleSessionTask(ctx context.Context, sessionID, taskID string
 		if err != nil {
 			return err
 		}
-		wire, err := applyStoredBoundary(stored.Data, row.Data)
+		wire, err := legacyApplyStoredBoundary(stored.Data, row.Data)
 		if err != nil {
 			return err
 		}
@@ -64,21 +66,13 @@ func (c *Client) SettleSessionTask(ctx context.Context, sessionID, taskID string
 			return err
 		}
 		return execSQL(ctx, tx, `
-			UPDATE session_task_event SET published = TRUE,
-			    quiescence_due_at = CASE WHEN sequence = $4
-			        THEN clock_timestamp() + $5::bigint * INTERVAL '1 microsecond'
-			        ELSE quiescence_due_at END
+			UPDATE session_task_event SET published = TRUE
 			WHERE history_id = $1 AND task_id = $2 AND sequence > $3 AND sequence <= $4
-		`, session.HistoryID, taskID, row.ExpectedVersion, version, boundedQuiesceDelay(quiesceDelay).Microseconds())
+		`, session.HistoryID, taskID, row.ExpectedVersion, version)
 	})
 }
 
-// boundedQuiesceDelay keeps post-turn execution within zero to thirty minutes.
-func boundedQuiesceDelay(delay time.Duration) time.Duration {
-	return min(max(delay, 0), 30*time.Minute)
-}
-
-func applyStoredBoundary(data, eventData []byte) (*a2apb.Task, error) {
+func legacyApplyStoredBoundary(data, eventData []byte) (*a2apb.Task, error) {
 	task, event := &a2apb.Task{}, &a2apb.StreamResponse{}
 	if err := proto.Unmarshal(data, task); err != nil {
 		return nil, err

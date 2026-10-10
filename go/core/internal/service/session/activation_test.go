@@ -53,7 +53,7 @@ func settleTask(t *testing.T, store *lifecycleTestStore, session *apiv1alpha1.Se
 	version, err := store.CreateRuntimeTask(t.Context(), session.Id, hash[:], task, "")
 	require.NoError(t, err)
 	if state.Terminal() || state == a2a.TaskStateInputRequired {
-		require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, string(task.ID), version))
+		require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, string(task.ID), version, 0))
 	}
 }
 
