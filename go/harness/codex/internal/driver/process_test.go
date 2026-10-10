@@ -419,7 +419,7 @@ func TestProcessDriverReportsLiveBackgroundTerminals(t *testing.T) {
 	for _, test := range []struct {
 		name, response, wantFailure string
 	}{
-		{name: "live terminal", response: `{"id":5,"result":{"data":[{"processId":"1","itemId":"item-1","command":"make check","cwd":"/workspace"}],"nextCursor":null}}`, wantFailure: "Codex ended the turn with 1 background terminal still running; their results were lost"},
+		{name: "live terminal", response: `{"id":5,"result":{"data":[{"processId":"1","itemId":"item-1","command":"make check","cwd":"/workspace"}],"nextCursor":null}}`, wantFailure: "Codex ended the turn with 1 background terminal still running; it was stopped"},
 		{name: "no terminals", response: `{"id":5,"result":{"data":[],"nextCursor":null}}`},
 		{name: "probe error", response: `{"id":5,"error":{"code":-32601,"message":"method not found"}}`},
 	} {

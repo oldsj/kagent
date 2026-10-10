@@ -42,6 +42,13 @@ func TestBackgroundTaskHoldsPostResultGrace(t *testing.T) {
 			wantText: "waiting for checks checks passed", minElapsed: 600 * time.Millisecond,
 		},
 		{
+			// The follow-up iteration outlasts the remaining grace. It still owes
+			// the task's outcome, so the grace stays held until its result.
+			name:     "follow-up iteration outlasts grace",
+			script:   backgroundFirstIteration + "sleep 0.4\nsed -n 9,11p \"$STREAM\"\nsleep 0.5\ntail -n 1 \"$STREAM\"\n",
+			wantText: "waiting for checks checks passed", minElapsed: 900 * time.Millisecond,
+		},
+		{
 			// Without a live task, grace expiry keeps the earlier behavior: the
 			// last result is returned and later native work is stopped.
 			name:     "no live task keeps grace",
@@ -78,7 +85,7 @@ func TestExitWithLiveBackgroundTaskReportsA2AFailure(t *testing.T) {
 	message := a2atype.NewMessage(a2atype.MessageRoleUser, a2atype.NewTextPart("run checks"))
 	message.TaskID, message.ContextID = "background-lost", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 	req := &a2asrv.ExecutorContext{TaskID: message.TaskID, ContextID: message.ContextID, Message: message}
-	want := "Claude ended the turn with 1 background task still running; their results were lost"
+	want := "Claude stopped 1 background task before reporting its result"
 	var terminal int
 	for event, err := range executor.Execute(t.Context(), req) {
 		if err != nil {
@@ -93,6 +100,30 @@ func TestExitWithLiveBackgroundTaskReportsA2AFailure(t *testing.T) {
 	}
 	if terminal != 1 {
 		t.Fatalf("terminal count = %d", terminal)
+	}
+}
+
+// TestPrintModeWindDownReportsLostTask replays Claude 2.1.260's print-mode
+// wind-down: it kills a background shell after the result and exits 0 without
+// another iteration. The turn must fail rather than report the stale result.
+func TestPrintModeWindDownReportsLostTask(t *testing.T) {
+	path, err := filepath.Abs("../../testdata/stream-background-wind-down.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := `head -n 7 "$STREAM"
+sleep 0.3
+tail -n +8 "$STREAM"
+`
+	driver := scriptedDriver(t, script, "STREAM="+path)
+	driver.config.PostResultGrace = 100 * time.Millisecond
+	driver.config.TurnTimeout = 10 * time.Second
+	outcome, err := driver.Run(t.Context(), runtime.Turn{Prompt: "run checks"}, &recordingSink{})
+	if err != nil || outcome.Pending != nil {
+		t.Fatalf("Run = %#v, %v", outcome, err)
+	}
+	if want := "Claude stopped 1 background task before reporting its result"; outcome.Failure == nil || outcome.Failure.Message != want {
+		t.Fatalf("outcome = %#v, want failure %q", outcome, want)
 	}
 }
 
@@ -117,15 +148,18 @@ while [ ! -s "$ACTIVITY" ]; do sleep 0.01; done
 }
 
 func TestApprovalResumeKeepsGraceHeldForLiveTasks(t *testing.T) {
-	session := &processSession{backgroundTasks: 1, postResultBudget: newActiveBudget(time.Hour)}
-	session.holdPostResultGrace(true)
-	session.holdPostResultGrace(false)
-	if session.postResultBudget.done() != nil {
-		t.Fatal("approval decision restarted grace while a background task is live")
+	session := &processSession{backgroundTasks: BackgroundTasks{Live: 1}, postResultBudget: newActiveBudget(time.Hour)}
+	for _, owed := range []BackgroundTasks{{Live: 1}, {Unreported: 1}} {
+		session.backgroundTasks = owed
+		session.holdPostResultGrace(true)
+		session.holdPostResultGrace(false)
+		if session.postResultBudget.done() != nil {
+			t.Fatalf("approval decision restarted grace while background work %+v is owed", owed)
+		}
 	}
-	session.backgroundTasks = 0
+	session.backgroundTasks = BackgroundTasks{}
 	session.holdPostResultGrace(false)
 	if session.postResultBudget.done() == nil {
-		t.Fatal("grace did not resume after the last background task ended")
+		t.Fatal("grace did not resume after the last background outcome was reported")
 	}
 }

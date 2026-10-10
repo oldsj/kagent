@@ -75,8 +75,8 @@ type processSession struct {
 	stdout           io.ReadCloser
 	stdin            io.WriteCloser
 	stopErr          error
-	// backgroundTasks is the number of background tasks Claude reports as live.
-	backgroundTasks int
+	// backgroundTasks is Claude's background work not yet reflected in a result.
+	backgroundTasks BackgroundTasks
 }
 
 // pendingTurn owns a Claude process blocked in the permission MCP hook. Resume
@@ -437,11 +437,12 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 			if session.lastResult == nil {
 				return runtime.Outcome{}, fmt.Errorf("claude process exited without a terminal result")
 			}
-			if session.backgroundTasks > 0 && session.lastResult.Failure == nil {
-				// Claude stopped waiting, for example at its own idle ceiling, and
-				// the results never reached the conversation. The turn is incomplete.
-				logging.FromContext(ctx).WarnContext(ctx, "claude exited with live background tasks", "tasks", session.backgroundTasks)
-				return runtime.Outcome{Failure: &runtime.Failure{Message: backgroundTasksLostMessage(session.backgroundTasks)}}, nil
+			if lost := session.backgroundTasks.lost(); lost > 0 && session.lastResult.Failure == nil {
+				// Claude stopped background work after the last result, for example
+				// at print-mode wind-down or its idle ceiling, and exited without
+				// another iteration. Those outcomes never reached the conversation.
+				logging.FromContext(ctx).WarnContext(ctx, "claude exited after stopping background tasks", "tasks", lost)
+				return runtime.Outcome{Failure: &runtime.Failure{Message: backgroundTasksLostMessage(lost)}}, nil
 			}
 			return *session.lastResult, nil
 		case <-session.executionBudget.done():
@@ -456,11 +457,11 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 }
 
 // holdPostResultGrace pauses the post-result grace while an approval is
-// pending or Claude still runs background tasks. Claude feeds a background
-// task's outcome back as another iteration of this turn, so only the overall
-// execution budget bounds that wait.
+// pending or Claude owes the conversation a background task's outcome. Claude
+// feeds that outcome back as another iteration of this turn, so only the
+// overall execution budget bounds the task and its follow-up iteration.
 func (s *processSession) holdPostResultGrace(approvalPending bool) {
-	if approvalPending || s.backgroundTasks > 0 {
+	if approvalPending || s.backgroundTasks.owed() {
 		s.postResultBudget.pause()
 	} else {
 		s.postResultBudget.resume()
@@ -468,11 +469,10 @@ func (s *processSession) holdPostResultGrace(approvalPending bool) {
 }
 
 func backgroundTasksLostMessage(tasks int) string {
-	noun := "tasks"
 	if tasks == 1 {
-		noun = "task"
+		return "Claude stopped 1 background task before reporting its result"
 	}
-	return fmt.Sprintf("Claude ended the turn with %d background %s still running; their results were lost", tasks, noun)
+	return fmt.Sprintf("Claude stopped %d background tasks before reporting their results", tasks)
 }
 
 // exitError preserves a terminal failure for the shared executor while keeping

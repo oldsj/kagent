@@ -283,14 +283,14 @@ func (d *ProcessDriver) checkBackgroundTerminals(ctx context.Context, client *rp
 	if len(terminals.Data) == 0 {
 		return outcome
 	}
-	noun := "terminals"
-	if len(terminals.Data) == 1 {
-		noun = "terminal"
-	}
+	// The first page is enough to detect live terminals; the count may be low
+	// if App Server pages its response.
 	logging.FromContext(ctx).WarnContext(ctx, "codex turn completed with live background terminals", "terminals", len(terminals.Data))
-	return runtime.Outcome{Failure: &runtime.Failure{Message: fmt.Sprintf(
-		"Codex ended the turn with %d background %s still running; their results were lost", len(terminals.Data), noun,
-	)}}
+	message := "Codex ended the turn with 1 background terminal still running; it was stopped"
+	if len(terminals.Data) > 1 {
+		message = fmt.Sprintf("Codex ended the turn with %d background terminals still running; they were stopped", len(terminals.Data))
+	}
+	return runtime.Outcome{Failure: &runtime.Failure{Message: message}}
 }
 
 // handleServerRequest handles a Codex server request.

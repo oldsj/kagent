@@ -212,24 +212,40 @@ func TestParseJSONLTracksLiveBackgroundTasks(t *testing.T) {
 		startedForeground = `{"type":"system","subtype":"task_started","task_id":"agent-1","task_type":"local_agent","is_backgrounded":false}`
 		result            = `{"type":"result","subtype":"success"}`
 	)
+	windDown, err := os.ReadFile("../../testdata/stream-background-wind-down.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := func(n int) BackgroundTasks { return BackgroundTasks{Live: n} }
+	var none BackgroundTasks
 	for _, test := range []struct {
-		name  string
-		input string
-		want  []int
+		name    string
+		input   string
+		fixture bool
+		want    []BackgroundTasks
 	}{
-		{name: "fixture", input: string(fixture), want: []int{1, 0}},
-		{name: "unset backgrounding counts", input: startedLegacy + "\n" + `{"type":"system","subtype":"task_notification","task_id":"bash-2","status":"stopped"}`, want: []int{1, 0}},
-		{name: "foreground moved to background", input: startedForeground + "\n" + `{"type":"system","subtype":"task_updated","task_id":"agent-1","patch":{"is_backgrounded":true}}` + "\n" + `{"type":"system","subtype":"task_updated","task_id":"agent-1","patch":{"status":"killed"}}`, want: []int{1, 0}},
+		{name: "fixture", input: string(fixture), fixture: true, want: []BackgroundTasks{live(1), {Unreported: 1}, none}},
+		// Claude 2.1.260 kills a background shell five seconds after the
+		// result once input has ended, then exits without another result.
+		{name: "print-mode wind-down", input: string(windDown), fixture: true, want: []BackgroundTasks{live(1), {Unreported: 1}, {Unreported: 1, Stopped: 1}}},
+		{name: "unset backgrounding counts", input: startedLegacy + "\n" + `{"type":"system","subtype":"task_notification","task_id":"bash-2","status":"stopped"}`, want: []BackgroundTasks{live(1), {Unreported: 1, Stopped: 1}, none}},
+		{name: "foreground moved to background", input: startedForeground + "\n" + `{"type":"system","subtype":"task_updated","task_id":"agent-1","patch":{"is_backgrounded":true}}` + "\n" + `{"type":"system","subtype":"task_updated","task_id":"agent-1","patch":{"status":"killed"}}`, want: []BackgroundTasks{live(1), {Unreported: 1, Stopped: 1}, none}},
+		// With CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1, subagents run in the
+		// foreground and their bookends never reach the background state.
+		{name: "foreground subagent ignored", input: startedForeground + "\n" + `{"type":"system","subtype":"task_notification","task_id":"agent-1","status":"completed"}`, want: nil},
 		{name: "in-process teammates excluded", input: `{"type":"system","subtype":"task_started","task_id":"mate-1","task_type":"in_process_teammate"}`, want: nil},
-		{name: "replace set", input: startedBackground + "\n" + `{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"bash-1","task_type":"local_bash"},{"task_id":"monitor-1","task_type":"monitor"},{"task_id":"mate-1","task_type":"in_process_teammate"}]}` + "\n" + `{"type":"system","subtype":"background_tasks_changed","tasks":[]}`, want: []int{1, 2, 0}},
-		{name: "running update keeps task", input: startedBackground + "\n" + `{"type":"system","subtype":"task_updated","task_id":"bash-1","patch":{"status":"running"}}`, want: []int{1}},
+		{name: "ambient monitors excluded", input: `{"type":"system","subtype":"task_started","task_id":"ws-1","task_type":"monitor_ws","is_backgrounded":true,"ambient":true}` + "\n" + `{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"ws-1","task_type":"monitor_ws","ambient":true}]}` + "\n" + `{"type":"system","subtype":"task_updated","task_id":"ws-1","patch":{"status":"killed"}}`, want: nil},
+		{name: "monitor turning ambient is dropped", input: `{"type":"system","subtype":"task_started","task_id":"ws-1","task_type":"monitor_ws","is_backgrounded":true}` + "\n" + `{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"ws-1","task_type":"monitor_ws","ambient":true}]}` + "\n" + `{"type":"system","subtype":"task_updated","task_id":"ws-1","patch":{"status":"killed"}}`, want: []BackgroundTasks{live(1), none}},
+		{name: "replace set", input: startedBackground + "\n" + `{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"bash-1","task_type":"local_bash"},{"task_id":"monitor-1","task_type":"monitor"},{"task_id":"mate-1","task_type":"in_process_teammate"}]}` + "\n" + `{"type":"system","subtype":"background_tasks_changed","tasks":[]}`, want: []BackgroundTasks{live(1), live(2), {Unreported: 2}, none}},
+		{name: "running update keeps task", input: startedBackground + "\n" + `{"type":"system","subtype":"task_updated","task_id":"bash-1","patch":{"status":"running"}}`, want: []BackgroundTasks{live(1)}},
+		{name: "reported task ignores late bookends", input: startedBackground + "\n" + `{"type":"system","subtype":"task_updated","task_id":"bash-1","patch":{"status":"completed"}}` + "\n" + result + "\n" + `{"type":"system","subtype":"task_notification","task_id":"bash-1","status":"stopped"}`, want: []BackgroundTasks{live(1), {Unreported: 1}, none}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			input := test.input
-			if test.name != "fixture" {
+			if !test.fixture {
 				input += "\n" + result + "\n"
 			}
-			var counts []int
+			var counts []BackgroundTasks
 			if err := ParseJSONL(strings.NewReader(input), 4096, func(event Event) error {
 				if event.Kind == EventBackgroundTasks {
 					counts = append(counts, event.BackgroundTasks)
@@ -239,7 +255,7 @@ func TestParseJSONLTracksLiveBackgroundTasks(t *testing.T) {
 				t.Fatal(err)
 			}
 			if !slices.Equal(counts, test.want) {
-				t.Fatalf("background task counts = %v, want %v", counts, test.want)
+				t.Fatalf("background task states = %+v, want %+v", counts, test.want)
 			}
 		})
 	}
