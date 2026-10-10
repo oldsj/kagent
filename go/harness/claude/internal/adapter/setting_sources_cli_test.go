@@ -378,6 +378,7 @@ func (discardSink) SessionStarted(runtime.SessionStarted) error { return nil }
 func (discardSink) TextDelta(runtime.TextDelta) error           { return nil }
 func (discardSink) ToolCall(runtime.ToolCall) error             { return nil }
 func (discardSink) ToolResult(runtime.ToolResult) error         { return nil }
+func (discardSink) Health(runtime.HealthEvent) error            { return nil }
 
 // fakeModel is a minimal Anthropic Messages API. Agent-loop requests (those
 // offering the protected tool) get one Bash call that records its environment,
