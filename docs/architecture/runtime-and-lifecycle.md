@@ -365,6 +365,8 @@ dedicated Actor owns one native tree at a time and starts no unrelated children
 during a turn. Before launching Claude, the harness rejects pre-existing
 descendant trees: their later orphans lose the ancestry needed to distinguish
 them from native work. Setup subprocesses must finish and be reaped first.
+Exited orphans outside the harness process group are reaped before the check.
+Admission failures reach the client as terminal failure messages.
 Missing pidfd, subreaping, or `/proc` support rejects execution. Headless harness configuration
 disables native background tasks and scheduling by default and removes wakeup,
 monitor, cron, and remote scheduling tools. Workspaces can therefore pause

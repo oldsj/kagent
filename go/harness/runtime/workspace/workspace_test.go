@@ -166,7 +166,7 @@ func TestCheckoutStartsNoAutoMaintenance(t *testing.T) {
 	if !strings.Contains(data, "child_start") {
 		t.Fatal("trace recorded no child processes; it cannot show maintenance is off")
 	}
-	for _, line := range strings.Split(data, "\n") {
+	for line := range strings.SplitSeq(data, "\n") {
 		if strings.Contains(line, "child_start") && (strings.Contains(line, " maintenance ") || strings.Contains(line, " gc ")) {
 			t.Fatalf("checkout started automatic maintenance: %s", line)
 		}
