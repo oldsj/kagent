@@ -153,6 +153,12 @@ func (d *ProcessDriver) Args(turn runtime.Turn) []string {
 		settings = defaultHarnessSettings
 	}
 	args = append(args, "--setting-sources", settingSources, "--settings", settings)
+	if d.config.Workspace != "" {
+		// With the adapter's CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD, this
+		// loads the checkout's CLAUDE.md and .claude/rules without its
+		// settings. The adapter supplies its skills as a plugin.
+		args = append(args, "--add-dir", d.config.Workspace)
+	}
 	if d.config.ApprovalBroker != nil {
 		args = append(args, "--permission-prompt-tool", d.config.PermissionPromptTool)
 	}

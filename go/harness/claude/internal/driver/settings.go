@@ -5,14 +5,16 @@ import (
 	"fmt"
 )
 
-// settingSources loads Claude Code's user scope, which is the adapter-owned
-// CLAUDE_CONFIG_DIR, and the checkout's project scope: settings, CLAUDE.md
-// memory, and skills. The uncommitted .claude/settings.local.json is not
-// loaded.
-const settingSources = "user,project"
+// settingSources loads only Claude Code's user scope, the adapter-owned
+// CLAUDE_CONFIG_DIR. Project and local settings can run commands outside any
+// tool call (settings env reaches processes Claude starts, and helper keys
+// such as otelHeadersHelper run commands), so a checkout must not supply
+// them. The checkout's CLAUDE.md and .claude/rules load through --add-dir
+// (see Args), and the adapter supplies its skills as a plugin.
+const settingSources = "user"
 
 // harnessSettings is the --settings layer. It outranks user and project
-// settings, so their hooks cannot run. Claude evaluates ask rules before
+// settings, so hooks cannot run. Claude evaluates ask rules before
 // allow rules from any source, so project settings cannot pre-approve the
 // broker's protected tools. --strict-mcp-config keeps MCP servers to the
 // adapter's --mcp-config.

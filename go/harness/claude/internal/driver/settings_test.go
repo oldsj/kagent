@@ -27,16 +27,16 @@ func TestHarnessSettingsJSON(t *testing.T) {
 	}
 }
 
-func TestArgsLoadUserAndProjectSettings(t *testing.T) {
+func TestArgsLoadUserSettingsAndWorkspaceContext(t *testing.T) {
 	for name, test := range map[string]struct {
 		config       ProcessConfig
 		settings     string
 		promptBridge bool
 	}{
-		"no approval broker": {settings: defaultHarnessSettings},
+		"no approval broker": {config: ProcessConfig{Workspace: "/work"}, settings: defaultHarnessSettings},
 		"approval broker": {
 			config: ProcessConfig{
-				ApprovalBroker: fakeApprovalBroker(), SettingsPath: "/run/claude/settings.json",
+				Workspace: "/work", ApprovalBroker: fakeApprovalBroker(), SettingsPath: "/run/claude/settings.json",
 				PermissionPromptTool: "mcp__kagent_hitl__approve",
 			},
 			settings: "/run/claude/settings.json", promptBridge: true,
@@ -45,8 +45,11 @@ func TestArgsLoadUserAndProjectSettings(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			args := NewProcessDriver(test.config).Args(runtime.Turn{})
 			sources := slices.Index(args, "--setting-sources")
-			if sources < 0 || sources+1 >= len(args) || args[sources+1] != "user,project" {
-				t.Fatalf("arguments do not load user and project settings: %q", args)
+			if sources < 0 || sources+1 >= len(args) || args[sources+1] != "user" {
+				t.Fatalf("arguments do not load only user settings: %q", args)
+			}
+			if addDir := slices.Index(args, "--add-dir"); addDir < 0 || addDir+1 >= len(args) || args[addDir+1] != "/work" {
+				t.Fatalf("arguments do not add the workspace for its context: %q", args)
 			}
 			settings := slices.Index(args, "--settings")
 			if settings < 0 || settings+1 >= len(args) || args[settings+1] != test.settings {
