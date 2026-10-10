@@ -39,6 +39,10 @@ type EventSink interface {
 	TextDelta(TextDelta) error
 	ToolCall(ToolCall) error
 	ToolResult(ToolResult) error
+	// Health is best-effort observation. Runtimes may call it from another
+	// goroutine, concurrently with the methods above; it must not block, and its
+	// error never fails a turn.
+	Health(HealthEvent) error
 }
 
 // SessionStarted reports the stable private continuation selected by a runtime.

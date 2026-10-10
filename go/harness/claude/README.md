@@ -65,6 +65,27 @@ the last result's success or failure. Later results do not reset the allowance.
 Results whose origin is `task-notification` describe a root follow-up iteration
 and participate in that outcome.
 
+When background tasks are enabled, Claude reports a background task's outcome
+to the model in a later model request, often a follow-up iteration after a
+result. The driver tracks background tasks from Claude's `task_started`,
+`task_updated`, `task_notification`, and `background_tasks_changed` events, as
+Claude Code's SDK does, and treats a task as reported once a main-loop model
+request (`status: requesting`) starts after the task ends and that iteration
+produces a result. Foreground tasks, in-process teammates, and ambient monitors
+are not tracked.
+
+A turn succeeds only if every background task it started has been reported.
+How the task ended does not matter; completed, failed, killed, and stopped
+tasks all count once the model has seen them. If Claude exits with any task
+unreported, the turn reports an A2A failure naming how many, instead of the
+earlier result's success. This covers each way the pinned Claude 2.1.260 drops
+background work: it kills background shells five seconds after its input ends,
+and at its wait ceiling it kills background agents and Monitor watches, in some
+cases flushing a result it held after the kill. The post-result grace pauses
+while any task is unreported, so a long check and its follow-up iteration
+finish in the same turn; the overall turn timeout still bounds the wait. The
+grace only bounds later output and never decides whether the turn succeeded.
+
 The driver also enforces `turn_timeout_millis`, defaulting to two hours, from
 process start. Both budgets pause while tool approval is pending and resume with
 their remaining time after a decision. They apply even when the A2A SDK detaches
@@ -89,7 +110,11 @@ failures return a cleanup error.
 
 One active native process tree is allowed per harness process, including
 parked approvals. Execution is rejected before launching Claude if the harness
-already has descendants, including zombies and adopted orphans. Excluding an
+already has descendants, including adopted orphans. First it reaps exited
+orphans outside its own process group, such as Git maintenance that detached
+with `setsid`; the harness is PID 1 in the Actor and nothing else would reap
+them. Zombies in its own group may still belong to a pending `exec.Cmd` wait
+and are left in place, so they reject execution. Excluding an
 existing tree at launch cannot identify children it later orphans, so embedders
 must use a dedicated harness process and finish and reap setup subprocesses
 before a turn. The Actor has one harness container; the payload launcher

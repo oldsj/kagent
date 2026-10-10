@@ -149,6 +149,30 @@ func TestCheckoutWithoutCredentialSendsNoHeader(t *testing.T) {
 	}
 }
 
+// A detached auto-maintenance child would outlive git and leave the PID 1
+// harness with a zombie that blocks Claude process supervision.
+func TestCheckoutStartsNoAutoMaintenance(t *testing.T) {
+	url, _ := originRepo(t)
+	trace := filepath.Join(t.TempDir(), "trace2")
+	g, err := newGitRunner(append(os.Environ(), append(gitIdentity, "GIT_TRACE2="+trace)...))
+	if err != nil || g.pathErr != nil {
+		t.Skip("git is not available")
+	}
+	dir, state := t.TempDir(), t.TempDir()
+	if err := g.checkout(context.Background(), checkout{Dir: dir, StateDir: state, Repo: url, Ref: "dev", Depth: 1}); err != nil {
+		t.Fatal(err)
+	}
+	data := string(mustRead(t, trace))
+	if !strings.Contains(data, "child_start") {
+		t.Fatal("trace recorded no child processes; it cannot show maintenance is off")
+	}
+	for line := range strings.SplitSeq(data, "\n") {
+		if strings.Contains(line, "child_start") && (strings.Contains(line, " maintenance ") || strings.Contains(line, " gc ")) {
+			t.Fatalf("checkout started automatic maintenance: %s", line)
+		}
+	}
+}
+
 // agentCommit makes a commit the way an agent would: a new file and a local commit.
 func agentCommit(t *testing.T, dir string) string {
 	t.Helper()

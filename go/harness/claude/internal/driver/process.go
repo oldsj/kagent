@@ -74,6 +74,9 @@ type processSession struct {
 	stdout           io.ReadCloser
 	stdin            io.WriteCloser
 	stopErr          error
+	// backgroundTasks counts background tasks Claude has not yet reported to
+	// the conversation.
+	backgroundTasks int
 }
 
 // pendingTurn owns a Claude process blocked in the permission MCP hook. Resume
@@ -241,7 +244,7 @@ func (d *ProcessDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime
 	parseDone := make(chan struct{})
 	go func() {
 		defer close(items)
-		parseErr := ParseJSONL(stdout, d.config.MaxEventBytes, func(event Event) error {
+		parseErr := parseJSONL(stdout, d.config.MaxEventBytes, d.config.Workspace, d.config.ExpectedVersion, func(event Event) error {
 			select {
 			case items <- parseItem{event: &event}:
 				return nil
@@ -344,6 +347,10 @@ func sendPrompt(ctx context.Context, stdin io.WriteCloser, message []byte, gate 
 }
 
 func (d *ProcessDriver) consume(ctx context.Context, session *processSession, sink runtime.EventSink) (runtime.Outcome, error) {
+	// Health is observation only: it never fails, delays or blocks cancellation
+	// of the turn it describes.
+	health := startHealthPublisher(sink)
+	defer health.close(ctx)
 	var approvalPending *PendingApprovalRequest
 	for {
 		if err := ctx.Err(); err != nil {
@@ -353,7 +360,7 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 			if !approvalPending.waiting() {
 				approvalPending = nil
 				session.executionBudget.resume()
-				session.postResultBudget.resume()
+				session.holdPostResultGrace(false)
 				continue
 			}
 			return runtime.Outcome{Pending: &pendingTurn{
@@ -383,12 +390,21 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 			// Background completion can start another iteration with approvals.
 			approvalPending = request
 			session.executionBudget.pause()
-			session.postResultBudget.pause()
+			session.holdPostResultGrace(true)
 		case item, ok := <-items:
 			if !ok {
 				return runtime.Outcome{}, fmt.Errorf("claude parser stopped without a result")
 			}
+			if item.event != nil && item.event.Kind == EventHealth {
+				health.publish(item.event.Health)
+				continue
+			}
 			if item.event != nil {
+				if item.event.Kind == EventBackgroundTasks {
+					session.backgroundTasks = item.event.BackgroundTasks
+					session.holdPostResultGrace(approvalPending != nil)
+					continue
+				}
 				outcome, err := emitEvent(*item.event, sink)
 				if err == nil {
 					if item.event.Kind == EventSessionStarted {
@@ -402,9 +418,7 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 						// iterations. Later results do not reset that allowance.
 						if session.postResultBudget == nil {
 							session.postResultBudget = newActiveBudget(d.config.PostResultGrace)
-							if approvalPending != nil {
-								session.postResultBudget.pause()
-							}
+							session.holdPostResultGrace(approvalPending != nil)
 						}
 						session.lastResult = outcome
 					}
@@ -436,6 +450,13 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 			if session.lastResult == nil {
 				return runtime.Outcome{}, fmt.Errorf("claude process exited without a terminal result")
 			}
+			if session.backgroundTasks > 0 && session.lastResult.Failure == nil {
+				// Fail closed: a result only stands for the work the model saw.
+				// Claude kills background work at print-mode wind-down and its wait
+				// ceiling, and may flush a held result after the kill.
+				logging.FromContext(ctx).WarnContext(ctx, "claude exited with unreported background tasks", "tasks", session.backgroundTasks)
+				return runtime.Outcome{Failure: &runtime.Failure{Message: backgroundTasksUnreportedMessage(session.backgroundTasks)}}, nil
+			}
 			return *session.lastResult, nil
 		case <-session.executionBudget.done():
 			return runtime.Outcome{}, runtime.NewTerminalFailure("Claude execution budget exceeded (approval wait time excluded)", errExecutionBudgetExceeded)
@@ -446,6 +467,26 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 			return runtime.Outcome{}, ctx.Err()
 		}
 	}
+}
+
+// holdPostResultGrace pauses the post-result grace while an approval is
+// pending or a background task is unreported. Claude feeds a task's outcome
+// back as another iteration of this turn, so only the overall execution budget
+// bounds the task and its follow-up iteration. The grace therefore expires only
+// when every task has been reported, and never decides a turn's success.
+func (s *processSession) holdPostResultGrace(approvalPending bool) {
+	if approvalPending || s.backgroundTasks > 0 {
+		s.postResultBudget.pause()
+	} else {
+		s.postResultBudget.resume()
+	}
+}
+
+func backgroundTasksUnreportedMessage(tasks int) string {
+	if tasks == 1 {
+		return "Claude ended the turn before reporting the outcome of 1 background task"
+	}
+	return fmt.Sprintf("Claude ended the turn before reporting the outcome of %d background tasks", tasks)
 }
 
 // exitError preserves a terminal failure for the shared executor while keeping
@@ -485,7 +526,7 @@ func (p *pendingTurn) Resume(ctx context.Context, response runtime.InputResponse
 		return runtime.Outcome{}, err
 	}
 	p.session.executionBudget.resume()
-	p.session.postResultBudget.resume()
+	p.session.holdPostResultGrace(false)
 	outcome, runErr = p.driver.consume(ctx, p.session, resumedEventSink{EventSink: sink})
 	sessionOwnedByPendingTurn = runErr == nil && outcome.Pending != nil
 	return outcome, runErr
