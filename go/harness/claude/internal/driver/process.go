@@ -254,16 +254,16 @@ func (d *ProcessDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime
 		}
 	}()
 	waitDone := make(chan error, 1)
-	go func() {
-		<-parseDone
-		waitDone <- cmd.Wait()
-		close(waitDone)
-	}()
 	session := &processSession{
 		command: cmd, items: items, stopEmit: stopEmit, wait: waitDone, stderr: stderr,
 		executionBudget: newActiveBudget(d.config.TurnTimeout),
 		owner:           owner, stdout: stdout, stdin: stdin,
 	}
+	go func() {
+		<-parseDone
+		waitDone <- session.command.Wait()
+		close(waitDone)
+	}()
 	go sendPrompt(ctx, stdin, message, gate, parseDone)
 	sessionOwnedByPendingTurn := false
 	defer func() {
@@ -544,22 +544,20 @@ func (d *ProcessDriver) stopSession(session *processSession) error {
 		_ = session.stdin.Close()
 		_ = session.stdout.Close()
 		interruptErr := session.owner.interrupt()
-		_ = utils.InterruptProcessGroup(session.command.Process)
 		timer := time.NewTimer(d.config.InterruptGrace)
 		defer timer.Stop()
 		select {
 		case <-session.wait:
-			// The group leader can exit on the interrupt while a descendant that
-			// ignores it remains alive. Kill any processes still in the group.
-			_ = utils.KillProcessGroup(session.command.Process)
 		case <-timer.C:
-			_ = utils.KillProcessGroup(session.command.Process)
 		}
-		cleanupErr := session.owner.killAndReap(session.command.Process.Pid)
+		killErr := session.owner.kill()
+		// Finish exec.Cmd's wait before reaping adopted children. No retained
+		// leader PID is needed to decide which wait belongs to exec.Cmd.
 		<-session.wait
+		cleanupErr := session.owner.killAndReap()
 		for range session.items {
 		}
-		session.stopErr = errors.Join(interruptErr, cleanupErr)
+		session.stopErr = errors.Join(interruptErr, killErr, cleanupErr)
 		if session.stopErr == nil {
 			session.owner.release()
 		}

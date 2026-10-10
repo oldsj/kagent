@@ -76,11 +76,34 @@ streams and unexpected process exits still fail the turn.
 Linux child subreaping and `/proc` ancestry tracking keep native descendants
 owned by the harness even after `setsid`, double-fork, or environment reset.
 Cleanup interrupts, kills, and reaps them on completion, cancellation, and
-expiry, including children holding inherited pipes open. One active native
-process tree is allowed per harness process, including parked approvals;
-preexisting child trees are excluded. The dedicated Actor must not launch
-unrelated child trees during native execution. Unsupported platforms or a
-failure to establish process ownership reject execution.
+expiry, including children holding inherited pipes open. Every signal uses
+`pidfd_send_signal` on a handle opened with `pidfd_open` before rechecking the
+observed process identity. Cleanup never signals a retained leader PID or a
+numeric process group. Adopted children are reaped with `waitid(P_PIDFD)`;
+`exec.Cmd.Wait` alone reaps the native leader.
+
+One active native process tree is allowed per harness process, including
+parked approvals. Execution is rejected before launching Claude if the harness
+already has descendants, including zombies and adopted orphans. Excluding an
+existing tree at launch cannot identify children it later orphans, so embedders
+must use a dedicated harness process and finish and reap setup subprocesses
+before a turn. The Actor has one harness container; the payload launcher
+replaces itself with the harness, and workspace bootstrap finishes before
+calling the native driver. The dedicated Actor must not launch unrelated child
+trees during native execution. A failed cleanup retains the ownership slot.
+
+The pinned Substrate September 2, 2026 gVisor nightly reports
+`release-20260824.0-120-g727c8c389c36-dirty`. Its
+[amd64 and arm64 syscall tables](https://github.com/google/gvisor/blob/727c8c389c36/pkg/sentry/syscalls/linux/linux64.go)
+support both pidfd syscalls, its
+[thread syscalls](https://github.com/google/gvisor/blob/727c8c389c36/pkg/sentry/syscalls/linux/sys_thread.go)
+implement `pidfd_open` and `waitid(P_PIDFD)`, and its
+[signal implementation](https://github.com/google/gvisor/blob/727c8c389c36/pkg/sentry/kernel/pidfd.go)
+retains the target identity and returns ESRCH after it is reaped. This is source
+evidence; live Actor qualification is separate. Each turn probes pidfd signaling
+and reaping support before launch. Unsupported platforms, syscall filters, or
+a failure to establish process ownership reject execution; there is no numeric
+PID fallback.
 See [Claude's headless exit behavior](https://code.claude.com/docs/en/headless#background-tasks-at-exit).
 
 ## Telemetry
