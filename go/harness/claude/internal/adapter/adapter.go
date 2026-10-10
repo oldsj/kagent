@@ -89,7 +89,12 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 	}
 	var pluginDirs []string
 	if cfg.SkillResources != nil {
-		skillsDir := filepath.Join(skillRoot, ".claude", "skills")
+		// skillRoot is a harness-owned plugin, so selected skills load without
+		// the project setting source. Claude names them kagent:<skill>.
+		if err := writePluginManifest(skillRoot, compilerSkillsPluginName); err != nil {
+			return nil, fmt.Errorf("prepare generated Claude skills plugin: %w", err)
+		}
+		skillsDir := filepath.Join(skillRoot, "skills")
 		if err := utils.EnsurePrivateDir(skillsDir); err != nil {
 			return nil, fmt.Errorf("prepare generated Claude skills directory: %w", err)
 		}
@@ -100,8 +105,13 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 		if err != nil {
 			return nil, fmt.Errorf("materialize Claude skills: %w", err)
 		}
-		pluginDirs = materialized.ClaudeFormatPluginRoots()
+		pluginDirs = append(materialized.ClaudeFormatPluginRoots(), skillRoot)
 	}
+	workspaceSkills, err := materializeWorkspaceSkills(input.EphemeralDir, input.Workspace)
+	if err != nil {
+		return nil, err
+	}
+	pluginDirs = append(pluginDirs, workspaceSkills)
 	environment := setEnvironment(input.Environment, config.ClaudeConfigDirEnvName, claudeDir)
 	// The native runtime inherits the compiled identity through the standard
 	// resource variable, so no user-supplied marker is required.
@@ -109,6 +119,13 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 	// The image and compiler pin an exact Claude version. Prevent both automatic
 	// and manual update paths from changing that runtime after validation.
 	environment = setEnvironment(environment, config.DisableUpdatesEnvName, "1")
+	// The compiler owns the model provider, endpoint, and credentials. This
+	// makes Claude ignore provider, auth, proxy, and TLS variables from the
+	// env of user and project settings, which a checkout can supply.
+	environment = setEnvironment(environment, config.ProviderManagedByHostEnvName, "1")
+	// The driver loads no project settings and adds the workspace with
+	// --add-dir. This loads that directory's CLAUDE.md and .claude/rules.
+	environment = setEnvironment(environment, config.AdditionalDirectoriesMemoryEnvName, "1")
 	for _, policy := range []struct {
 		name    string
 		allowed bool
@@ -197,11 +214,48 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 		AppendSystemPrompt: cfg.AppendSystemPrompt, AgentsJSON: agentsJSON, MCPConfigPath: mcpConfigPath,
 		DisallowedTools: cfg.DisallowedTools,
 		SettingsPath:    settingsPath, PermissionPromptTool: permissionPromptTool, ApprovalBroker: approvalBroker,
-		SkillRoot: skillRoot, PluginDirs: pluginDirs, Environment: environment,
+		PluginDirs: pluginDirs, Environment: environment,
 		MaxEventBytes: cfg.MaxEventBytes, MaxStderrBytes: cfg.MaxStderrBytes,
 		InterruptGrace: cfg.InterruptGrace(), AwaitTelemetry: awaitTelemetry,
 		PostResultGrace: cfg.PostResultGrace(), TurnTimeout: cfg.TurnTimeout(),
 	}), nil
+}
+
+// Plugin names for harness-owned skill roots. Claude names their skills
+// <plugin>:<skill>.
+const (
+	compilerSkillsPluginName  = "kagent"
+	workspaceSkillsPluginName = "workspace"
+)
+
+// writePluginManifest makes root a Claude plugin with only a name: no hooks,
+// MCP servers, or other components besides what sits under root.
+func writePluginManifest(root, name string) error {
+	manifest, err := json.Marshal(map[string]string{"name": name})
+	if err != nil {
+		return err
+	}
+	return utils.ReplacePrivateFile(filepath.Join(root, ".claude-plugin", "plugin.json"), manifest)
+}
+
+// materializeWorkspaceSkills returns a harness-owned plugin root whose skills
+// directory links to the checkout's .claude/skills. Claude loads a checkout's
+// own skills only with the project setting source, whose settings can run
+// commands. The link is read on each Claude start, so new checkout skills
+// appear on the next turn.
+func materializeWorkspaceSkills(ephemeralDir, workspace string) (string, error) {
+	root := filepath.Join(ephemeralDir, "workspace-skills")
+	if err := writePluginManifest(root, workspaceSkillsPluginName); err != nil {
+		return "", fmt.Errorf("materialize Claude workspace skills plugin: %w", err)
+	}
+	link := filepath.Join(root, "skills")
+	if err := os.Remove(link); err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("replace Claude workspace skills link: %w", err)
+	}
+	if err := os.Symlink(filepath.Join(workspace, ".claude", "skills"), link); err != nil {
+		return "", fmt.Errorf("link Claude workspace skills: %w", err)
+	}
+	return root, nil
 }
 
 func approvalServerNames(servers map[string]config.MCPServer) (protected []string) {

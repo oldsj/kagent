@@ -33,7 +33,6 @@ type ProcessConfig struct {
 	MCPConfigPath        string
 	SettingsPath         string
 	PermissionPromptTool string
-	SkillRoot            string
 	PluginDirs           []string
 	DisallowedTools      []string
 	Environment          []string
@@ -151,12 +150,22 @@ func (d *ProcessDriver) Args(turn runtime.Turn) []string {
 		"--strict-mcp-config",
 		"--dangerously-skip-permissions",
 	}
+	settings := d.config.SettingsPath
+	if settings == "" {
+		settings = defaultHarnessSettings
+	}
+	args = append(args, "--setting-sources", settingSources, "--settings", settings)
+	if d.config.Workspace != "" {
+		// With the adapter's CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD, this
+		// loads the checkout's CLAUDE.md and .claude/rules. Claude also reads
+		// the checkout's enabledPlugins and extraKnownMarketplaces, which can
+		// enable plugins already installed in the harness-owned user scope;
+		// the harness settings still block their hooks and MCP servers. The
+		// adapter supplies the checkout's skills as a plugin.
+		args = append(args, "--add-dir", d.config.Workspace)
+	}
 	if d.config.ApprovalBroker != nil {
-		args = append(args,
-			"--setting-sources", "",
-			"--settings", d.config.SettingsPath,
-			"--permission-prompt-tool", d.config.PermissionPromptTool,
-		)
+		args = append(args, "--permission-prompt-tool", d.config.PermissionPromptTool)
 	}
 	if d.config.Model != "" {
 		args = append(args, "--model", d.config.Model)
@@ -172,11 +181,6 @@ func (d *ProcessDriver) Args(turn runtime.Turn) []string {
 	}
 	if d.config.MCPConfigPath != "" {
 		args = append(args, "--mcp-config", d.config.MCPConfigPath)
-	}
-	if d.config.SkillRoot != "" {
-		// --add-dir exposes compiler-selected skills materialized beneath
-		// SkillRoot/.claude/skills.
-		args = append(args, "--add-dir", d.config.SkillRoot)
 	}
 	for _, dir := range d.config.PluginDirs {
 		args = append(args, "--plugin-dir", dir)

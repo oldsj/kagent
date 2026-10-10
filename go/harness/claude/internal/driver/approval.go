@@ -121,17 +121,7 @@ func (b *ApprovalBroker) SettingsJSON() ([]byte, error) {
 		ask = append(ask, "mcp__"+name+"__*")
 	}
 	slices.Sort(ask)
-	settings := struct {
-		Permissions struct {
-			Ask []string `json:"ask"`
-		} `json:"permissions"`
-	}{}
-	settings.Permissions.Ask = ask
-	raw, err := json.Marshal(settings)
-	if err != nil {
-		return nil, fmt.Errorf("encode Claude approval settings: %w", err)
-	}
-	return raw, nil
+	return HarnessSettingsJSON(ask)
 }
 
 // Close stops the private listener. Pending process ownership is retained by
