@@ -237,7 +237,7 @@ func (d *ProcessDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime
 	parseDone := make(chan struct{})
 	go func() {
 		defer close(items)
-		parseErr := ParseJSONL(stdout, d.config.MaxEventBytes, func(event Event) error {
+		parseErr := parseJSONL(stdout, d.config.MaxEventBytes, d.config.Workspace, d.config.ExpectedVersion, func(event Event) error {
 			select {
 			case items <- parseItem{event: &event}:
 				return nil
@@ -340,6 +340,10 @@ func sendPrompt(ctx context.Context, stdin io.WriteCloser, message []byte, gate 
 }
 
 func (d *ProcessDriver) consume(ctx context.Context, session *processSession, sink runtime.EventSink) (runtime.Outcome, error) {
+	// Health is observation only: it never fails, delays or blocks cancellation
+	// of the turn it describes.
+	health := startHealthPublisher(sink)
+	defer health.close(ctx)
 	var approvalPending *PendingApprovalRequest
 	for {
 		if err := ctx.Err(); err != nil {
@@ -383,6 +387,10 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 		case item, ok := <-items:
 			if !ok {
 				return runtime.Outcome{}, fmt.Errorf("claude parser stopped without a result")
+			}
+			if item.event != nil && item.event.Kind == EventHealth {
+				health.publish(item.event.Health)
+				continue
 			}
 			if item.event != nil {
 				outcome, err := emitEvent(*item.event, sink)
