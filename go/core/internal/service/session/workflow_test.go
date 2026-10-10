@@ -311,7 +311,7 @@ func lifecycleForkFixture(t *testing.T, store *lifecycleTestStore, actors *lifec
 	hash := sha256.Sum256([]byte("fixture-complete"))
 	version, err := store.UpdateSessionTask(t.Context(), source.Id, initialVersion, hash[:], task, task, "")
 	require.NoError(t, err)
-	require.NoError(t, store.SettleSessionTask(t.Context(), source.Id, string(task.ID), version))
+	require.NoError(t, store.SettleSessionTask(t.Context(), source.Id, string(task.ID), version, 0))
 	boundary, err := store.ClaimSessionQuiescence(t.Context())
 	require.NoError(t, err)
 	require.NoError(t, store.FinishSessionQuiescence(t.Context(), boundary,

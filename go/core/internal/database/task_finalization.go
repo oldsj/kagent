@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"errors"
+	"time"
 
 	a2apb "github.com/a2aproject/a2a-go/v2/a2apb/v1"
 	"github.com/a2aproject/a2a-go/v2/a2apb/v1/pbconv"
@@ -12,9 +13,10 @@ import (
 
 // SettleSessionTask publishes a saved terminal/waiting task and its history
 // atomically after native cleanup. It does not wait for runtime pause or snapshots.
+// The bounded delay starts at publication and is durable; retries keep its deadline.
 // Retries cannot republish an old state over a later turn. Callers authenticate
 // runtime authority; a missing or deleted session returns ErrNotFound.
-func (c *Client) SettleSessionTask(ctx context.Context, sessionID, taskID string, version int64) error {
+func (c *Client) SettleSessionTask(ctx context.Context, sessionID, taskID string, version int64, quiesceDelay time.Duration) error {
 	return c.withTx(ctx, func(tx pgx.Tx) error {
 		session, err := lockSession(ctx, tx, sessionID)
 		if err != nil {
@@ -62,10 +64,18 @@ func (c *Client) SettleSessionTask(ctx context.Context, sessionID, taskID string
 			return err
 		}
 		return execSQL(ctx, tx, `
-			UPDATE session_task_event SET published = TRUE
+			UPDATE session_task_event SET published = TRUE,
+			    quiescence_due_at = CASE WHEN sequence = $4
+			        THEN clock_timestamp() + $5::bigint * INTERVAL '1 microsecond'
+			        ELSE quiescence_due_at END
 			WHERE history_id = $1 AND task_id = $2 AND sequence > $3 AND sequence <= $4
-		`, session.HistoryID, taskID, row.ExpectedVersion, version)
+		`, session.HistoryID, taskID, row.ExpectedVersion, version, boundedQuiesceDelay(quiesceDelay).Microseconds())
 	})
+}
+
+// boundedQuiesceDelay keeps post-turn execution within zero to thirty minutes.
+func boundedQuiesceDelay(delay time.Duration) time.Duration {
+	return min(max(delay, 0), 30*time.Minute)
 }
 
 func applyStoredBoundary(data, eventData []byte) (*a2apb.Task, error) {

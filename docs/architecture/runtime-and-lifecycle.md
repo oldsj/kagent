@@ -137,7 +137,17 @@ level with `session_id` and `idle_time`.
 
 The runtime stages a final task update and acknowledges it after native cleanup.
 That acknowledgement publishes task state and history atomically, without waiting
-for pause/suspend. A Session lifecycle worker independently claims the idle
+for automatic quiescence. `KAGENT_QUIESCE_DELAY` (Helm
+`controller.quiesceDelay`) delays automatic pause or suspension after publication.
+It defaults to `0` and is clamped to `0`–`30m`. Publication records the deadline
+in PostgreSQL using the database clock; acknowledgement retries and controller
+restarts retain it. Configuration changes affect newly settled boundaries only.
+A new turn supersedes unclaimed work during the delay. The atomic quiescence
+claim checks the deadline alongside the existing dispatch and lifecycle fences.
+The delay grants background processes time to run until eligibility; it does not
+wait for those processes to finish.
+
+A Session lifecycle worker independently claims the idle
 boundary in PostgreSQL. INPUT_REQUIRED/AUTH_REQUIRED pauses the actor on its node;
 terminal work suspends it and records the exact external snapshot. Waiting tasks
 are not forkable. The Session stays logically READY, and Substrate ingress

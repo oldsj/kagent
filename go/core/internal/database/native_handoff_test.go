@@ -370,9 +370,10 @@ func TestNativePreparationMigrationReplay(t *testing.T) {
 	require.NoError(t, migrations.RunUp(t.Context(), dsn, migrations.BuiltinSources(false)))
 	require.NoError(t, migrations.RunUp(t.Context(), dsn, migrations.BuiltinSources(false)))
 	require.NoError(t, migrations.WithProvider(t.Context(), dsn, migrations.BuiltinSources(false)[0], func(p *goose.Provider) error {
-		result, err := p.Down(t.Context())
+		result, err := p.DownTo(t.Context(), 5)
 		require.NoError(t, err)
-		require.Equal(t, int64(6), result.Source.Version)
+		require.NotEmpty(t, result)
+		require.Equal(t, int64(6), result[len(result)-1].Source.Version)
 		return nil
 	}))
 	require.NoError(t, migrations.RunUp(t.Context(), dsn, migrations.BuiltinSources(false)))

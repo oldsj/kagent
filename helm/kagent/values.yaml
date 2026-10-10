@@ -444,6 +444,10 @@ controller:
   # 168h is seven days; 0 disables expiration. Audit history and checkpoints remain.
   sessionIdleTTL: "168h"
 
+  # Delay after a turn settles before automatic workspace pause or suspension.
+  # Go duration; clamped to 0–30m. Zero keeps immediate eligibility.
+  quiesceDelay: "0"
+
   # Longest lifetime a session share may request; shares created without one receive it.
   # 0 leaves shares valid until revoked or the session is deleted.
   sessionShareMaxTTL: "0"

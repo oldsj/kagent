@@ -41,7 +41,7 @@ func TestIdleLifecycleDoesNotOwnTaskPublication(t *testing.T) {
 			hash := sha256.Sum256([]byte("completed"))
 			version, err := store.CreateRuntimeTask(t.Context(), session.Id, hash[:], task, "")
 			require.NoError(t, err)
-			require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, string(task.ID), version))
+			require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, string(task.ID), version, 0))
 
 			entered, release := make(chan struct{}), make(chan struct{})
 			actors := &retryTestActors{lifecycleTestActors: base, beforeRead: func(ctx context.Context) {
@@ -137,7 +137,7 @@ func TestIdleQuiescenceRecoveryAfterScopeRejection(t *testing.T) {
 			hash := sha256.Sum256([]byte("completed"))
 			version, err := store.CreateRuntimeTask(t.Context(), session.Id, hash[:], task, "")
 			require.NoError(t, err)
-			require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, string(task.ID), version))
+			require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, string(task.ID), version, 0))
 			oldClaim, err := store.ClaimSessionQuiescence(t.Context())
 			require.NoError(t, err)
 			// Reproduce the old controller's failure: Suspend succeeded, but its

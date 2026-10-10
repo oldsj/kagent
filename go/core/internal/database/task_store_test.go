@@ -184,7 +184,7 @@ func TestRuntimeCompletionDoesNotWaitForSnapshot(t *testing.T) {
 	require.ErrorIs(t, deleteSession(t.Context(), client, session.Id), ErrFailedPrecondition)
 	_, err = client.ClaimSessionQuiescence(t.Context())
 	require.ErrorIs(t, err, ErrNotFound) // The native cleanup callback has not finished.
-	require.NoError(t, client.SettleSessionTask(t.Context(), session.Id, string(waiting.ID), version))
+	require.NoError(t, client.SettleSessionTask(t.Context(), session.Id, string(waiting.ID), version, 0))
 	public, err = client.GetSettledSessionTask(t.Context(), session.Id, string(waiting.ID), nil)
 	require.NoError(t, err)
 	require.Equal(t, a2a.TaskStateCompleted, public.Status.State)
@@ -208,7 +208,7 @@ func TestRuntimeCompletionDoesNotWaitForSnapshot(t *testing.T) {
 	snapshot := &SessionTaskSnapshot{Atespace: "team-a", URI: "s3://snapshot/exact", ContentScope: "DATA"}
 	require.NoError(t, client.FinishSessionQuiescence(t.Context(), work, snapshot))
 	require.NoError(t, client.FinishSessionQuiescence(t.Context(), work, snapshot))
-	require.NoError(t, client.SettleSessionTask(t.Context(), session.Id, string(waiting.ID), version))
+	require.NoError(t, client.SettleSessionTask(t.Context(), session.Id, string(waiting.ID), version, 0))
 	public, err = client.GetSessionTask(t.Context(), session.Id, string(waiting.ID), nil)
 	require.NoError(t, err)
 	require.Equal(t, a2a.TaskStateCompleted, public.Status.State)
@@ -230,7 +230,7 @@ func TestRuntimeForkRetainsOnlyTheCheckpointBoundary(t *testing.T) {
 	require.NoError(t, err)
 	_, _, err = client.ReserveSessionCheckpoint(t.Context(), &apiv1alpha1.Checkpoint{Id: uuid.NewString(), SessionId: source.Id, HeadTaskId: string(completed.ID)}, "alice", uuid.NewString())
 	require.ErrorIs(t, err, ErrFailedPrecondition)
-	require.NoError(t, client.SettleSessionTask(t.Context(), source.Id, string(completed.ID), version))
+	require.NoError(t, client.SettleSessionTask(t.Context(), source.Id, string(completed.ID), version, 0))
 	boundary, err := client.ClaimSessionQuiescence(t.Context())
 	require.NoError(t, err)
 	require.NoError(t, client.FinishSessionQuiescence(t.Context(), boundary, &SessionTaskSnapshot{Atespace: "team-a", URI: "turn-N", ContentScope: "DATA"}))
@@ -309,7 +309,7 @@ func TestNewExecutionRacesIdleClaim(t *testing.T) {
 		task.Status.State = a2a.TaskStateCompleted
 		version, err := client.UpdateSessionTask(ctx, session.Id, version, taskMutationHash("finish"), task, task, "")
 		require.NoError(t, err)
-		require.NoError(t, client.SettleSessionTask(ctx, session.Id, string(task.ID), version))
+		require.NoError(t, client.SettleSessionTask(ctx, session.Id, string(task.ID), version, 0))
 
 		start := make(chan struct{})
 		claimed := make(chan *SessionQuiescence, 1)
@@ -343,7 +343,7 @@ func TestNewExecutionRacesIdleClaim(t *testing.T) {
 		_, err = client.CreateRuntimeTask(ctx, session.Id, taskMutationHash("next"), next, dispatchID.String())
 		require.NoError(t, err)
 		// A lost cleanup acknowledgement cannot requeue an obsolete suspension.
-		require.NoError(t, client.SettleSessionTask(ctx, session.Id, string(task.ID), version))
+		require.NoError(t, client.SettleSessionTask(ctx, session.Id, string(task.ID), version, 0))
 		_, err = client.ClaimSessionQuiescence(ctx)
 		require.ErrorIs(t, err, ErrNotFound)
 		visible, err := client.GetSettledSessionTask(ctx, session.Id, string(task.ID), nil)
@@ -466,7 +466,7 @@ func TestCheckpointPinsExpectedTaskWhileSnapshotIsPending(t *testing.T) {
 	task.Status.State = a2a.TaskStateCompleted
 	version, err := client.UpdateSessionTask(ctx, session.Id, version, taskMutationHash("finish"), task, task, "")
 	require.NoError(t, err)
-	require.NoError(t, client.SettleSessionTask(ctx, session.Id, string(task.ID), version))
+	require.NoError(t, client.SettleSessionTask(ctx, session.Id, string(task.ID), version, 0))
 	request := &apiv1alpha1.Checkpoint{Id: uuid.NewString(), SessionId: session.Id, HeadTaskId: string(task.ID)}
 	_, _, err = client.ReserveSessionCheckpoint(ctx, request, "alice", "checkpoint")
 	require.ErrorIs(t, err, ErrSnapshotPending)
