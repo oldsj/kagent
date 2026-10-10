@@ -29,6 +29,7 @@ type workflowStore interface {
 	GetSessionCheckpointSnapshot(context.Context, string, string) (*database.SessionTaskSnapshot, string, error)
 	GetRuntimeRevision(context.Context, string) (*database.RuntimeRevision, error)
 	BeginSessionOperation(context.Context, string, apiv1alpha1.RuntimeOperation) (*database.SessionOperation, error)
+	BeginSessionActivation(context.Context, string, uuid.UUID, string) (*database.SessionOperation, error)
 	ClaimSessionOperation(context.Context, string, uuid.UUID, uuid.UUID) (bool, error)
 	ReleaseRuntimeOperation(context.Context, string, uuid.UUID, uuid.UUID) error
 	FinishSessionOperation(context.Context, string, uuid.UUID, uuid.UUID, string, string, string) (*apiv1alpha1.Session, error)
@@ -296,9 +297,63 @@ func (w *ActorWorkflow) Suspend(ctx context.Context, session *apiv1alpha1.Sessio
 }
 
 // Resume returns after the Actor is running and the session is ready. Missing
-// Actors are errors; Resume never creates replacement compute.
+// Actors are errors; Resume never creates replacement compute. A READY Session
+// whose Actor idle quiescence suspended or paused is activated in place.
 func (w *ActorWorkflow) Resume(ctx context.Context, session *apiv1alpha1.Session) (*apiv1alpha1.Session, error) {
-	return w.run(ctx, session.GetId(), apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_RESUME)
+	ctx, cancelAttempt := context.WithTimeout(ctx, database.RuntimeOperationTimeout)
+	defer cancelAttempt()
+	operation, err := w.store.BeginSessionOperation(ctx, session.GetId(), apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_RESUME)
+	if err != nil {
+		return nil, err
+	}
+	if operation.Instance.State == apiv1alpha1.RuntimeState_RUNTIME_STATE_READY && operation.Instance.Operation == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_NONE {
+		return w.activate(ctx, operation.Instance)
+	}
+	return w.execute(ctx, operation)
+}
+
+// activate wakes the exact current Actor of a READY Session after idle
+// quiescence. A running Actor needs no work. Otherwise the observed generation
+// and UID fence a RESUME operation that never changes Session, context or
+// generation identity, and a retry joins its pending attempt. A replaced Actor,
+// revoked generation, active turn or pending idle work is refused.
+func (w *ActorWorkflow) activate(ctx context.Context, session *apiv1alpha1.Session) (*apiv1alpha1.Session, error) {
+	revision, err := w.store.GetRuntimeRevision(ctx, session.GetPreparedRevision())
+	if err != nil {
+		return nil, fmt.Errorf("load prepared revision: %w", err)
+	}
+	generation, err := w.store.GetRuntimeGeneration(ctx, session.GetId())
+	if errors.Is(err, database.ErrNotFound) {
+		return nil, fmt.Errorf("runtime generation unavailable: %w", database.ErrFailedPrecondition)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read runtime generation: %w", err)
+	}
+	if generation.Phase != "active" {
+		return nil, fmt.Errorf("runtime generation is %s: %w", generation.Phase, database.ErrFailedPrecondition)
+	}
+	actor, err := w.actors.GetActor(ctx, generation.Atespace, generation.ActorName)
+	if status.Code(err) == codes.NotFound {
+		return nil, fmt.Errorf("runtime Actor is missing: %w", database.ErrFailedPrecondition)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("observe runtime Actor: %w", err)
+	}
+	if err := w.verifyActor(ctx, session, revision, actor); err != nil {
+		return nil, fmt.Errorf("%w: %w", err, database.ErrFailedPrecondition)
+	}
+	switch state := actor.GetStatus().GetState(); state {
+	case ateapipb.ActorState_ACTOR_STATE_RUNNING:
+		return session, nil
+	case ateapipb.ActorState_ACTOR_STATE_SUSPENDED, ateapipb.ActorState_ACTOR_STATE_PAUSED:
+	default:
+		return nil, fmt.Errorf("runtime Actor is %s: %w", state, database.ErrConflict)
+	}
+	operation, err := w.store.BeginSessionActivation(ctx, session.GetId(), generation.ID, generation.ActorUID)
+	if err != nil {
+		return nil, err
+	}
+	return w.execute(ctx, operation)
 }
 
 // Delete closes admission before stopping and deleting compute. It can supersede
