@@ -31,6 +31,64 @@ func TestBoundedQuiesceDelay(t *testing.T) {
 	}
 }
 
+func TestLegacySettlementAgainstMigration7(t *testing.T) {
+	for _, state := range []a2a.TaskState{a2a.TaskStateCompleted, a2a.TaskStateInputRequired, a2a.TaskStateAuthRequired} {
+		for _, mode := range []string{"rolling upgrade", "binary rollback"} {
+			t.Run(string(state)+"/"+mode, func(t *testing.T) {
+				db := setupTestDB(t)
+				client := NewClient(db)
+				session, task, version := quiescenceBoundaryFixture(t, client, state)
+				var snapshot *SessionTaskSnapshot
+				if state.Terminal() {
+					snapshot = &SessionTaskSnapshot{Atespace: "team-a", URI: "snapshot", ContentScope: "DATA"}
+				}
+				if mode == "binary rollback" {
+					// Follow the rollback order: the new binary settles at zero delay
+					// before an old binary starts against the retained schema.
+					require.NoError(t, client.SettleSessionTask(t.Context(), session.Id, string(task.ID), version, 0))
+					work, err := client.ClaimSessionQuiescence(t.Context())
+					require.NoError(t, err)
+					require.NoError(t, client.FinishSessionQuiescence(t.Context(), work, snapshot))
+					pool, err := pgxpool.NewWithConfig(t.Context(), db.Config().Copy())
+					require.NoError(t, err)
+					t.Cleanup(pool.Close)
+					client = NewClient(pool)
+					session, task, version = quiescenceBoundaryFixture(t, client, state)
+				}
+				migrated, err := queryOne(t.Context(), client.db, `
+					SELECT max(version_id) FROM schema_migrations WHERE is_applied
+				`, pgx.RowTo[int64])
+				require.NoError(t, err)
+				require.EqualValues(t, 7, migrated, "binary rollback must keep schema 7")
+				// This is the base's actual settlement implementation, not a SQL
+				// approximation or the new writer configured with delay zero.
+				for range 2 {
+					require.NoError(t, client.legacySettleSessionTask(t.Context(), session.Id, string(task.ID), version))
+				}
+				visible, err := client.GetSettledSessionTask(t.Context(), session.Id, string(task.ID), nil)
+				require.NoError(t, err)
+				require.Equal(t, state, visible.Status.State)
+				require.Len(t, visible.History, len(task.History))
+				// A later new-binary acknowledgement cannot delay an old publication.
+				require.NoError(t, client.SettleSessionTask(t.Context(), session.Id, string(task.ID), version, 15*time.Minute))
+				due, err := queryOne(t.Context(), client.db, `
+					SELECT quiescence_due_at FROM session_task_event WHERE sequence = $1
+				`, pgx.RowTo[*time.Time], version)
+				require.NoError(t, err)
+				require.Nil(t, due, "old writers leave the deadline unset")
+				work, err := client.ClaimSessionQuiescence(t.Context())
+				require.NoError(t, err, "NULL must mean eligible now in selection and claim")
+				require.Equal(t, version, work.Version)
+				_, err = client.ClaimSessionQuiescence(t.Context())
+				require.ErrorIs(t, err, ErrNotFound)
+				require.NoError(t, client.FinishSessionQuiescence(t.Context(), work, snapshot))
+				dispatchID := uuid.New()
+				require.NoError(t, client.ReserveSessionDispatch(t.Context(), session.Id, dispatchID, "next"))
+			})
+		}
+	}
+}
+
 // quiescenceBoundaryFixture stages a native boundary without acknowledging cleanup.
 func quiescenceBoundaryFixture(t *testing.T, client *Client, state a2a.TaskState) (*apiv1alpha1.Session, *a2a.Task, int64) {
 	t.Helper()

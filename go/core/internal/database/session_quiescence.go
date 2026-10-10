@@ -24,6 +24,7 @@ type SessionQuiescence struct {
 // version. A new turn supersedes unclaimed idle work; a claim blocks task writes,
 // checkpoints, and explicit lifecycle operations until it finishes. Missing work,
 // including boundaries before their durable deadline, returns ErrNotFound.
+// Older writers leave a NULL deadline, which keeps immediate eligibility.
 // Uncertain issued work is never reassigned after a timeout.
 func (c *Client) ClaimSessionQuiescence(ctx context.Context) (*SessionQuiescence, error) {
 	var result *SessionQuiescence
@@ -37,7 +38,7 @@ func (c *Client) ClaimSessionQuiescence(ctx context.Context) (*SessionQuiescence
 			SELECT i.id::text AS session_id, e.task_id, e.sequence
 			FROM session_task_event e JOIN session_record i ON i.history_id = e.history_id
 			WHERE e.published AND e.quiescence_pending = TRUE
-			  AND e.quiescence_due_at <= statement_timestamp()
+			  AND (e.quiescence_due_at IS NULL OR e.quiescence_due_at <= statement_timestamp())
 			  AND e.quiescence_executor_id IS NULL
 			  AND i.state = 'RUNTIME_STATE_READY'
 			  AND i.operation = 'RUNTIME_OPERATION_NONE'
@@ -73,7 +74,7 @@ func (c *Client) ClaimSessionQuiescence(ctx context.Context) (*SessionQuiescence
 		tag, err := tx.Exec(ctx, `
 			UPDATE session_task_event SET quiescence_executor_id = $2
 			WHERE sequence = $1 AND published AND quiescence_pending
-			  AND quiescence_due_at <= statement_timestamp()
+			  AND (quiescence_due_at IS NULL OR quiescence_due_at <= statement_timestamp())
 			  AND quiescence_executor_id IS NULL
 			  AND NOT EXISTS (SELECT 1 FROM session WHERE id = $3 AND dispatch_expires_at > clock_timestamp())
 			  AND NOT EXISTS (SELECT 1 FROM session_checkpoint WHERE source_session_id = $3 AND state = 'CREATING')

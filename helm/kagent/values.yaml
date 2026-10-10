@@ -446,6 +446,8 @@ controller:
 
   # Delay after a turn settles before automatic workspace pause or suspension.
   # Go duration; clamped to 0–30m. Zero keeps immediate eligibility.
+  # Rollout: deploy the new controller at 0, verify no old replicas remain, then enable.
+  # Rollback: set 0 and finish that rollout before rolling the controller image back.
   quiesceDelay: "0"
 
   # Longest lifetime a session share may request; shares created without one receive it.

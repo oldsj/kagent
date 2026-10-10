@@ -147,6 +147,20 @@ claim checks the deadline alongside the existing dispatch and lifecycle fences.
 The delay grants background processes time to run until eligibility; it does not
 wait for those processes to finish.
 
+Migration 7 keeps deadlines nullable: an older controller can still publish a
+boundary without a deadline, which means immediate quiescence eligibility.
+Older workers do not inspect deadlines, so enable the delay in separate GitOps
+steps:
+
+1. Deploy the new controller with `controller.quiesceDelay: "0"`.
+2. Verify that all old controller replicas have exited. Every replica runs
+   quiescence workers, regardless of leader election.
+3. Set `controller.quiesceDelay` to the desired duration, such as `15m`.
+
+For a binary rollback, first set the delay to `"0"` and finish that configuration
+rollout, then roll back the controller image. Keep schema 7 in place; older
+writers remain compatible with it.
+
 A Session lifecycle worker independently claims the idle
 boundary in PostgreSQL. INPUT_REQUIRED/AUTH_REQUIRED pauses the actor on its node;
 terminal work suspends it and records the exact external snapshot. Waiting tasks

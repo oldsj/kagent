@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestQuiescenceDelayMigrationBackfillsAndRollsBack(t *testing.T) {
+func TestQuiescenceDelayMigrationPreservesLegacyRowsAndRollsBack(t *testing.T) {
 	dsn := startTestDB(t)
 	source := BuiltinSources(false)[0]
 	ctx := t.Context()
@@ -31,16 +31,11 @@ func TestQuiescenceDelayMigrationBackfillsAndRollsBack(t *testing.T) {
 	db, err := sql.Open("pgx", dsn)
 	require.NoError(t, err)
 	defer db.Close()
-	for _, taskID := range []string{"pending", "finished"} {
-		var due time.Time
+	for _, taskID := range []string{"pending", "finished", "ordinary"} {
+		var due sql.NullTime
 		require.NoError(t, db.QueryRowContext(ctx, `SELECT quiescence_due_at FROM session_task_event WHERE task_id = $1`, taskID).Scan(&due))
-		require.True(t, created.Equal(due), "existing settled work keeps immediate eligibility")
+		require.False(t, due.Valid, "existing rows keep an unset deadline")
 	}
-	var ordinary sql.NullTime
-	require.NoError(t, db.QueryRowContext(ctx, `SELECT quiescence_due_at FROM session_task_event WHERE task_id = 'ordinary'`).Scan(&ordinary))
-	require.False(t, ordinary.Valid)
-	_, err = db.ExecContext(ctx, `UPDATE session_task_event SET quiescence_due_at = NULL WHERE task_id = 'pending'`)
-	require.ErrorContains(t, err, "session_task_event_quiescence_due_check")
 	require.NoError(t, WithProvider(ctx, dsn, source, func(provider *goose.Provider) error {
 		_, err := provider.DownTo(ctx, 6)
 		return err
