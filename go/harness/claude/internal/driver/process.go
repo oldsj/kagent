@@ -226,7 +226,7 @@ func (d *ProcessDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime
 		_ = stdout.Close()
 		return runtime.Outcome{}, err
 	}
-	if err := cmd.Start(); err != nil {
+	if err := owner.start(cmd); err != nil {
 		owner.release()
 		_ = stdin.Close()
 		_ = stdout.Close()
@@ -254,16 +254,16 @@ func (d *ProcessDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime
 		}
 	}()
 	waitDone := make(chan error, 1)
-	go func() {
-		<-parseDone
-		waitDone <- cmd.Wait()
-		close(waitDone)
-	}()
 	session := &processSession{
 		command: cmd, items: items, stopEmit: stopEmit, wait: waitDone, stderr: stderr,
 		executionBudget: newActiveBudget(d.config.TurnTimeout),
 		owner:           owner, stdout: stdout, stdin: stdin,
 	}
+	go func() {
+		<-parseDone
+		waitDone <- session.command.Wait()
+		close(waitDone)
+	}()
 	go sendPrompt(ctx, stdin, message, gate, parseDone)
 	sessionOwnedByPendingTurn := false
 	defer func() {
@@ -544,22 +544,27 @@ func (d *ProcessDriver) stopSession(session *processSession) error {
 		_ = session.stdin.Close()
 		_ = session.stdout.Close()
 		interruptErr := session.owner.interrupt()
-		_ = utils.InterruptProcessGroup(session.command.Process)
 		timer := time.NewTimer(d.config.InterruptGrace)
 		defer timer.Stop()
 		select {
 		case <-session.wait:
-			// The group leader can exit on the interrupt while a descendant that
-			// ignores it remains alive. Kill any processes still in the group.
-			_ = utils.KillProcessGroup(session.command.Process)
 		case <-timer.C:
-			_ = utils.KillProcessGroup(session.command.Process)
 		}
-		cleanupErr := session.owner.killAndReap(session.command.Process.Pid)
-		<-session.wait
+		killErr := session.owner.kill()
+		// Finish exec.Cmd's wait before reaping adopted children, but keep a
+		// failed signal or unresponsive leader from blocking this task forever.
+		timer.Reset(d.config.InterruptGrace)
+		select {
+		case <-session.wait:
+		case <-timer.C:
+			session.stopErr = errors.Join(interruptErr, killErr, fmt.Errorf("Claude leader cleanup did not finish"))
+			return
+		}
+		cleanupErr := session.owner.killAndReap()
+		closeErr := session.owner.closeLeader()
 		for range session.items {
 		}
-		session.stopErr = errors.Join(interruptErr, cleanupErr)
+		session.stopErr = errors.Join(interruptErr, killErr, cleanupErr, closeErr)
 		if session.stopErr == nil {
 			session.owner.release()
 		}

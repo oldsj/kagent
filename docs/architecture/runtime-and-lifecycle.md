@@ -353,9 +353,19 @@ grace expires, returning only the last result. A separate two-hour active
 execution ceiling ends the turn as a failure. Both limits are configurable in
 harness JSON, exclude approval waits, and apply inside the SDK's detached
 execution. Explicit cancellation remains canceled. Linux child subreaping and
-`/proc` ancestry tracking let cleanup kill and reap detached descendants as well
-as the original process group. The dedicated Actor owns one native tree at a
-time and starts no unrelated children during a turn. Headless harness configuration
+`/proc` ancestry tracking let cleanup kill and reap detached descendants. Signals
+use a leader pidfd captured at launch and descendant pidfds opened before
+rechecking the observed identity; cleanup never signals a numeric process group
+or retained leader PID. Leader termination needs no new descriptor or `/proc`
+scan. Adopted children are reaped through `waitid(P_PIDFD)`, while `exec.Cmd.Wait`
+reaps the native leader. Its cleanup wait is bounded by one interrupt allowance
+after the kill attempt. Cleanup errors retain the ownership slot until Actor
+replacement; an unconfirmed leader exit also retains its pidfd. The
+dedicated Actor owns one native tree at a time and starts no unrelated children
+during a turn. Before launching Claude, the harness rejects pre-existing
+descendant trees: their later orphans lose the ancestry needed to distinguish
+them from native work. Setup subprocesses must finish and be reaped first.
+Missing pidfd, subreaping, or `/proc` support rejects execution. Headless harness configuration
 disables native background tasks and scheduling by default and removes wakeup,
 monitor, cron, and remote scheduling tools. Workspaces can therefore pause
 between turns without depending on later native wakeups. See the

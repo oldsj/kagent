@@ -3,8 +3,9 @@
 package driver
 
 import (
+	"errors"
+	"os"
 	"os/exec"
-	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -28,7 +29,7 @@ func TestParseProcessIdentity(t *testing.T) {
 	}
 }
 
-func TestDescendantsExcludePreexistingTreesByIdentity(t *testing.T) {
+func TestDescendants(t *testing.T) {
 	processes := map[int]processIdentity{
 		1: {pid: 1, parent: 0, started: 1},
 		2: {pid: 2, parent: 1, started: 2},
@@ -38,28 +39,28 @@ func TestDescendantsExcludePreexistingTreesByIdentity(t *testing.T) {
 		6: {pid: 6, parent: 99, started: 6},
 	}
 	for _, test := range []struct {
-		name    string
-		exclude map[int]uint64
-		want    []int
+		name string
+		root int
+		want []int
 	}{
-		{name: "all owned", want: []int{2, 3, 4, 5}},
-		{name: "existing sibling and its children", exclude: map[int]uint64{2: 2}, want: []int{4, 5}},
-		{name: "reused PID is owned", exclude: map[int]uint64{2: 99}, want: []int{2, 3, 4, 5}},
+		{name: "harness tree", root: 1, want: []int{2, 3, 4, 5}},
+		{name: "native subtree", root: 2, want: []int{3}},
+		{name: "no descendants", root: 6},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var got []int
-			for _, process := range descendants(processes, 1, test.exclude) {
+			for _, process := range descendants(processes, test.root) {
 				got = append(got, process.pid)
 			}
 			slices.Sort(got)
-			if !reflect.DeepEqual(got, test.want) {
+			if !slices.Equal(got, test.want) {
 				t.Fatalf("descendants = %v, want %v", got, test.want)
 			}
 		})
 	}
 }
 
-func TestProcessTreePreservesExistingChildAndRejectsOverlap(t *testing.T) {
+func TestProcessTreeRejectsExistingChildAndOverlap(t *testing.T) {
 	existing := exec.Command("/bin/sleep", "30")
 	if err := existing.Start(); err != nil {
 		t.Fatal(err)
@@ -67,12 +68,16 @@ func TestProcessTreePreservesExistingChildAndRejectsOverlap(t *testing.T) {
 	defer func() { _ = existing.Process.Kill(); _ = existing.Wait() }()
 	driver := scriptedDriver(t, waitingStream)
 	driver.config.PostResultGrace = 50 * time.Millisecond
-	if outcome, err := driver.Run(t.Context(), runtime.Turn{Prompt: "hello"}, &recordingSink{}); err != nil || outcome.Failure != nil {
-		t.Fatalf("Run = %#v, %v", outcome, err)
+	if _, err := driver.Run(t.Context(), runtime.Turn{Prompt: "hello"}, &recordingSink{}); err == nil || !strings.Contains(err.Error(), "pre-existing descendant trees") {
+		t.Fatalf("Run error = %v", err)
 	}
 	if err := unix.Kill(existing.Process.Pid, 0); err != nil {
 		t.Fatalf("preexisting sibling was killed: %v", err)
 	}
+	if err := existing.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = existing.Wait()
 	owner, err := newProcessTree()
 	if err != nil {
 		t.Fatal(err)
@@ -87,10 +92,56 @@ func TestProcessTreePreservesExistingChildAndRejectsOverlap(t *testing.T) {
 	if err := owner.interrupt(); err != nil {
 		t.Fatal(err)
 	}
-	if err := owner.killAndReap(-1); err != nil {
+	if err := owner.killAndReap(); err != nil {
 		t.Fatal(err)
 	}
-	if err := unix.Kill(existing.Process.Pid, 0); err != nil {
-		t.Fatalf("preexisting sibling was not preserved: %v", err)
+	owner.release()
+	if outcome, err := driver.Run(t.Context(), runtime.Turn{Prompt: "hello"}, &recordingSink{}); err != nil || outcome.Failure != nil {
+		t.Fatalf("Run after ownership release = %#v, %v", outcome, err)
+	}
+}
+
+func TestProcessHandleStaysBoundAfterReaping(t *testing.T) {
+	child := exec.Command("/bin/sleep", "30")
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = child.Process.Kill(); _ = child.Wait() }()
+	identity, err := readProcess(child.Process.Pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := openProcess(identity)
+	if err != nil || handle == nil {
+		t.Fatalf("openProcess = %#v, %v", handle, err)
+	}
+	defer unix.Close(handle.fd)
+	if err := handle.signal(unix.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	_ = child.Wait()
+	if err := unix.PidfdSendSignal(handle.fd, 0, nil, 0); !errors.Is(err, unix.ESRCH) {
+		t.Fatalf("reaped handle signal = %v, want ESRCH", err)
+	}
+	peer := exec.Command("/bin/sleep", "30")
+	if err := peer.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = peer.Process.Kill(); _ = peer.Wait() }()
+	// Model a retained PID naming a replacement without forcing PID wraparound.
+	handle.pid = peer.Process.Pid
+	if err := handle.signal(unix.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	if err := peer.Process.Signal(unix.Signal(0)); err != nil {
+		t.Fatalf("reaped handle signaled a replacement peer: %v", err)
+	}
+	identity, err = readProcess(peer.Process.Pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity.parent = os.Getpid() + 1
+	if handle, err := openProcess(identity); err != nil || handle != nil {
+		t.Fatalf("changed ancestry handle = %#v, %v", handle, err)
 	}
 }
