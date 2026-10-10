@@ -4,6 +4,7 @@ package a2a
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"iter"
@@ -444,6 +445,32 @@ func (s *executionSink) ToolResult(event runtime.ToolResult) error {
 		return err
 	}
 	return s.emitToolArtifact(part)
+}
+
+func (s *executionSink) Health(event runtime.HealthEvent) error {
+	if event.SchemaVersion != runtime.HealthSchema || event.EventID == "" || event.Sequence <= 0 {
+		return fmt.Errorf("runtime health event has invalid identity")
+	}
+	event.RuntimeSessionID, event.A2ATaskID = string(s.reqCtx.ContextID), string(s.reqCtx.TaskID)
+	// The upstream task store clones data through gob; use its JSON object
+	// representation at this transport boundary rather than a Go concrete type.
+	encoded, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("encode health event: %w", err)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(encoded, &data); err != nil {
+		return fmt.Errorf("decode health data: %w", err)
+	}
+	part := a2atype.NewDataPart(data)
+	update := a2atype.NewArtifactEvent(s.reqCtx, part)
+	update.Artifact.ID = a2atype.ArtifactID(event.EventID)
+	update.Artifact.Name = runtime.HealthSchema
+	update.LastChunk = true
+	if !s.yield(update, nil) {
+		return errYieldStopped
+	}
+	return nil
 }
 
 func (s *executionSink) emitToolArtifact(part *a2atype.Part) error {

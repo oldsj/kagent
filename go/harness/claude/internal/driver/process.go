@@ -237,7 +237,7 @@ func (d *ProcessDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime
 	parseDone := make(chan struct{})
 	go func() {
 		defer close(items)
-		parseErr := ParseJSONL(stdout, d.config.MaxEventBytes, func(event Event) error {
+		parseErr := parseJSONL(stdout, d.config.MaxEventBytes, d.config.Workspace, d.config.ExpectedVersion, func(event Event) error {
 			select {
 			case items <- parseItem{event: &event}:
 				return nil
@@ -508,6 +508,8 @@ func (d *ProcessDriver) Close() error {
 // provided event sink, which is then consumed by the shared A2A executor.
 func emitEvent(event Event, sink runtime.EventSink) (*runtime.Outcome, error) {
 	switch event.Kind {
+	case EventHealth:
+		return nil, sink.Health(event.Health)
 	case EventSessionStarted:
 		return nil, sink.SessionStarted(runtime.SessionStarted{ContinuationID: event.SessionID})
 	case EventTextDelta:

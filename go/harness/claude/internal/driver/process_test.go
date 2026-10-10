@@ -16,10 +16,16 @@ import (
 )
 
 type recordingSink struct {
+	health   []runtime.HealthEvent
 	sessions []runtime.SessionStarted
 	text     strings.Builder
 	calls    []runtime.ToolCall
 	results  []runtime.ToolResult
+}
+
+func (s *recordingSink) Health(event runtime.HealthEvent) error {
+	s.health = append(s.health, event)
+	return nil
 }
 
 func (s *recordingSink) SessionStarted(event runtime.SessionStarted) error {

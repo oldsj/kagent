@@ -39,6 +39,7 @@ type EventSink interface {
 	TextDelta(TextDelta) error
 	ToolCall(ToolCall) error
 	ToolResult(ToolResult) error
+	Health(HealthEvent) error
 }
 
 // SessionStarted reports the stable private continuation selected by a runtime.
