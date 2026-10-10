@@ -124,15 +124,16 @@ func TestNewMaterializesSkillsAndMCPConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	for path, want := range map[string]string{
-		filepath.Join(skillRoot, ".claude", "skills", "review", "SKILL.md"): "# Review",
-		filepath.Join(ephemeralDir, "mcp.json"):                             `{"mcpServers":{"tools":{"type":"http","url":"https://mcp.example.com/mcp"}}}`,
+		filepath.Join(skillRoot, "skills", "review", "SKILL.md"):  "# Review",
+		filepath.Join(skillRoot, ".claude-plugin", "plugin.json"): `{"name":"kagent"}`,
+		filepath.Join(ephemeralDir, "mcp.json"):                   `{"mcpServers":{"tools":{"type":"http","url":"https://mcp.example.com/mcp"}}}`,
 	} {
 		contents, err := os.ReadFile(path)
 		if err != nil || string(contents) != want {
 			t.Fatalf("%s = %q, %v; want %q", path, contents, err, want)
 		}
 	}
-	if args := strings.Join(runner.Args(runtime.Turn{Prompt: "test"}), "\n"); !strings.Contains(args, "--add-dir\n"+skillRoot) {
+	if args := strings.Join(runner.Args(runtime.Turn{Prompt: "test"}), "\n"); !strings.Contains(args, "--plugin-dir\n"+skillRoot+"\n") {
 		t.Fatalf("arguments do not expose materialized skills: %s", args)
 	}
 }

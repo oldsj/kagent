@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kagent-dev/kagent/go/api/agentplugin"
 	"github.com/kagent-dev/kagent/go/harness/claude/config"
 	"github.com/kagent-dev/kagent/go/harness/runtime"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -33,6 +34,8 @@ const (
 	projectMemoryMarker = "project-memory-marker-9b2e"
 	projectRuleMarker   = "project-rule-marker-1e6b"
 	projectEnvMarker    = "PROJECT_ENV_MARKER_5c2d"
+	compilerSkillName   = "compiler-skill-marker-3a8f"
+	pluginSkillName     = "plugin-skill-marker-6d0c"
 	projectSkillName    = "project-skill-marker-7d3a"
 )
 
@@ -41,10 +44,11 @@ const (
 // MCP tool, register hooks, add MCP servers, enable a plugin carrying both, and
 // re-point the model provider and its credentials. The project settings also
 // try to run commands outside any tool call through settings env and helper
-// keys. Claude must still load the user and project CLAUDE.md files, project
-// rules, and project skills, run no hook or settings command, apply no project
-// env, contact no foreign MCP server or model endpoint, and, with the approval
-// broker, stop the protected call for a human decision.
+// keys, and to enable a plugin installed in the user scope. Claude must still
+// load the user and project CLAUDE.md files, project rules, project skills,
+// and compiler-selected skills, run no hook or settings command, apply no
+// project env, contact no foreign MCP server or model endpoint, and, with the
+// approval broker, stop the protected call for a human decision.
 func TestClaudeLoadsProjectContextWithoutWeakeningApproval(t *testing.T) {
 	executable := os.Getenv(claudeCLIEnvName)
 	if executable == "" {
@@ -102,6 +106,8 @@ func testClaudeSettingSources(t *testing.T, executable string, requireApproval b
 	})
 	writeJSON(t, filepath.Join(marketplace, "plugin", ".claude-plugin", "plugin.json"), map[string]any{"name": "foreign", "version": "1.0.0"})
 	writeJSON(t, filepath.Join(marketplace, "plugin", "hooks", "hooks.json"), map[string]any{"hooks": hooks("plugin")})
+	writeFile(t, filepath.Join(marketplace, "plugin", "skills", pluginSkillName, "SKILL.md"),
+		"---\nname: "+pluginSkillName+"\ndescription: Plugin skill fixture.\n---\nUnused.\n")
 	writeJSON(t, filepath.Join(marketplace, "plugin", ".mcp.json"), map[string]any{
 		"mcpServers": map[string]any{"pluginforeign": map[string]any{"type": "http", "url": foreign.URL}},
 	})
@@ -157,11 +163,22 @@ func testClaudeSettingSources(t *testing.T, executable string, requireApproval b
 	}
 	runClaudeCLI(t, executable, workspace, cliEnvironment, "plugin", "marketplace", "add", marketplace)
 	runClaudeCLI(t, executable, workspace, cliEnvironment, "plugin", "install", "foreign@foreign", "--scope", "user")
-	writeJSON(t, filepath.Join(durableDir, "claude", "settings.json"), hostile("user"))
+	// Only the checkout enables the installed plugin. With --add-dir, Claude
+	// reads enabledPlugins from the checkout, so the plugin loads and its
+	// hooks and MCP server must still be blocked.
+	userSettings := hostile("user")
+	delete(userSettings, "enabledPlugins")
+	writeJSON(t, filepath.Join(durableDir, "claude", "settings.json"), userSettings)
+	// A pre-fetched standalone skill, so materialization needs no network.
+	writeFile(t, filepath.Join(durableDir, "claude", "packages", "standalone-0", "SKILL.md"),
+		"---\nname: "+compilerSkillName+"\ndescription: Compiler skill fixture.\n---\nUnused.\n")
 
 	cfg := config.Production("claude-test-model", "Follow the test.")
 	cfg.ClaudeExecutable = executable
 	cfg.StrictVersion = false
+	cfg.SkillResources = &agentplugin.Resources{Skills: []agentplugin.Skill{{
+		Name: compilerSkillName, Source: agentplugin.Source{Git: &agentplugin.GitSource{URL: "unused", Commit: strings.Repeat("a", 40)}},
+	}}}
 	cfg.MCPServers = map[string]config.MCPServer{
 		"protected": {Type: "http", URL: protected.URL, RequireApproval: requireApproval},
 	}
@@ -231,7 +248,11 @@ func testClaudeSettingSources(t *testing.T, executable string, requireApproval b
 	first := main[0]
 	// --append-system-prompt keeps Claude Code's own system prompt, the
 	// equivalent of the Agent SDK's claude_code preset.
-	for _, want := range []string{"You are Claude Code", "Follow the test.", userMemoryMarker, projectMemoryMarker, projectRuleMarker, projectSkillName} {
+	// Skills from harness-owned plugin roots are named <plugin>:<skill>.
+	for _, want := range []string{
+		"You are Claude Code", "Follow the test.", userMemoryMarker, projectMemoryMarker, projectRuleMarker,
+		"workspace:" + projectSkillName, "kagent:" + compilerSkillName, "foreign:" + pluginSkillName,
+	} {
 		if !strings.Contains(first, want) {
 			t.Errorf("first model request does not contain %q", want)
 		}
@@ -241,6 +262,42 @@ func testClaudeSettingSources(t *testing.T, executable string, requireApproval b
 			t.Errorf("foreign MCP tools %q reached the model", name)
 		}
 	}
+	// The skill's frontmatter checks above are only meaningful if it launched.
+	if result, ok := toolResult(main[len(main)-1], "toolu_skill"); !ok || result.IsError {
+		t.Errorf("project skill call result = %+v, found %t", result, ok)
+	}
+}
+
+type toolResultBlock struct {
+	Type      string          `json:"type"`
+	ToolUseID string          `json:"tool_use_id"`
+	IsError   bool            `json:"is_error"`
+	Content   json.RawMessage `json:"content"`
+}
+
+// toolResult finds the tool_result for id in a recorded model request.
+func toolResult(request, id string) (toolResultBlock, bool) {
+	_, body, _ := strings.Cut(request, " ")
+	var parsed struct {
+		Messages []struct {
+			Content json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal([]byte(body), &parsed); err != nil {
+		return toolResultBlock{}, false
+	}
+	for _, message := range parsed.Messages {
+		var blocks []toolResultBlock
+		if json.Unmarshal(message.Content, &blocks) != nil {
+			continue
+		}
+		for _, block := range blocks {
+			if block.Type == "tool_result" && block.ToolUseID == id {
+				return block, true
+			}
+		}
+	}
+	return toolResultBlock{}, false
 }
 
 // commandSettings adds every settings key known to run a command outside a
