@@ -110,7 +110,11 @@ failures return a cleanup error.
 
 One active native process tree is allowed per harness process, including
 parked approvals. Execution is rejected before launching Claude if the harness
-already has descendants, including zombies and adopted orphans. Excluding an
+already has descendants, including adopted orphans. First it reaps exited
+orphans outside its own process group, such as Git maintenance that detached
+with `setsid`; the harness is PID 1 in the Actor and nothing else would reap
+them. Zombies in its own group may still belong to a pending `exec.Cmd` wait
+and are left in place, so they reject execution. Excluding an
 existing tree at launch cannot identify children it later orphans, so embedders
 must use a dedicated harness process and finish and reap setup subprocesses
 before a turn. The Actor has one harness container; the payload launcher

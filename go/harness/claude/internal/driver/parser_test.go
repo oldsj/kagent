@@ -20,7 +20,9 @@ func TestParseJSONLStreamingAndDeduplication(t *testing.T) {
 	for _, reader := range []io.Reader{bytes.NewReader(b), &fragmentReader{data: b, size: 3}} {
 		var events []Event
 		if err := ParseJSONL(reader, 4096, func(event Event) error {
-			events = append(events, event)
+			if event.Kind != EventHealth {
+				events = append(events, event)
+			}
 			return nil
 		}); err != nil {
 			t.Fatalf("ParseJSONL() error = %v", err)
@@ -76,7 +78,12 @@ func TestParseJSONLTerminalFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	var last Event
-	if err := ParseJSONL(bytes.NewReader(b), 4096, func(event Event) error { last = event; return nil }); err != nil {
+	if err := ParseJSONL(bytes.NewReader(b), 4096, func(event Event) error {
+		if event.Kind != EventHealth {
+			last = event
+		}
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if last.Kind != EventFailed || last.Category != "error_max_budget_usd" {

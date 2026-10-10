@@ -74,6 +74,17 @@ printf '%s\n' '{"type":"assistant","message":{"id":"msg_final","content":[{"type
 			if sink.text.String() != "continued after resultfinished" || len(sink.sessions) != 1 {
 				t.Fatalf("resumed events = %#v", sink.recordingSink)
 			}
+			if len(sink.health) != 4 {
+				t.Fatalf("health events = %#v", sink.health)
+			}
+			for index, event := range sink.health {
+				if event.ProducerEpoch != sink.health[0].ProducerEpoch || event.Sequence != int64(index+1) {
+					t.Fatalf("approval resume changed health identity: %#v", event)
+				}
+			}
+			if sink.health[2].Usage.Revision != 2 || sink.health[2].Usage.Coverage != "partial" {
+				t.Fatalf("result iterations must replace a partial turn sample: %#v", sink.health[2])
+			}
 		})
 	}
 }

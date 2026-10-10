@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kagent-dev/kagent/go/harness/runtime"
 	"golang.org/x/sys/unix"
 )
 
@@ -32,7 +33,18 @@ type processTree struct {
 	leader   *processHandle
 }
 
-func newProcessTree() (_ *processTree, err error) {
+// newProcessTree reports admission failures as terminal failures. Their
+// messages hold only fixed text, errno values and /proc paths, so Mainloop
+// receives the cause instead of the generic runtime failure.
+func newProcessTree() (*processTree, error) {
+	tree, err := admitProcessTree()
+	if err != nil {
+		return nil, runtime.NewTerminalFailure(err.Error(), err)
+	}
+	return tree, nil
+}
+
+func admitProcessTree() (_ *processTree, err error) {
 	if !nativeTreeActive.CompareAndSwap(false, true) {
 		return nil, fmt.Errorf("another Claude process tree is still owned by this harness")
 	}
@@ -58,6 +70,9 @@ func newProcessTree() (_ *processTree, err error) {
 	}
 	if err := unix.Prctl(unix.PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0); err != nil {
 		return nil, fmt.Errorf("enable Claude child subreaper: %w", err)
+	}
+	if err := reapOrphanedZombies(); err != nil {
+		return nil, err
 	}
 	processes, err := readProcesses()
 	if err != nil {
@@ -88,7 +103,8 @@ func (p *processTree) start(cmd *exec.Cmd) error {
 	}
 	cmd.SysProcAttr.PidFD = &leader.fd
 	if err := cmd.Start(); err != nil {
-		return err
+		// Start errors name only the configured executable and an errno.
+		return runtime.NewTerminalFailure("start Claude: "+err.Error(), err)
 	}
 	leader.pid = cmd.Process.Pid
 	p.leader = leader
@@ -228,6 +244,81 @@ func (p *processHandle) signal(signal unix.Signal) error {
 		return fmt.Errorf("signal Claude descendant %d: %w", p.pid, err)
 	}
 	return nil
+}
+
+// reapOrphanedZombies reaps exited direct children outside the harness's
+// process group. In an Actor the harness is PID 1, and while it is a subreaper
+// it also adopts orphans, so a detached helper (for example `git maintenance
+// run --detach` after an agent's commit or fetch) becomes its zombie and would
+// fail every later census. Nothing else would ever reap it.
+//
+// The process-group rule keeps this from stealing an exit status that an
+// exec.Cmd still waits for. Harness subprocesses (Git, the version probe) stay
+// in the harness's group; the only one with its own group is the Claude leader,
+// and the ownership slot held here guarantees no leader exists. A detached
+// orphan leaves the group through setsid or the leader's group. A zombie keeps
+// its group until reaped, on Linux and in gVisor, and a pidfd opened before the
+// identity recheck binds the wait to that exact zombie. Live orphans and
+// zombies in the harness's group are left alone and still fail the census.
+func reapOrphanedZombies() error {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return fmt.Errorf("read Claude process ownership: %w", err)
+	}
+	self, group := os.Getpid(), unix.Getpgrp()
+	var failures []error
+	for _, entry := range entries {
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil || pid <= 0 {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join("/proc", entry.Name(), "stat"))
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, unix.ESRCH) {
+			continue
+		}
+		if err != nil {
+			failures = append(failures, fmt.Errorf("read process %d identity: %w", pid, err))
+			continue
+		}
+		process, state, processGroup, err := parseProcessStatus(pid, string(data))
+		if err != nil {
+			failures = append(failures, err)
+			continue
+		}
+		if process.parent != self || state != "Z" || processGroup <= 0 || processGroup == group {
+			continue
+		}
+		handle, err := openProcess(process)
+		if err != nil {
+			failures = append(failures, err)
+			continue
+		}
+		if handle == nil {
+			continue
+		}
+		if err := unix.Waitid(unix.P_PIDFD, handle.fd, nil, unix.WEXITED|unix.WNOHANG, nil); err != nil && !errors.Is(err, unix.ECHILD) && !errors.Is(err, unix.ESRCH) {
+			failures = append(failures, fmt.Errorf("reap orphaned process %d: %w", pid, err))
+		}
+		if err := unix.Close(handle.fd); err != nil {
+			failures = append(failures, fmt.Errorf("close orphaned process %d pidfd: %w", pid, err))
+		}
+	}
+	return errors.Join(failures...)
+}
+
+// parseProcessStatus adds the scheduling state and process group to the
+// identity fields of /proc/<pid>/stat.
+func parseProcessStatus(pid int, stat string) (processIdentity, string, int, error) {
+	process, err := parseProcessIdentity(pid, stat)
+	if err != nil {
+		return processIdentity{}, "", 0, err
+	}
+	fields := strings.Fields(stat[strings.LastIndexByte(stat, ')')+1:])
+	processGroup, err := strconv.Atoi(fields[2])
+	if err != nil {
+		return processIdentity{}, "", 0, fmt.Errorf("invalid process %d group: %w", pid, err)
+	}
+	return process, fields[0], processGroup, nil
 }
 
 func readProcesses() (map[int]processIdentity, error) {

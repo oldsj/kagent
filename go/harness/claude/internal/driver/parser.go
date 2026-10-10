@@ -12,6 +12,7 @@ import (
 )
 
 type parser struct {
+	health           *healthProducer
 	emitted          map[string]string
 	currentMessageID string
 	activeBlock      *contentBlockRef
@@ -43,10 +44,15 @@ type contentBlockRef struct {
 // ParseJSONL parses a JSONL stream of Claude events and emits them to the
 // provided event sink.
 func ParseJSONL(r io.Reader, maxEventBytes int, emit func(Event) error) error {
+	return parseJSONL(r, maxEventBytes, "", "unknown", emit)
+}
+
+func parseJSONL(r io.Reader, maxEventBytes int, workspace, version string, emit func(Event) error) error {
 	if maxEventBytes <= 0 {
 		return fmt.Errorf("max event bytes must be positive")
 	}
 	p := parser{
+		health:  newHealthProducer(workspace, version),
 		emitted: map[string]string{}, tools: map[string]string{},
 		emittedToolCalls: map[string]struct{}{}, emittedResults: map[string]struct{}{},
 		backgroundTasks: map[string]taskPhase{},
@@ -69,7 +75,7 @@ func ParseJSONL(r io.Reader, maxEventBytes int, emit func(Event) error) error {
 	if !p.terminal {
 		return fmt.Errorf("claude process exited without a terminal result event")
 	}
-	return nil
+	return p.health.finish(emit)
 }
 
 func readBoundedLine(r *bufio.Reader, max int) ([]byte, error) {
@@ -88,16 +94,22 @@ func readBoundedLine(r *bufio.Reader, max int) ([]byte, error) {
 
 func (p *parser) parseLine(line []byte, emit func(Event) error) error {
 	var envelope struct {
-		Type      string          `json:"type"`
-		Subtype   string          `json:"subtype"`
-		SessionID string          `json:"session_id"`
-		IsError   bool            `json:"is_error"`
-		Result    string          `json:"result"`
-		Event     json.RawMessage `json:"event"`
-		Message   json.RawMessage `json:"message"`
+		Type            string          `json:"type"`
+		Subtype         string          `json:"subtype"`
+		SessionID       string          `json:"session_id"`
+		IsError         bool            `json:"is_error"`
+		Result          string          `json:"result"`
+		Event           json.RawMessage `json:"event"`
+		Message         json.RawMessage `json:"message"`
+		Usage           json.RawMessage `json:"usage"`
+		UUID            string          `json:"uuid"`
+		ParentToolUseID string          `json:"parent_tool_use_id"`
 	}
 	if err := json.Unmarshal(line, &envelope); err != nil {
 		return fmt.Errorf("decode Claude event: %w", err)
+	}
+	if err := p.health.start(emit); err != nil {
+		return err
 	}
 	switch envelope.Type {
 	case "system":
@@ -115,6 +127,11 @@ func (p *parser) parseLine(line []byte, emit func(Event) error) error {
 		// A task-notification origin identifies a follow-up iteration of the
 		// root conversation. Its result can supersede the earlier iteration.
 		p.terminal = true
+		if envelope.ParentToolUseID == "" {
+			if err := p.health.usage(envelope.UUID, envelope.Usage, envelope.IsError || envelope.Subtype != "success", emit); err != nil {
+				return err
+			}
+		}
 		var err error
 		if envelope.IsError || envelope.Subtype != "success" {
 			message := utils.SafeDiagnostic(envelope.Result)
@@ -378,6 +395,9 @@ func (p *parser) parseAssistant(raw json.RawMessage, emit func(Event) error) err
 				continue
 			}
 			p.emittedToolCalls[content.ID] = struct{}{}
+			if err := p.health.tool(content.ID, content.Name, content.Input, false, false, emit); err != nil {
+				return err
+			}
 			if err := emit(Event{Kind: EventToolActivity, ToolID: content.ID, ToolName: content.Name, ToolPhase: "started", Metadata: content.Input}); err != nil {
 				return err
 			}
@@ -416,6 +436,9 @@ func (p *parser) parseUser(raw json.RawMessage, emit func(Event) error) error {
 			}
 		}
 		p.emittedResults[content.ToolUseID] = struct{}{}
+		if err := p.health.tool(content.ToolUseID, name, nil, true, content.IsError, emit); err != nil {
+			return err
+		}
 		if err := emit(Event{
 			Kind: EventToolActivity, ToolID: content.ToolUseID, ToolName: name,
 			ToolPhase: "completed", ToolResult: result, ToolError: content.IsError,

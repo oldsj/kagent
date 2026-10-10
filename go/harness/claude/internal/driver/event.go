@@ -1,5 +1,7 @@
 package driver
 
+import "github.com/kagent-dev/kagent/go/harness/runtime"
+
 type EventKind string
 
 const (
@@ -11,12 +13,14 @@ const (
 	// EventBackgroundTasks reports a change in how many background tasks
 	// Claude has not yet reported to the conversation.
 	EventBackgroundTasks EventKind = "background_tasks"
+	EventHealth          EventKind = "health"
 )
 
 // Event is the Claude stream vocabulary consumed by ProcessDriver. Vendor
 // parsing details stay here and are normalized before reaching shared runtime
 // code.
 type Event struct {
+	Health      runtime.HealthEvent
 	Kind        EventKind
 	SessionID   string
 	Text        string

@@ -33,6 +33,8 @@ func (s *recordingSink) ToolResult(event runtime.ToolResult) error {
 	return nil
 }
 
+func (s *recordingSink) Health(runtime.HealthEvent) error { return nil }
+
 func TestTranslatePinnedNotifications(t *testing.T) {
 	sink := &recordingSink{}
 	messages := []string{
