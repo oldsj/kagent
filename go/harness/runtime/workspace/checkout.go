@@ -313,7 +313,13 @@ func (g *gitRunner) git(ctx context.Context, dir, step string, args ...string) (
 
 // run executes git and returns stdout. Callers
 // that need a working directory use git, which passes -C.
+//
+// Automatic maintenance is disabled: since Git 2.47, fetch starts a detached
+// `git maintenance run --auto` that outlives this command. In an Actor the
+// harness is PID 1, so that orphan becomes an unreaped zombie child, and the
+// Claude driver then rejects every turn for pre-existing descendants.
 func (g *gitRunner) run(ctx context.Context, step string, args ...string) (string, error) {
+	args = append([]string{"-c", "maintenance.auto=false", "-c", "gc.auto=0"}, args...)
 	cmd := exec.CommandContext(ctx, g.path, args...)
 	cmd.Env = g.environment
 	cmd.WaitDelay = 5 * time.Second
