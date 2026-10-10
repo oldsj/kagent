@@ -230,19 +230,23 @@ func TestGitProxyReferenceOnlyGRPCReadiness(t *testing.T) {
 	}
 	require.Contains(t, string(wire), generation.CredentialURI)
 	require.NotContains(t, string(wire), string(refs.Items[0].Data["token"]))
-	// READY Resume alone is a no-op and cannot qualify association.
-	_, err = client.ResumeSession(owner, &apiv1alpha1.ResumeSessionRequest{SessionId: id})
+	// READY Resume wakes the same suspended Actor in place; the reply itself
+	// carries no association, which only a fresh GetSession observes.
+	woken, err := client.ResumeSession(owner, &apiv1alpha1.ResumeSessionRequest{SessionId: id})
 	require.NoError(t, err)
-	require.Zero(t, actors.resumes)
+	require.Nil(t, woken.Session.RuntimeAssociation)
+	require.Equal(t, 1, actors.resumes)
+	require.Equal(t, ateapipb.ActorState_ACTOR_STATE_RUNNING, actors.actor.Status.State)
 	get, err = client.GetSession(owner, &apiv1alpha1.GetSessionRequest{SessionId: id})
 	require.NoError(t, err)
-	require.Nil(t, get.Session.RuntimeAssociation)
+	require.Equal(t, generation.ActorUID, get.Session.GetRuntimeAssociation().GetActorUid())
+	require.Equal(t, generation.ID.String(), get.Session.GetRuntimeAssociation().GetGenerationId())
 	suspended, err := client.SuspendSession(owner, &apiv1alpha1.SuspendSessionRequest{SessionId: id})
 	require.NoError(t, err)
 	require.Equal(t, apiv1alpha1.RuntimeState_RUNTIME_STATE_SUSPENDED, suspended.Session.State)
 	_, err = client.ResumeSession(owner, &apiv1alpha1.ResumeSessionRequest{SessionId: id})
 	require.NoError(t, err)
-	require.Equal(t, 1, actors.resumes)
+	require.Equal(t, 2, actors.resumes)
 	require.Equal(t, ateapipb.ActorState_ACTOR_STATE_RUNNING, actors.actor.Status.State)
 	get, err = client.GetSession(owner, &apiv1alpha1.GetSessionRequest{SessionId: id})
 	require.NoError(t, err)
@@ -274,5 +278,5 @@ func TestGitProxyReferenceOnlyGRPCReadiness(t *testing.T) {
 	changed.Credentials[1].Origin = workspace.PushProxyOrigin
 	_, err = client.CreateSession(owner, changed)
 	require.Equal(t, codes.PermissionDenied, status.Code(err))
-	t.Log("reference-only READY/SUSPENDED -> READY Resume no-op -> Suspend/Resume -> READY/RUNNING exact active association; no Git value or native turn")
+	t.Log("reference-only READY/SUSPENDED -> READY Resume wakes same Actor -> Suspend/Resume -> READY/RUNNING exact active association; no Git value or native turn")
 }

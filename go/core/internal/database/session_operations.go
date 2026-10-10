@@ -83,6 +83,86 @@ func beginSessionOperation(ctx context.Context, tx pgx.Tx, row sessionRow, kind 
 	return operation, nil
 }
 
+// BeginSessionActivation admits a RESUME operation for a READY Session whose
+// exact current Actor idle quiescence suspended or paused. The logical state
+// stays READY; the pending operation closes dispatch, idle work, checkpoints and
+// other lifecycle work until the claimed attempt finishes, and an uncertain
+// attempt stays pending for a Resume retry to reconcile. The caller observes the
+// Actor outside this transaction; the generation and Actor UID it observed must
+// still be current. A concurrent activation is joined rather than duplicated.
+func (c *Client) BeginSessionActivation(ctx context.Context, sessionID string, generationID uuid.UUID, actorUID string) (*SessionOperation, error) {
+	var operation *SessionOperation
+	err := c.withTx(ctx, func(tx pgx.Tx) error {
+		row, err := lockSession(ctx, tx, sessionID)
+		if err != nil {
+			return notFoundOr(err)
+		}
+		state, current, err := row.lifecycle()
+		if err != nil {
+			return err
+		}
+		if state == apiv1alpha1.RuntimeState_RUNTIME_STATE_READY && current == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_RESUME {
+			operation, err = toSessionOperation(row)
+			return err
+		}
+		if state != apiv1alpha1.RuntimeState_RUNTIME_STATE_READY || current != apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_NONE {
+			return ErrConflict
+		}
+		if err := requireSettledRuntime(ctx, tx, row.HistoryID, ""); err != nil {
+			return err
+		}
+		// Unclaimed idle work would pause or suspend the Actor again right after
+		// this wake. Active turns own the runtime; neither is ours to resume.
+		busy, err := queryOne(ctx, tx, `
+			SELECT EXISTS (SELECT 1 FROM session_task_event WHERE history_id = $1 AND quiescence_pending)
+			    OR EXISTS (SELECT 1 FROM session_task WHERE history_id = $1
+			        AND state IN ('TASK_STATE_SUBMITTED', 'TASK_STATE_WORKING'))
+			    OR EXISTS (SELECT 1 FROM session_checkpoint WHERE source_session_id = $2 AND state = 'CREATING')
+		`, pgx.RowTo[bool], row.HistoryID, row.ID)
+		if err != nil {
+			return err
+		}
+		if busy {
+			return fmt.Errorf("session has pending idle, task or checkpoint work: %w", ErrConflict)
+		}
+		generation, err := nativeGeneration(ctx, tx, sessionID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrFailedPrecondition
+		}
+		if err != nil {
+			return err
+		}
+		if generation.Phase != "active" || generation.ID != generationID || actorUID == "" || generation.ActorUID != actorUID {
+			return fmt.Errorf("runtime generation or Actor changed: %w", ErrFailedPrecondition)
+		}
+		row.runtimeInstanceRow, err = beginRuntimeOperation(ctx, tx, row.runtimeInstanceRow, runtimeKindAgent, apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_RESUME)
+		if err != nil {
+			return err
+		}
+		operation, err = toSessionOperation(row)
+		if err != nil {
+			return err
+		}
+		operation.Instance.UpdatedAt = timestamppb.Now()
+		data, err := marshalSession(operation.Instance)
+		if err != nil {
+			return err
+		}
+		tag, err := tx.Exec(ctx, `UPDATE session SET data = $2 WHERE id = $1 AND actor_uid = $3`, row.ID, data, actorUID)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() != 1 {
+			return fmt.Errorf("session Actor UID changed: %w", ErrFailedPrecondition)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("begin Session activation: %w", err)
+	}
+	return operation, nil
+}
+
 // admitAgentLifecycle runs under the same row lock as task and checkpoint
 // admission, including the exact assigned native preparation. Common transitions have no knowledge of these agent-only records.
 func admitAgentLifecycle(ctx context.Context, tx pgx.Tx, row sessionRow, kind apiv1alpha1.RuntimeOperation) error {
