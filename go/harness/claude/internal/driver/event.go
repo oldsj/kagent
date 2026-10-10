@@ -10,7 +10,10 @@ const (
 	EventToolActivity   EventKind = "tool_activity"
 	EventCompleted      EventKind = "completed"
 	EventFailed         EventKind = "failed"
-	EventHealth         EventKind = "health"
+	// EventBackgroundTasks reports a change in how many background tasks
+	// Claude has not yet reported to the conversation.
+	EventBackgroundTasks EventKind = "background_tasks"
+	EventHealth          EventKind = "health"
 )
 
 // Event is the Claude stream vocabulary consumed by ProcessDriver. Vendor
@@ -30,4 +33,7 @@ type Event struct {
 	Category    string
 	SafeMessage string
 	Result      string
+	// BackgroundTasks is the unreported background task count for
+	// EventBackgroundTasks.
+	BackgroundTasks int
 }
