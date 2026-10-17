@@ -45,6 +45,6 @@ func (s *checkpointServer) UpdateCheckpointName(ctx context.Context, request *ap
 }
 
 func (s *checkpointServer) ForkSession(ctx context.Context, request *apiv1alpha1.ForkSessionRequest) (*apiv1alpha1.ForkSessionResponse, error) {
-	session, err := s.service.Fork(ctx, request.GetCheckpointId(), request.GetRequestId())
+	session, err := s.service.Fork(ctx, request.GetCheckpointId(), request.GetRequestId(), request.GetFreshConversation())
 	return &apiv1alpha1.ForkSessionResponse{Session: session}, err
 }

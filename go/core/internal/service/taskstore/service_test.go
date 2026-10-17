@@ -242,3 +242,38 @@ func TestGetWorkspaceRequiresPreparationOnlyWhenStoreAdmissionDoes(t *testing.T)
 		})
 	}
 }
+
+type freshForkStore struct {
+	*callbackStore
+	fresh bool
+}
+
+func (s *freshForkStore) WithRuntimeGeneration(_ context.Context, _ database.RuntimeGeneration, fn func(database.RuntimeTaskStore) error) error {
+	return fn(s)
+}
+func (s *freshForkStore) GetSessionForRuntime(ctx context.Context, id, uid string) (*apiv1alpha1.Session, error) {
+	session, err := s.callbackStore.GetSessionForRuntime(ctx, id, uid)
+	if err != nil {
+		return nil, err
+	}
+	session.FreshConversation = s.fresh
+	return session, nil
+}
+
+// The runtime learns from its Session row, never from its own state, that it
+// must start without the conversation in its restored data.
+func TestGetWorkspaceReportsFreshConversation(t *testing.T) {
+	for _, fresh := range []bool{false, true} {
+		t.Run(fmt.Sprint(fresh), func(t *testing.T) {
+			id := uuid.New()
+			binding := database.RuntimeGeneration{ID: uuid.New(), SessionID: id, Atespace: "team-a", ActorName: "session-" + id.String() + "-0123456789abcdef", ActorUID: "uid-a", Phase: "active"}
+			store := &freshForkStore{callbackStore: &callbackStore{binding: binding}, fresh: fresh}
+			service := NewService(store, &callbackActors{binding: binding, uid: binding.ActorUID}, 0)
+			ctx := auth.AuthSessionTo(t.Context(), runtimeSession{binding: binding})
+			result, err := service.GetWorkspace(ctx, &apiv1alpha1.TaskStoreServiceGetWorkspaceRequest{SessionId: id.String()})
+			require.NoError(t, err)
+			require.Equal(t, fresh, result.GetFreshConversation())
+			require.Equal(t, id.String(), result.GetSessionId())
+		})
+	}
+}

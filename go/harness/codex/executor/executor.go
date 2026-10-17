@@ -5,6 +5,7 @@ package executor
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"time"
 	"unicode"
 
@@ -27,6 +28,11 @@ type Config struct {
 	// Workspace reads the Session's workspace request. It is required when the
 	// configuration enables Git, and ignored otherwise.
 	Workspace workspace.Source
+	// Conversation says whether the Session is a fork that starts without the
+	// native conversation in its restored data. Nil leaves that data as it is,
+	// which only a configuration check and an embedder without a control plane
+	// should do.
+	Conversation continuation.FreshSource
 }
 
 // New validates the configuration and Codex installation, then returns the executor.
@@ -58,6 +64,12 @@ func New(ctx context.Context, cfg Config) (a2asrv.AgentExecutor, error) {
 	if err != nil {
 		return nil, err
 	}
+	if cfg.Conversation != nil {
+		store.RequireFresh(continuation.Fresh{
+			Source: cfg.Conversation, MarkerDir: cfg.DataDir + "/.kagent",
+			Clear: codexConversationPaths(cfg.DataDir + "/codex"),
+		})
+	}
 	// Read here rather than taken as a Config field: the identity travels in the
 	// compiled configuration this function already has, and an embedder that
 	// forgot to pass it would emit spans no consumer could attribute to a
@@ -86,6 +98,16 @@ func New(ctx context.Context, cfg Config) (a2asrv.AgentExecutor, error) {
 		return nil, err
 	}
 	return executor, nil
+}
+
+// codexConversationPaths are the rollout transcripts and prompt history Codex
+// keeps under CODEX_HOME. Configuration and credentials are not among them.
+func codexConversationPaths(dir string) []string {
+	var paths []string
+	for _, name := range []string{"sessions", "archived_sessions", "history.jsonl", "session_index.jsonl"} {
+		paths = append(paths, filepath.Join(dir, name))
+	}
+	return paths
 }
 
 func validateThreadID(id string) error {

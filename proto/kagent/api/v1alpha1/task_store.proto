@@ -109,6 +109,11 @@ message TaskStoreServiceGetWorkspaceResponse {
   bool preparation_required = 2;
   bool preparation_ready = 3;
   NativeWorkspacePreparation preparation = 4;
+  // True when the Session is a fork that must start without the native agent
+  // conversation carried in its restored data.
+  bool fresh_conversation = 5;
+  // The Session this answer is for; keys the runtime's one-time reset.
+  string session_id = 6;
 }
 
 // Assigned only through the authenticated Session runtime channel. No commands.

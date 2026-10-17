@@ -32,7 +32,7 @@ func TestMalformedDatabaseIDsReturnErrors(t *testing.T) {
 			return err
 		}},
 		{"fork", func() error {
-			_, _, err := client.ForkSession(ctx, "invalid", "alice", "request", uuid.NewString())
+			_, _, err := client.ForkSession(ctx, "invalid", "alice", "request", uuid.NewString(), false)
 			return err
 		}},
 		{"create share", func() error {
@@ -248,7 +248,7 @@ func TestSessionCheckpointRetainsRecordedBoundary(t *testing.T) {
 	if _, _, err := client.GetSessionCheckpointSnapshot(ctx, checkpoint.GetId(), "alice"); err != nil {
 		t.Fatalf("creating checkpoint is unavailable to lifecycle work: %v", err)
 	}
-	if _, _, err := client.ForkSession(ctx, checkpoint.GetId(), "alice", "premature-fork", uuid.NewString()); !errors.Is(err, ErrNotFound) {
+	if _, _, err := client.ForkSession(ctx, checkpoint.GetId(), "alice", "premature-fork", uuid.NewString(), false); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("fork from creating checkpoint = %v, want not found", err)
 	}
 	if _, _, err := client.GetSessionCheckpointSnapshot(ctx, checkpoint.GetId(), "mallory"); !errors.Is(err, ErrNotFound) {
@@ -277,7 +277,7 @@ func TestSessionCheckpointRetainsRecordedBoundary(t *testing.T) {
 	if err != nil || ready.State != apiv1alpha1.CheckpointState_CHECKPOINT_STATE_READY {
 		t.Fatalf("ready checkpoint = %+v, error %v", ready, err)
 	}
-	if _, _, err := client.ForkSession(ctx, checkpoint.GetId(), "mallory", "unauthorized-fork", uuid.NewString()); !errors.Is(err, ErrNotFound) {
+	if _, _, err := client.ForkSession(ctx, checkpoint.GetId(), "mallory", "unauthorized-fork", uuid.NewString(), false); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("fork by another user = %v, want not found", err)
 	}
 	renamed, err := client.UpdateCheckpointName(ctx, checkpoint.GetId(), "alice", "Before the detour")
@@ -442,7 +442,7 @@ func TestForkSessionCopiesBoundedHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fork, created, err := client.ForkSession(ctx, checkpoint.GetId(), "alice", "fork-request-1", forkID)
+	fork, created, err := client.ForkSession(ctx, checkpoint.GetId(), "alice", "fork-request-1", forkID, false)
 	require.Equal(t, "Before the detour", fork.GetName())
 	if err != nil || !created {
 		t.Fatalf("ForkSession() = %+v, created %v, error %v", fork, created, err)
@@ -476,11 +476,11 @@ func TestForkSessionCopiesBoundedHistory(t *testing.T) {
   WHERE history_id = (SELECT history_id FROM session WHERE id = $1) AND id = $2
  `, fork.GetId(), copied.ID).Scan(&snapshotUID))
 	require.Equal(t, "s3://tags/checkpoint", snapshotUID)
-	replayed, created, err := client.ForkSession(ctx, checkpoint.GetId(), "alice", "fork-request-1", "ignored")
+	replayed, created, err := client.ForkSession(ctx, checkpoint.GetId(), "alice", "fork-request-1", "ignored", false)
 	if err != nil || created || replayed.GetId() != fork.GetId() {
 		t.Fatalf("replayed fork = %+v, created %v, error %v", replayed, created, err)
 	}
-	if _, _, err := client.ForkSession(ctx, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "alice", "fork-request-1", "ignored"); !errors.Is(err, ErrIdempotencyConflict) {
+	if _, _, err := client.ForkSession(ctx, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "alice", "fork-request-1", "ignored", false); !errors.Is(err, ErrIdempotencyConflict) {
 		t.Fatalf("conflicting fork request error = %v", err)
 	}
 	if _, _, err := client.BeginDeleteSessionCheckpoint(ctx, checkpoint.GetId(), "alice"); !errors.Is(err, ErrNotFound) {
@@ -500,7 +500,7 @@ func TestForkSessionCopiesBoundedHistory(t *testing.T) {
 	if err := deleteSession(ctx, client, fork.GetId()); err != nil {
 		t.Fatal(err)
 	}
-	fork2, created, err := client.ForkSession(ctx, checkpoint2.GetId(), "alice", "fork-request-2", fork2ID)
+	fork2, created, err := client.ForkSession(ctx, checkpoint2.GetId(), "alice", "fork-request-2", fork2ID, false)
 	require.Equal(t, fork.GetId()+"-"+string(copied.ID), fork2.GetName())
 	if err != nil || !created || fork2.GetId() != fork2ID {
 		t.Fatalf("fork of fork = %+v, created %v, error %v", fork2, created, err)
@@ -510,9 +510,9 @@ func TestForkSessionCopiesBoundedHistory(t *testing.T) {
 	_, _, err = client.BeginDeleteSessionCheckpoint(ctx, checkpoint.GetId(), "alice")
 	require.NoError(t, err)
 	require.NoError(t, client.DeleteSessionCheckpoint(ctx, checkpoint.GetId(), "alice"))
-	_, _, err = client.ForkSession(ctx, checkpoint.GetId(), "alice", "fork-request-1", uuid.NewString())
+	_, _, err = client.ForkSession(ctx, checkpoint.GetId(), "alice", "fork-request-1", uuid.NewString(), false)
 	require.ErrorIs(t, err, ErrFailedPrecondition)
-	_, _, err = client.ForkSession(ctx, checkpoint2.GetId(), "alice", "fork-request-1", uuid.NewString())
+	_, _, err = client.ForkSession(ctx, checkpoint2.GetId(), "alice", "fork-request-1", uuid.NewString(), false)
 	require.ErrorIs(t, err, ErrIdempotencyConflict)
 }
 
@@ -790,9 +790,9 @@ func TestForkTaskOrderAndAuthorityIsolation(t *testing.T) {
 	require.ErrorIs(t, saveRuntimeTask(t, client, source.GetId(), waiting, waiting, nil), ErrFailedPrecondition)
 	_, err = client.FinalizeSessionCheckpoint(ctx, checkpoint.GetId(), "tag", "tag-snapshot", "")
 	require.NoError(t, err)
-	_, _, err = client.ForkSession(ctx, checkpoint.GetId(), "bob", uuid.NewString(), uuid.NewString())
+	_, _, err = client.ForkSession(ctx, checkpoint.GetId(), "bob", uuid.NewString(), uuid.NewString(), false)
 	require.ErrorIs(t, err, ErrNotFound)
-	fork, _, err := client.ForkSession(ctx, checkpoint.GetId(), "alice", uuid.NewString(), uuid.NewString())
+	fork, _, err := client.ForkSession(ctx, checkpoint.GetId(), "alice", uuid.NewString(), uuid.NewString(), false)
 	require.NoError(t, err)
 	_, err = markSessionReady(ctx, client, fork.GetId(), "fork.example")
 	require.NoError(t, err)
@@ -825,7 +825,7 @@ func TestForkTaskOrderAndAuthorityIsolation(t *testing.T) {
 	require.Equal(t, "tag-snapshot", snapshot.URI)
 	_, err = client.FinalizeSessionCheckpoint(ctx, nested.GetId(), "nested-tag", "nested-snapshot", "")
 	require.NoError(t, err)
-	fork2, _, err := client.ForkSession(ctx, nested.GetId(), "alice", uuid.NewString(), uuid.NewString())
+	fork2, _, err := client.ForkSession(ctx, nested.GetId(), "alice", uuid.NewString(), uuid.NewString(), false)
 	require.NoError(t, err)
 	tasks, _, err := client.ListSessionTasks(ctx, fork2.GetId(), "", a2a.TaskStateUnspecified, nil, 10, nil)
 	require.NoError(t, err)
@@ -837,6 +837,85 @@ func TestForkTaskOrderAndAuthorityIsolation(t *testing.T) {
 	wrong := *waiting
 	wrong.ContextID = fork.GetId()
 	require.Error(t, saveRuntimeTask(t, client, fork.GetId(), &wrong, &wrong, nil))
+}
+
+// A fresh fork keeps the checkpoint's snapshot but none of its A2A history, and
+// is marked so the runtime drops the native conversation inside that snapshot.
+// A default fork of the same checkpoint is unchanged.
+func TestFreshForkCarriesNoHistory(t *testing.T) {
+	client := NewClient(setupTestDB(t))
+	ctx := t.Context()
+	sessionFixture(t, client, ctx, "team-a", "revision", "assistant", "kagent")
+	source, _, err := client.CreateSession(ctx, newSessionRequest(uuid.NewString(), "assistant", "kagent", "Source"), uuid.NewString())
+	require.NoError(t, err)
+	_, err = markSessionReady(ctx, client, source.GetId(), "source.example")
+	require.NoError(t, err)
+	task := newSessionTask("task-1", "message-1")
+	task.ContextID = source.GetContextId()
+	_, err = client.CreateRuntimeTask(ctx, source.GetId(), taskMutationHash("task-1"), task, "")
+	require.NoError(t, err)
+	task.Status.State = a2a.TaskStateCompleted
+	require.NoError(t, saveRuntimeTask(t, client, source.GetId(), task, task,
+		&SessionTaskSnapshot{Atespace: "team-a", URI: "s3://snapshots/one", ContentScope: "DATA"}))
+	checkpoint, _, err := client.ReserveSessionCheckpoint(ctx, &apiv1alpha1.Checkpoint{
+		Id: uuid.NewString(), SessionId: source.GetId(), HeadTaskId: "task-1",
+	}, "alice", uuid.NewString())
+	require.NoError(t, err)
+	_, err = client.FinalizeSessionCheckpoint(ctx, checkpoint.GetId(), "tag-uid", "s3://tags/checkpoint", "")
+	require.NoError(t, err)
+
+	tasksOf := func(session *apiv1alpha1.Session) []*a2a.Task {
+		tasks, _, err := client.ListSessionTasks(ctx, session.GetId(), "", a2a.TaskStateUnspecified, nil, 10, nil)
+		require.NoError(t, err)
+		return tasks
+	}
+
+	whole, created, err := client.ForkSession(ctx, checkpoint.GetId(), "alice", "whole", uuid.NewString(), false)
+	require.NoError(t, err)
+	require.True(t, created)
+	require.False(t, whole.GetFreshConversation())
+	require.Len(t, tasksOf(whole), 1)
+
+	requestID := uuid.NewString()
+	fresh, created, err := client.ForkSession(ctx, checkpoint.GetId(), "alice", requestID, uuid.NewString(), true)
+	require.NoError(t, err)
+	require.True(t, created)
+	require.True(t, fresh.GetFreshConversation())
+	require.Empty(t, tasksOf(fresh))
+	stored, err := client.GetSession(ctx, fresh.GetId(), "alice")
+	require.NoError(t, err)
+	require.True(t, stored.GetFreshConversation())
+	// The fork still restores the checkpoint's snapshot, which holds the workspace.
+	snapshot, tagUID, err := client.GetSessionCheckpointSnapshot(ctx, checkpoint.GetId(), "alice")
+	require.NoError(t, err)
+	require.Equal(t, "tag-uid", tagUID)
+	require.Equal(t, "s3://tags/checkpoint", snapshot.URI)
+
+	// A repeat returns the same fork; the same request cannot change mode.
+	again, created, err := client.ForkSession(ctx, checkpoint.GetId(), "alice", requestID, uuid.NewString(), true)
+	require.NoError(t, err)
+	require.False(t, created)
+	require.Equal(t, fresh.GetId(), again.GetId())
+	_, _, err = client.ForkSession(ctx, checkpoint.GetId(), "alice", requestID, uuid.NewString(), false)
+	require.ErrorIs(t, err, ErrIdempotencyConflict)
+	_, _, err = client.ForkSession(ctx, checkpoint.GetId(), "alice", "whole", uuid.NewString(), true)
+	require.ErrorIs(t, err, ErrIdempotencyConflict)
+
+	// An empty history is a valid start: the fork runs and records its own first task.
+	_, err = markSessionReady(ctx, client, fresh.GetId(), "fresh.example")
+	require.NoError(t, err)
+	first := newSessionTask("fresh-task-1", "fresh-message-1")
+	first.ContextID = fresh.GetContextId()
+	_, err = client.CreateRuntimeTask(ctx, fresh.GetId(), taskMutationHash("fresh-task-1"), first, "")
+	require.NoError(t, err)
+	first.Status.State = a2a.TaskStateCompleted
+	require.NoError(t, saveRuntimeTask(t, client, fresh.GetId(), first, first,
+		&SessionTaskSnapshot{Atespace: "team-a", URI: "s3://snapshots/fresh", ContentScope: "DATA"}))
+	require.Len(t, tasksOf(fresh), 1)
+	_, _, err = client.ReserveSessionCheckpoint(ctx, &apiv1alpha1.Checkpoint{
+		Id: uuid.NewString(), SessionId: fresh.GetId(), HeadTaskId: "fresh-task-1",
+	}, "alice", uuid.NewString())
+	require.NoError(t, err)
 }
 
 // markSessionReady completes creation through the lifecycle operations.

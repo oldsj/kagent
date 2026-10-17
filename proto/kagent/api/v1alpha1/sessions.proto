@@ -76,6 +76,9 @@ message Session {
   RuntimeAssociation runtime_association = 20;
   // Output only, historical preparation evidence. GET never refreshes it.
   WorkspacePreparationReceipt workspace_preparation = 21;
+  // Output only. Set on a fork created with a fresh conversation: its restored
+  // data keeps the workspace, but the runtime discards native conversation state.
+  bool fresh_conversation = 22;
 }
 
 // Output only. A bounded observation, not an atomic cross-system grant.

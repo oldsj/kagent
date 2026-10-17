@@ -29,6 +29,7 @@ type Store struct {
 	path     string
 	runtime  string
 	validate Validator
+	fresh    *Fresh
 }
 
 // New opens or creates a continuation store for runtime.

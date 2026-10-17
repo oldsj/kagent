@@ -560,11 +560,14 @@ func (*DeleteCheckpointResponse) Descriptor() ([]byte, []int) {
 }
 
 type ForkSessionRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	CheckpointId  string                 `protobuf:"bytes,1,opt,name=checkpoint_id,json=checkpointId,proto3" json:"checkpoint_id,omitempty"`
-	RequestId     string                 `protobuf:"bytes,2,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	CheckpointId string                 `protobuf:"bytes,1,opt,name=checkpoint_id,json=checkpointId,proto3" json:"checkpoint_id,omitempty"`
+	RequestId    string                 `protobuf:"bytes,2,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	// Keep the workspace and caches but start with no A2A history and no native
+	// agent conversation. False keeps the full conversation up to the checkpoint.
+	FreshConversation bool `protobuf:"varint,3,opt,name=fresh_conversation,json=freshConversation,proto3" json:"fresh_conversation,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *ForkSessionRequest) Reset() {
@@ -609,6 +612,13 @@ func (x *ForkSessionRequest) GetRequestId() string {
 		return x.RequestId
 	}
 	return ""
+}
+
+func (x *ForkSessionRequest) GetFreshConversation() bool {
+	if x != nil {
+		return x.FreshConversation
+	}
+	return false
 }
 
 type ForkSessionResponse struct {
@@ -797,12 +807,13 @@ const file_kagent_api_v1alpha1_checkpoints_proto_rawDesc = "" +
 	"\x04page\x18\x02 \x01(\v2!.kagent.api.v1alpha1.PageResponseR\x04page\"H\n" +
 	"\x17DeleteCheckpointRequest\x12-\n" +
 	"\rcheckpoint_id\x18\x01 \x01(\tB\b\xbaH\x05r\x03\xb0\x01\x01R\fcheckpointId\"\x1a\n" +
-	"\x18DeleteCheckpointResponse\"n\n" +
+	"\x18DeleteCheckpointResponse\"\x9d\x01\n" +
 	"\x12ForkSessionRequest\x12-\n" +
 	"\rcheckpoint_id\x18\x01 \x01(\tB\b\xbaH\x05r\x03\xb0\x01\x01R\fcheckpointId\x12)\n" +
 	"\n" +
 	"request_id\x18\x02 \x01(\tB\n" +
-	"\xbaH\ar\x05\x10\x01\x18\x80\x01R\trequestId\"M\n" +
+	"\xbaH\ar\x05\x10\x01\x18\x80\x01R\trequestId\x12-\n" +
+	"\x12fresh_conversation\x18\x03 \x01(\bR\x11freshConversation\"M\n" +
 	"\x13ForkSessionResponse\x126\n" +
 	"\asession\x18\x01 \x01(\v2\x1c.kagent.api.v1alpha1.SessionR\asession\"\x9f\x01\n" +
 	"\x1bUpdateCheckpointNameRequest\x12-\n" +

@@ -33,6 +33,12 @@ type ContinuationStore interface {
 	Bind(continuationID string) error
 }
 
+// settler is implemented by a ContinuationStore that must reconcile inherited
+// state before a turn reads the continuation.
+type settler interface {
+	Settle(context.Context) error
+}
+
 // Executor maps one native Harness conversation onto private A2A execution.
 // Each Actor accepts only one active task so ordered native continuation and
 // cancellation semantics remain unambiguous.
@@ -197,6 +203,12 @@ func (e *Executor) Execute(ctx context.Context, reqCtx *a2asrv.ExecutorContext) 
 			}
 		}
 
+		if s, ok := e.continuation.(settler); ok {
+			if err := s.Settle(ctx); err != nil {
+				fail("continuation_unavailable", err)
+				return
+			}
+		}
 		continuationID, _, err := e.continuation.Load()
 		if err != nil {
 			fail("continuation_unavailable", err)

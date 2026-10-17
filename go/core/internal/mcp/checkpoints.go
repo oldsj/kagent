@@ -102,7 +102,7 @@ func (h *Handler) listCheckpoints(ctx context.Context, _ *mcp.CallToolRequest, i
 }
 
 func (h *Handler) forkSession(ctx context.Context, _ *mcp.CallToolRequest, input ForkSessionInput) (*mcp.CallToolResult, ForkSessionOutput, error) {
-	session, err := h.checkpoints.Fork(ctx, input.CheckpointID, stableRequestID(input.RequestID))
+	session, err := h.checkpoints.Fork(ctx, input.CheckpointID, stableRequestID(input.RequestID), false)
 	if err != nil {
 		return toolError(err), ForkSessionOutput{}, nil
 	}

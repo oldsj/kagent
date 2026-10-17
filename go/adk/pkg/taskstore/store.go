@@ -250,6 +250,31 @@ func (s *Store) GetWorkspace(ctx context.Context) (*apiv1alpha1.Workspace, error
 	return response.GetWorkspace(), nil
 }
 
+// SessionID returns the Session this runtime serves, from its local identity.
+func (s *Store) SessionID() (string, error) { return s.sessionID() }
+
+// FreshConversation reports whether the Session is a fork that must discard the
+// native agent conversation carried in its restored data.
+func (s *Store) FreshConversation(ctx context.Context) (bool, error) {
+	id, err := s.sessionID()
+	if err != nil {
+		return false, err
+	}
+	var response *apiv1alpha1.TaskStoreServiceGetWorkspaceResponse
+	err = s.retry(ctx, func(ctx context.Context) error {
+		var err error
+		response, err = s.client.TaskStoreService().GetWorkspace(ctx, &apiv1alpha1.TaskStoreServiceGetWorkspaceRequest{SessionId: id})
+		return err
+	})
+	if err != nil {
+		return false, err
+	}
+	if response.GetSessionId() != id {
+		return false, fmt.Errorf("control plane answered for another Session")
+	}
+	return response.GetFreshConversation(), nil
+}
+
 // GetWorkspacePreparation reads/claims only the assigned Session-owned action.
 func (s *Store) GetWorkspacePreparation(ctx context.Context) (*apiv1alpha1.TaskStoreServiceGetWorkspaceResponse, error) {
 	id, err := s.sessionID()

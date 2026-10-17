@@ -79,17 +79,19 @@ func run(ctx context.Context, check bool, getenv func(string) string, environmen
 	}()
 	var controller *controllerclient.Client
 	var source workspace.Source
-	if cfg.Git != nil {
-		if check {
+	// A serving runtime always opens the control plane: a fork's fresh-conversation
+	// flag comes through it whether or not the configuration enables Git.
+	if check {
+		if cfg.Git != nil {
 			source = workspace.Unavailable()
-		} else {
-			if controller, source, err = workspace.OpenController(card.Name); err != nil {
-				return err
-			}
-			defer controller.Close()
 		}
+	} else {
+		if controller, source, err = workspace.OpenController(card.Name); err != nil {
+			return err
+		}
+		defer controller.Close()
 	}
-	exec, err := executor.New(ctx, executor.Config{ConfigJSON: configJSON, DataDir: dataDir, Environment: environment, Workspace: source})
+	exec, err := executor.New(ctx, executor.Config{ConfigJSON: configJSON, DataDir: dataDir, Environment: environment, Workspace: source, Conversation: workspace.ConversationOf(source)})
 	if err != nil {
 		return err
 	}

@@ -803,3 +803,58 @@ func TestExecuteHealthRejectsInvalidIdentityWithoutPublishing(t *testing.T) {
 		t.Fatalf("events/errors = %d/%v", len(events), errs)
 	}
 }
+
+// settlingContinuation drops its binding when settled, as a fresh fork does.
+type settlingContinuation struct {
+	fakeContinuation
+	err error
+}
+
+func (s *settlingContinuation) Settle(context.Context) error {
+	if s.err != nil {
+		return s.err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.data = ""
+	return nil
+}
+
+// The binding is read after the Session is settled, so a fresh fork's first turn
+// starts a new native conversation rather than resuming the source's.
+func TestExecuteSettlesContinuationBeforeLoading(t *testing.T) {
+	continuation := &settlingContinuation{fakeContinuation: fakeContinuation{data: testSessionID}}
+	var turn runtime.Turn
+	executor, err := New(fakeRunner{run: func(_ context.Context, got runtime.Turn, _ runtime.EventSink) (runtime.Outcome, error) {
+		turn = got
+		return runtime.Outcome{}, nil
+	}}, continuation, tracing.RuntimeTelemetry{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, errs := collect(executor.Execute(t.Context(), requestContext("task-1", "hello"))); len(errs) != 0 {
+		t.Fatal(errs)
+	}
+	if turn.ContinuationID != "" {
+		t.Errorf("turn resumed %q instead of starting fresh", turn.ContinuationID)
+	}
+}
+
+func TestExecuteFailsTurnWhenSettlingFails(t *testing.T) {
+	continuation := &settlingContinuation{fakeContinuation: fakeContinuation{data: testSessionID}, err: errors.New("control plane unavailable")}
+	ran := false
+	executor, err := New(fakeRunner{run: func(context.Context, runtime.Turn, runtime.EventSink) (runtime.Outcome, error) {
+		ran = true
+		return runtime.Outcome{}, nil
+	}}, continuation, tracing.RuntimeTelemetry{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, errs := collect(executor.Execute(t.Context(), requestContext("task-1", "hello")))
+	if ran {
+		t.Fatal("the turn ran on an unsettled Session")
+	}
+	if len(errs) != 1 || !errors.Is(errs[0], continuation.err) {
+		t.Errorf("errors = %v", errs)
+	}
+}

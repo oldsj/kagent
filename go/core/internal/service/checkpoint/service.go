@@ -33,7 +33,7 @@ type store interface {
 	GetSessionCheckpointSnapshot(context.Context, string, string) (*database.SessionTaskSnapshot, string, error)
 	BeginDeleteSessionCheckpoint(context.Context, string, string) (*database.SessionTaskSnapshot, string, error)
 	DeleteSessionCheckpoint(context.Context, string, string) error
-	ForkSession(context.Context, string, string, string, string) (*apiv1alpha1.Session, bool, error)
+	ForkSession(ctx context.Context, checkpointID, userID, requestID, sessionID string, freshConversation bool) (*apiv1alpha1.Session, bool, error)
 	UpdateCheckpointName(context.Context, string, string, string) (*apiv1alpha1.Checkpoint, error)
 }
 
@@ -307,7 +307,7 @@ func (s *Service) Rename(ctx context.Context, checkpointID, name string) (*apiv1
 	return checkpoint, nil
 }
 
-func (s *Service) Fork(ctx context.Context, checkpointID, requestID string) (*apiv1alpha1.Session, error) {
+func (s *Service) Fork(ctx context.Context, checkpointID, requestID string, freshConversation bool) (*apiv1alpha1.Session, error) {
 	if err := validateCreate(checkpointID, requestID); err != nil {
 		return nil, err
 	}
@@ -339,7 +339,7 @@ func (s *Service) Fork(ctx context.Context, checkpointID, requestID string) (*ap
 	if err != nil {
 		return nil, serviceerrors.NewInternal("Failed to generate Session identifier", err)
 	}
-	session, _, err := s.store.ForkSession(ctx, checkpointID, userID, requestID, id.String())
+	session, _, err := s.store.ForkSession(ctx, checkpointID, userID, requestID, id.String(), freshConversation)
 	if errors.Is(err, database.ErrIdempotencyConflict) {
 		return nil, serviceerrors.NewAlreadyExists("request_id was already used for a different Session", err)
 	}
