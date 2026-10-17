@@ -61,6 +61,55 @@ type activeTool struct {
 	approvalMatched bool
 }
 
+// turnError decodes only Codex's structured error category. The native message
+// is deliberately not decoded: it can carry signed URLs, account identifiers or
+// credential text, and a failure message is published to every A2A reader.
+type turnError struct {
+	CodexErrorInfo json.RawMessage `json:"codexErrorInfo"`
+}
+
+const (
+	codexFailure     = "Codex execution failed"
+	codexAuthFailure = "Codex authentication failed; renew the configured model credential in the control plane."
+)
+
+// codexTurnFailure summarizes a failed turn from recognized structured fields,
+// with a fixed fallback. Upstream kagent reports Codex's own message here; this
+// fork does not.
+func codexTurnFailure(failure *turnError) *runtime.Failure {
+	if failure != nil && unauthorized(failure.CodexErrorInfo) {
+		return &runtime.Failure{Message: codexAuthFailure}
+	}
+	return &runtime.Failure{Message: codexFailure}
+}
+
+// unauthorized recognizes authentication failures only from Codex's structured
+// error fields, never from free text.
+func unauthorized(info json.RawMessage) bool {
+	var code string
+	if json.Unmarshal(info, &code) == nil && code == "unauthorized" {
+		return true
+	}
+	type httpFailure struct {
+		HTTPStatusCode int `json:"httpStatusCode"`
+	}
+	var structured struct {
+		HTTPConnectionFailed           *httpFailure `json:"httpConnectionFailed"`
+		ResponseStreamConnectionFailed *httpFailure `json:"responseStreamConnectionFailed"`
+		ResponseStreamDisconnected     *httpFailure `json:"responseStreamDisconnected"`
+		ResponseTooManyFailedAttempts  *httpFailure `json:"responseTooManyFailedAttempts"`
+	}
+	if json.Unmarshal(info, &structured) != nil {
+		return false
+	}
+	for _, failure := range []*httpFailure{structured.HTTPConnectionFailed, structured.ResponseStreamConnectionFailed, structured.ResponseStreamDisconnected, structured.ResponseTooManyFailedAttempts} {
+		if failure != nil && failure.HTTPStatusCode == 401 {
+			return true
+		}
+	}
+	return false
+}
+
 func (t *eventTranslator) translate(message rpcMessage, sink runtime.EventSink) (runtime.Outcome, bool, error) {
 	if subagent, err := t.subagentItem(message, sink); err != nil || subagent {
 		return runtime.Outcome{}, false, err
@@ -102,7 +151,7 @@ func (t *eventTranslator) translate(message rpcMessage, sink runtime.EventSink) 
 			ThreadID string
 			Turn     struct {
 				ID, Status string
-				Error      *struct{ Message string }
+				Error      *turnError
 			}
 		}
 		if err := json.Unmarshal(message.Params, &params); err != nil {
@@ -120,11 +169,7 @@ func (t *eventTranslator) translate(message rpcMessage, sink runtime.EventSink) 
 		case "interrupted":
 			return runtime.Outcome{Failure: &runtime.Failure{Message: "Codex execution was interrupted"}}, true, nil
 		case "failed":
-			var message string
-			if params.Turn.Error != nil {
-				message = params.Turn.Error.Message
-			}
-			return runtime.Outcome{Failure: turnFailure(message)}, true, nil
+			return runtime.Outcome{Failure: codexTurnFailure(params.Turn.Error)}, true, nil
 		default:
 			return runtime.Outcome{}, false, fmt.Errorf("unsupported Codex terminal status %q", params.Turn.Status)
 		}
@@ -133,20 +178,6 @@ func (t *eventTranslator) translate(message rpcMessage, sink runtime.EventSink) 
 		// the public text/tool/terminal contract are safe to ignore.
 		return runtime.Outcome{}, false, nil
 	}
-}
-
-// turnFailure reports a failed turn with Codex's error message, bounded to stay
-// within the public failure limit.
-func turnFailure(message string) *runtime.Failure {
-	message = strings.TrimSpace(message)
-	if message == "" {
-		return &runtime.Failure{Message: "Codex execution failed"}
-	}
-	const limit = 400
-	if len(message) > limit {
-		message = strings.ToValidUTF8(message[:limit], "") + "…"
-	}
-	return &runtime.Failure{Message: "Codex execution failed: " + message}
 }
 
 func (t *eventTranslator) usage(raw json.RawMessage, sink runtime.ModelCallSink) error {
