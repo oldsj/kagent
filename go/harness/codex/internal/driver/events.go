@@ -6,9 +6,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
-	"unicode/utf8"
 
-	"github.com/kagent-dev/kagent/go/harness/internal/utils"
 	"github.com/kagent-dev/kagent/go/harness/runtime"
 )
 
@@ -32,13 +30,12 @@ type activeTool struct {
 }
 
 type turnError struct {
-	Message        string          `json:"message"`
 	CodexErrorInfo json.RawMessage `json:"codexErrorInfo"`
 }
 
-// Native diagnostics can contain credentials. Prefer a fixed message for
-// structured auth errors; vet all other native text before bounding it to the
-// shared executor's public failure limit.
+// Native free text is deliberately not decoded: even an otherwise ordinary
+// transport error can contain credentials or account data. Public summaries
+// come only from recognized structured fields, with a fixed fallback.
 func codexFailureMessage(failure *turnError) string {
 	const fallback = "Codex execution failed"
 	const authFailure = "Codex authentication failed; renew the configured model credential in the control plane."
@@ -65,21 +62,7 @@ func codexFailureMessage(failure *turnError) string {
 			}
 		}
 	}
-	detail := utils.SafeDiagnostic(failure.Message)
-	if detail == "" {
-		return fallback
-	}
-	const prefix = fallback + ": "
-	const suffix = "..."
-	const limit = 512 - len(prefix) - len(suffix)
-	if len(detail) > limit {
-		detail = detail[:limit]
-		for !utf8.ValidString(detail) {
-			detail = detail[:len(detail)-1]
-		}
-		detail += suffix
-	}
-	return prefix + detail
+	return fallback
 }
 
 func (t *eventTranslator) translate(message rpcMessage, sink runtime.EventSink) (runtime.Outcome, bool, error) {

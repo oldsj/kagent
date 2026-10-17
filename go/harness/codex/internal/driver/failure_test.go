@@ -4,42 +4,49 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 )
+
+// Native input includes untrusted fields that the production decoder omits.
+type nativeFailureFixture struct {
+	Message           string          `json:"message"`
+	AdditionalDetails string          `json:"additionalDetails,omitempty"`
+	CodexErrorInfo    json.RawMessage `json:"codexErrorInfo"`
+}
 
 func TestFailedTurnDiagnostic(t *testing.T) {
 	const authFailure = "Codex authentication failed; renew the configured model credential in the control plane."
 	for _, test := range []struct {
 		name    string
-		failure *turnError
+		failure *nativeFailureFixture
 		want    string
 	}{
 		{name: "missing error", want: "Codex execution failed"},
-		{name: "empty message", failure: &turnError{}, want: "Codex execution failed"},
-		{name: "upstream detail", failure: &turnError{Message: "actor egress policy denied TLS destination"}, want: "Codex execution failed: actor egress policy denied TLS destination"},
-		{name: "auth code", failure: &turnError{Message: "Authorization: Bearer SYNTHETIC_CREDENTIAL", CodexErrorInfo: json.RawMessage(`"unauthorized"`)}, want: authFailure},
-		{name: "HTTP auth code", failure: &turnError{Message: "private response body", CodexErrorInfo: json.RawMessage(`{"httpConnectionFailed":{"httpStatusCode":401}}`)}, want: authFailure},
-		{name: "stream connection auth code", failure: &turnError{CodexErrorInfo: json.RawMessage(`{"responseStreamConnectionFailed":{"httpStatusCode":401}}`)}, want: authFailure},
-		{name: "stream disconnect auth code", failure: &turnError{CodexErrorInfo: json.RawMessage(`{"responseStreamDisconnected":{"httpStatusCode":401}}`)}, want: authFailure},
-		{name: "retry auth code", failure: &turnError{CodexErrorInfo: json.RawMessage(`{"responseTooManyFailedAttempts":{"httpStatusCode":401}}`)}, want: authFailure},
-		{name: "non-auth HTTP status", failure: &turnError{Message: "gateway refused the request", CodexErrorInfo: json.RawMessage(`{"httpConnectionFailed":{"httpStatusCode":403}}`)}, want: "Codex execution failed: gateway refused the request"},
-		{name: "null status", failure: &turnError{Message: "connection failed", CodexErrorInfo: json.RawMessage(`{"httpConnectionFailed":{"httpStatusCode":null}}`)}, want: "Codex execution failed: connection failed"},
-		{name: "unknown code", failure: &turnError{Message: "provider is unavailable", CodexErrorInfo: json.RawMessage(`"futureError"`)}, want: "Codex execution failed: provider is unavailable"},
-		{name: "unknown variant", failure: &turnError{Message: "provider is unavailable", CodexErrorInfo: json.RawMessage(`{"futureError":{"httpStatusCode":401}}`)}, want: "Codex execution failed: provider is unavailable"},
-		{name: "credential withheld", failure: &turnError{Message: "Authorization: Bearer SYNTHETIC_CREDENTIAL"}, want: "Codex execution failed: upstream error (details withheld: possible credential)"},
-		{name: "split credential indicator", failure: &turnError{Message: "Authori\nzation: SYNTHETIC_CREDENTIAL"}, want: "Codex execution failed: upstream error (details withheld: possible credential)"},
-		{name: "unknown private code", failure: &turnError{Message: "provider is unavailable", CodexErrorInfo: json.RawMessage(`"SYNTHETIC_CREDENTIAL"`)}, want: "Codex execution failed: provider is unavailable"},
-		{name: "credential after truncation", failure: &turnError{Message: strings.Repeat("x", 2000) + " access_token=SYNTHETIC_CREDENTIAL"}, want: "Codex execution failed: upstream error (details withheld: possible credential)"},
+		{name: "empty message", failure: &nativeFailureFixture{}, want: "Codex execution failed"},
+		{name: "upstream detail", failure: &nativeFailureFixture{Message: "actor egress policy denied TLS destination"}, want: "Codex execution failed"},
+		{name: "auth code", failure: &nativeFailureFixture{Message: "Authorization: Bearer SYNTHETIC_CREDENTIAL", AdditionalDetails: "private account data", CodexErrorInfo: json.RawMessage(`"unauthorized"`)}, want: authFailure},
+		{name: "HTTP auth code", failure: &nativeFailureFixture{Message: "private response body", CodexErrorInfo: json.RawMessage(`{"httpConnectionFailed":{"httpStatusCode":401}}`)}, want: authFailure},
+		{name: "stream connection auth code", failure: &nativeFailureFixture{CodexErrorInfo: json.RawMessage(`{"responseStreamConnectionFailed":{"httpStatusCode":401}}`)}, want: authFailure},
+		{name: "stream disconnect auth code", failure: &nativeFailureFixture{CodexErrorInfo: json.RawMessage(`{"responseStreamDisconnected":{"httpStatusCode":401}}`)}, want: authFailure},
+		{name: "retry auth code", failure: &nativeFailureFixture{CodexErrorInfo: json.RawMessage(`{"responseTooManyFailedAttempts":{"httpStatusCode":401}}`)}, want: authFailure},
+		{name: "non-auth HTTP status", failure: &nativeFailureFixture{Message: "gateway refused the request", CodexErrorInfo: json.RawMessage(`{"httpConnectionFailed":{"httpStatusCode":403}}`)}, want: "Codex execution failed"},
+		{name: "null status", failure: &nativeFailureFixture{Message: "connection failed", CodexErrorInfo: json.RawMessage(`{"httpConnectionFailed":{"httpStatusCode":null}}`)}, want: "Codex execution failed"},
+		{name: "unknown code", failure: &nativeFailureFixture{Message: "provider is unavailable", CodexErrorInfo: json.RawMessage(`"futureError"`)}, want: "Codex execution failed"},
+		{name: "unknown variant", failure: &nativeFailureFixture{Message: "provider is unavailable", CodexErrorInfo: json.RawMessage(`{"futureError":{"httpStatusCode":401}}`)}, want: "Codex execution failed"},
+		{name: "credential withheld", failure: &nativeFailureFixture{Message: "Authorization: Bearer SYNTHETIC_CREDENTIAL"}, want: "Codex execution failed"},
+		{name: "split credential indicator", failure: &nativeFailureFixture{Message: "Authori\nzation: SYNTHETIC_CREDENTIAL"}, want: "Codex execution failed"},
+		{name: "unknown private code", failure: &nativeFailureFixture{Message: "provider is unavailable", CodexErrorInfo: json.RawMessage(`"SYNTHETIC_CREDENTIAL"`)}, want: "Codex execution failed"},
+		{name: "long untrusted text", failure: &nativeFailureFixture{Message: strings.Repeat("界", 2000) + " access_token=SYNTHETIC_CREDENTIAL"}, want: "Codex execution failed"},
+		{name: "auth-like free text", failure: &nativeFailureFixture{Message: "unauthorized HTTP 401; renew auth"}, want: "Codex execution failed"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			params := struct {
 				ThreadID string `json:"threadId"`
 				Turn     struct {
-					ID     string     `json:"id"`
-					Status string     `json:"status"`
-					Error  *turnError `json:"error"`
+					ID     string                `json:"id"`
+					Status string                `json:"status"`
+					Error  *nativeFailureFixture `json:"error"`
 				} `json:"turn"`
 			}{ThreadID: "thread"}
 			params.Turn.ID, params.Turn.Status, params.Turn.Error = "turn", "failed", test.failure
@@ -58,12 +65,4 @@ func TestFailedTurnDiagnostic(t *testing.T) {
 			require.True(t, sink.results[0].IsError)
 		})
 	}
-}
-
-func TestFailedTurnDiagnosticBound(t *testing.T) {
-	message := codexFailureMessage(&turnError{Message: strings.Repeat("界", 1000)})
-	require.LessOrEqual(t, len(message), 512)
-	require.True(t, utf8.ValidString(message))
-	require.True(t, strings.HasPrefix(message, "Codex execution failed: 界"))
-	require.True(t, strings.HasSuffix(message, "..."))
 }
