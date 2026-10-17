@@ -42,9 +42,18 @@ generation but leaves DELETING in place, keeping task admission closed until a
 delete retry completes. Explicit deletion requires a client retry; idle deletion
 is retried by the expiration worker. After an attempt issues runtime work, errors
 retain the operation and resource pins. The attempt releases its execution claim
-on return. A crashed executor's claim expires after at most two minutes, allowing
+on return. A crashed executor's claim expires after at most the attempt bound
+(`KAGENT_RUNTIME_OPERATION_TIMEOUT`, ten minutes by default), allowing
 a client retry to claim the same operation with a new executor ID. Each attempt
 uses a context bounded by that interval; no claim renewer or recovery sweep runs.
+The bound must exceed `KAGENT_SUBSTRATE_LIFECYCLE_CALL_TIMEOUT` (five minutes by
+default), the deadline for each pause, suspend, and resume call. Snapshots scale
+with workspace size, so size that call for the largest Data snapshot at the
+observed storage rate. Substrate's own workflow deadline (`--actor-workflow-deadline`)
+also bounds those calls and must be at least as long. Every other Substrate call
+keeps the short `KAGENT_SUBSTRATE_CALL_TIMEOUT` (30 seconds). The controller
+refuses to start when the attempt bound does not exceed the lifecycle call
+deadline.
 A stale executor cannot complete or release a newer attempt's claim.
 
 Lifecycle retries inspect the pinned Actor identity and continue Substrate's

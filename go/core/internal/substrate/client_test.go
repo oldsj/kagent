@@ -310,3 +310,64 @@ func TestAdvancePageTokenAllowsTheLastPageAndARealMove(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, next)
 }
+
+// deadlineFake reports how long the calling context allows each RPC to run.
+type deadlineFake struct {
+	ateapipb.ControlClient
+	remaining map[string]time.Duration
+}
+
+func (f *deadlineFake) record(method string, ctx context.Context) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		f.remaining[method] = -1
+		return
+	}
+	f.remaining[method] = time.Until(deadline)
+}
+
+func (f *deadlineFake) GetActor(ctx context.Context, _ *ateapipb.GetActorRequest, _ ...grpc.CallOption) (*ateapipb.Actor, error) {
+	f.record("GetActor", ctx)
+	return &ateapipb.Actor{}, nil
+}
+
+func (f *deadlineFake) ResumeActor(ctx context.Context, _ *ateapipb.ResumeActorRequest, _ ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+	f.record("ResumeActor", ctx)
+	return &ateapipb.ResumeActorResponse{}, nil
+}
+
+func (f *deadlineFake) PauseActor(ctx context.Context, _ *ateapipb.PauseActorRequest, _ ...grpc.CallOption) (*ateapipb.PauseActorResponse, error) {
+	f.record("PauseActor", ctx)
+	return &ateapipb.PauseActorResponse{}, nil
+}
+
+func (f *deadlineFake) SuspendActor(ctx context.Context, _ *ateapipb.SuspendActorRequest, _ ...grpc.CallOption) (*ateapipb.SuspendActorResponse, error) {
+	f.record("SuspendActor", ctx)
+	return &ateapipb.SuspendActorResponse{}, nil
+}
+
+func TestLifecycleCallsUseTheLifecycleDeadline(t *testing.T) {
+	fake := &deadlineFake{remaining: map[string]time.Duration{}}
+	client := &Client{ControlClient: fake, cfg: Config{CallTimeout: time.Minute, LifecycleCallTimeout: time.Hour}}
+	_, err := client.GetActor(t.Context(), "team-a", "actor")
+	require.NoError(t, err)
+	_, err = client.ResumeActor(t.Context(), "team-a", "actor")
+	require.NoError(t, err)
+	_, err = client.PauseActor(t.Context(), "team-a", "actor")
+	require.NoError(t, err)
+	_, err = client.SuspendActor(t.Context(), "team-a", "actor")
+	require.NoError(t, err)
+
+	require.InDelta(t, time.Minute.Seconds(), fake.remaining["GetActor"].Seconds(), 5)
+	for _, method := range []string{"ResumeActor", "PauseActor", "SuspendActor"} {
+		require.InDelta(t, time.Hour.Seconds(), fake.remaining[method].Seconds(), 5, method)
+	}
+}
+
+func TestLifecycleCallsFallBackToTheCallDeadline(t *testing.T) {
+	fake := &deadlineFake{remaining: map[string]time.Duration{}}
+	client := &Client{ControlClient: fake, cfg: Config{CallTimeout: time.Minute}}
+	_, err := client.SuspendActor(t.Context(), "team-a", "actor")
+	require.NoError(t, err)
+	require.InDelta(t, time.Minute.Seconds(), fake.remaining["SuspendActor"].Seconds(), 5)
+}

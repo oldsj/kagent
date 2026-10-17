@@ -59,10 +59,26 @@ type ActorWorkflow struct {
 	callbackOrigin string
 	store          workflowStore
 	actors         actorClient
+	// attemptTimeout bounds one lifecycle attempt, including its execution claim.
+	attemptTimeout time.Duration
 }
 
-func NewActorWorkflow(store workflowStore, actors actorClient, credentials runtimeCredentials, callbackOrigin string) *ActorWorkflow {
-	return &ActorWorkflow{store: store, actors: actors, credentials: credentials, callbackOrigin: callbackOrigin}
+// ActorWorkflowOption configures an ActorWorkflow.
+type ActorWorkflowOption func(*ActorWorkflow)
+
+// WithAttemptTimeout bounds each lifecycle attempt. It must exceed the longest
+// single Substrate call, or an attempt could expire mid-call and be retried
+// while that call is still running.
+func WithAttemptTimeout(timeout time.Duration) ActorWorkflowOption {
+	return func(w *ActorWorkflow) { w.attemptTimeout = timeout }
+}
+
+func NewActorWorkflow(store workflowStore, actors actorClient, credentials runtimeCredentials, callbackOrigin string, options ...ActorWorkflowOption) *ActorWorkflow {
+	w := &ActorWorkflow{store: store, actors: actors, credentials: credentials, callbackOrigin: callbackOrigin, attemptTimeout: database.DefaultRuntimeOperationTimeout}
+	for _, option := range options {
+		option(w)
+	}
+	return w
 }
 
 var _ runtimeAssociationReader = (*ActorWorkflow)(nil)
@@ -300,7 +316,7 @@ func (w *ActorWorkflow) Suspend(ctx context.Context, session *apiv1alpha1.Sessio
 // Actors are errors; Resume never creates replacement compute. A READY Session
 // whose Actor idle quiescence suspended or paused is activated in place.
 func (w *ActorWorkflow) Resume(ctx context.Context, session *apiv1alpha1.Session) (*apiv1alpha1.Session, error) {
-	ctx, cancelAttempt := context.WithTimeout(ctx, database.RuntimeOperationTimeout)
+	ctx, cancelAttempt := context.WithTimeout(ctx, w.attemptTimeout)
 	defer cancelAttempt()
 	operation, err := w.store.BeginSessionOperation(ctx, session.GetId(), apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_RESUME)
 	if err != nil {
@@ -363,7 +379,7 @@ func (w *ActorWorkflow) Delete(ctx context.Context, session *apiv1alpha1.Session
 }
 
 func (w *ActorWorkflow) run(ctx context.Context, sessionID string, requestedKind apiv1alpha1.RuntimeOperation) (*apiv1alpha1.Session, error) {
-	ctx, cancelAttempt := context.WithTimeout(ctx, database.RuntimeOperationTimeout)
+	ctx, cancelAttempt := context.WithTimeout(ctx, w.attemptTimeout)
 	defer cancelAttempt()
 	operation, err := w.store.BeginSessionOperation(ctx, sessionID, requestedKind)
 	if err != nil {

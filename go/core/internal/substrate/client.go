@@ -123,6 +123,19 @@ func (c *Client) callCtx(ctx context.Context) (context.Context, context.CancelFu
 	return context.WithTimeout(ctx, c.cfg.CallTimeout)
 }
 
+// lifecycleCtx is callCtx with the longer snapshot-sized bound. Only the
+// Actor lifecycle calls use it so other calls still fail fast.
+func (c *Client) lifecycleCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	timeout := c.cfg.LifecycleCallTimeout
+	if timeout <= 0 {
+		timeout = c.cfg.CallTimeout
+	}
+	if timeout <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
 // actorRef builds the (atespace, name) reference used by Get/Resume/Suspend/Delete.
 // v0.0.9 renamed the ActorRef message to ObjectRef.
 func actorRef(atespace, actorID string) *ateapipb.ObjectRef {
@@ -187,7 +200,7 @@ func (c *Client) createActor(ctx context.Context, atespace, actorID, tmplNS, tmp
 }
 
 func (c *Client) ResumeActor(ctx context.Context, atespace, actorID string) (*ateapipb.Actor, error) {
-	ctx, cancel := c.callCtx(ctx)
+	ctx, cancel := c.lifecycleCtx(ctx)
 	defer cancel()
 	resp, err := c.ControlClient.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef(atespace, actorID)})
 	if err != nil {
@@ -197,7 +210,7 @@ func (c *Client) ResumeActor(ctx context.Context, atespace, actorID string) (*at
 }
 
 func (c *Client) PauseActor(ctx context.Context, atespace, actorID string) (*ateapipb.Actor, error) {
-	ctx, cancel := c.callCtx(ctx)
+	ctx, cancel := c.lifecycleCtx(ctx)
 	defer cancel()
 	resp, err := c.ControlClient.PauseActor(ctx, &ateapipb.PauseActorRequest{Actor: actorRef(atespace, actorID)})
 	if err != nil {
@@ -207,7 +220,7 @@ func (c *Client) PauseActor(ctx context.Context, atespace, actorID string) (*ate
 }
 
 func (c *Client) SuspendActor(ctx context.Context, atespace, actorID string) (*ateapipb.Actor, error) {
-	ctx, cancel := c.callCtx(ctx)
+	ctx, cancel := c.lifecycleCtx(ctx)
 	defer cancel()
 	resp, err := c.ControlClient.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: actorRef(atespace, actorID)})
 	if err != nil {

@@ -163,3 +163,41 @@ func TestLauncherSelectedPlatform(t *testing.T) {
 		}
 	}
 }
+
+func TestRuntimePath(t *testing.T) {
+	const system = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	for _, test := range []struct{ name, image, want string }{
+		{"no image PATH", "", "/payload/bin:" + system},
+		{"toolchain dirs survive", "/usr/local/go/bin:/go/bin:/usr/local/bin:/usr/bin", "/payload/bin:/usr/local/go/bin:/go/bin:/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/sbin:/bin"},
+		{"relative and empty entries dropped", ":bin:./node_modules/.bin:/opt/tool/bin:", "/payload/bin:/opt/tool/bin:" + system},
+		{"payload directory is not duplicated", "/payload/bin:/opt/tool/bin", "/payload/bin:/opt/tool/bin:" + system},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, runtimePath("/payload", test.image))
+		})
+	}
+}
+
+func TestLauncherKeepsImagePath(t *testing.T) {
+	root := fixturePayload(t, "claude")
+	data := t.TempDir()
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, os.Chdir(cwd)) })
+	platform := runtime.GOOS + "/" + runtime.GOARCH
+	config := `{"claude_executable":"` + root + `/bin/claude","expected_claude_version":"` + LockedRelease("claude").Version + `"}`
+	executed := false
+	err = Launch(root, filepath.Dir(data), data, platform, false, []string{PlatformEnvironment + "=" + platform, "PATH=/usr/local/go/bin:/usr/bin", "KAGENT_CONFIG_JSON=" + config}, func(_ string, _, env []string) error {
+		executed = true
+		var paths []string
+		for _, entry := range env {
+			if value, ok := strings.CutPrefix(entry, "PATH="); ok {
+				paths = append(paths, value)
+			}
+		}
+		require.Equal(t, []string{root + "/bin:/usr/local/go/bin:/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/sbin:/bin"}, paths)
+		return nil
+	})
+	require.NoError(t, err)
+	require.True(t, executed)
+}

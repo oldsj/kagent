@@ -11,5 +11,9 @@ type Config struct {
 	// ClientCertFile contains the PEM client certificate and private key used for mTLS.
 	ClientCertFile string
 	DialTimeout    time.Duration
-	CallTimeout    time.Duration
+	// CallTimeout bounds every ate-api call except lifecycle calls.
+	CallTimeout time.Duration
+	// LifecycleCallTimeout bounds ResumeActor, PauseActor and SuspendActor, which
+	// move the Actor's snapshot and scale with its size. Zero uses CallTimeout.
+	LifecycleCallTimeout time.Duration
 }

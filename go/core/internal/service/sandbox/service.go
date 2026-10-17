@@ -30,6 +30,9 @@ type Config struct {
 	DefaultTTL             time.Duration
 	MaxTTL                 time.Duration
 	ExpirationPollInterval time.Duration
+	// RuntimeOperationTimeout bounds one lifecycle attempt. Zero uses
+	// database.DefaultRuntimeOperationTimeout.
+	RuntimeOperationTimeout time.Duration
 }
 
 type Service struct {
