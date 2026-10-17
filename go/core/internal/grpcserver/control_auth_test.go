@@ -280,3 +280,42 @@ func TestPreparationMethodScopeIsExplicit(t *testing.T) {
 	require.Error(t, controlauth.CheckMethod(api.TaskStoreService_CompleteWorkspacePreparation_FullMethodName))
 	require.Error(t, controlauth.CheckMethod("/kagent.api.v1alpha1.SessionService/FuturePreparation"))
 }
+
+// The Mainloop service credential reaches the checkpoint and fork handlers it
+// needs, and not the rename handler it does not.
+func TestControlAuthAdmitsCheckpointMethods(t *testing.T) {
+	token := strings.Repeat("c", 32)
+	file := filepath.Join(t.TempDir(), "current")
+	require.NoError(t, os.WriteFile(file, []byte(token), 0600))
+	policy, err := controlauth.New(controlauth.Config{Namespace: "kagent", Agents: []string{"mainloop-main"}})
+	require.NoError(t, err)
+	provider, err := authimpl.NewServiceTokenAuthenticator(file, "", policy)
+	require.NoError(t, err)
+	policies := DefaultMethodPolicies()
+	for method, allowed := range map[string]bool{
+		api.CheckpointService_CreateCheckpoint_FullMethodName:     true,
+		api.CheckpointService_GetCheckpoint_FullMethodName:        true,
+		api.CheckpointService_ListCheckpoints_FullMethodName:      true,
+		api.CheckpointService_DeleteCheckpoint_FullMethodName:     true,
+		api.CheckpointService_ForkSession_FullMethodName:          true,
+		api.CheckpointService_UpdateCheckpointName_FullMethodName: false,
+	} {
+		t.Run(method, func(t *testing.T) {
+			called := false
+			ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("authorization", "Bearer "+token))
+			_, err := authenticationUnaryInterceptor(provider, nil, nil, policies)(ctx, nil, &grpc.UnaryServerInfo{FullMethod: method}, func(ctx context.Context, _ any) (any, error) {
+				called = true
+				session, ok := pkgauth.AuthSessionFrom(ctx)
+				require.True(t, ok)
+				require.Equal(t, "mainloop", session.Principal().User.ID)
+				return nil, nil
+			})
+			require.Equal(t, allowed, called)
+			if allowed {
+				require.NoError(t, err)
+			} else {
+				require.Equal(t, codes.PermissionDenied, status.Code(err))
+			}
+		})
+	}
+}

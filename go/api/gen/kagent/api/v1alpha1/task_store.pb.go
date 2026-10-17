@@ -646,8 +646,13 @@ type TaskStoreServiceGetWorkspaceResponse struct {
 	PreparationRequired bool                        `protobuf:"varint,2,opt,name=preparation_required,json=preparationRequired,proto3" json:"preparation_required,omitempty"`
 	PreparationReady    bool                        `protobuf:"varint,3,opt,name=preparation_ready,json=preparationReady,proto3" json:"preparation_ready,omitempty"`
 	Preparation         *NativeWorkspacePreparation `protobuf:"bytes,4,opt,name=preparation,proto3" json:"preparation,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// True when the Session is a fork that must start without the native agent
+	// conversation carried in its restored data.
+	FreshConversation bool `protobuf:"varint,5,opt,name=fresh_conversation,json=freshConversation,proto3" json:"fresh_conversation,omitempty"`
+	// The Session this answer is for; keys the runtime's one-time reset.
+	SessionId     string `protobuf:"bytes,6,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TaskStoreServiceGetWorkspaceResponse) Reset() {
@@ -706,6 +711,20 @@ func (x *TaskStoreServiceGetWorkspaceResponse) GetPreparation() *NativeWorkspace
 		return x.Preparation
 	}
 	return nil
+}
+
+func (x *TaskStoreServiceGetWorkspaceResponse) GetFreshConversation() bool {
+	if x != nil {
+		return x.FreshConversation
+	}
+	return false
+}
+
+func (x *TaskStoreServiceGetWorkspaceResponse) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
 }
 
 // Assigned only through the authenticated Session runtime channel. No commands.
@@ -1132,12 +1151,15 @@ const file_kagent_api_v1alpha1_task_store_proto_rawDesc = "" +
 	"\"TaskStoreServiceSettleTaskResponse\"N\n" +
 	"#TaskStoreServiceGetWorkspaceRequest\x12'\n" +
 	"\n" +
-	"session_id\x18\x01 \x01(\tB\b\xbaH\x05r\x03\xb0\x01\x01R\tsessionId\"\x97\x02\n" +
+	"session_id\x18\x01 \x01(\tB\b\xbaH\x05r\x03\xb0\x01\x01R\tsessionId\"\xe5\x02\n" +
 	"$TaskStoreServiceGetWorkspaceResponse\x12<\n" +
 	"\tworkspace\x18\x01 \x01(\v2\x1e.kagent.api.v1alpha1.WorkspaceR\tworkspace\x121\n" +
 	"\x14preparation_required\x18\x02 \x01(\bR\x13preparationRequired\x12+\n" +
 	"\x11preparation_ready\x18\x03 \x01(\bR\x10preparationReady\x12Q\n" +
-	"\vpreparation\x18\x04 \x01(\v2/.kagent.api.v1alpha1.NativeWorkspacePreparationR\vpreparation\"\xd3\t\n" +
+	"\vpreparation\x18\x04 \x01(\v2/.kagent.api.v1alpha1.NativeWorkspacePreparationR\vpreparation\x12-\n" +
+	"\x12fresh_conversation\x18\x05 \x01(\bR\x11freshConversation\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x06 \x01(\tR\tsessionId\"\xd3\t\n" +
 	"\x1aNativeWorkspacePreparation\x12'\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tB\b\xbaH\x05r\x03\xb0\x01\x01R\tsessionId\x12'\n" +

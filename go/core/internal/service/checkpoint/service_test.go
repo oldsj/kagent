@@ -41,6 +41,27 @@ type testStore struct {
 	finalizeErr error
 	reserveErr  error
 	scope       string
+	// agent is the Agent the checkpoint's source Session runs; nil means the
+	// allowlisted one the Mainloop fixtures use.
+	agent *apiv1alpha1.ResourceReference
+	// listed is what ListSessionCheckpoints returns.
+	listed []*apiv1alpha1.Checkpoint
+}
+
+func (s *testStore) source(id, userID string) *apiv1alpha1.Session {
+	agent := s.agent
+	if agent == nil {
+		agent = &apiv1alpha1.ResourceReference{Namespace: "kagent", Name: "mainloop-main"}
+	}
+	return &apiv1alpha1.Session{Id: id, Creator: userID, Agent: agent}
+}
+
+func (s *testStore) GetSession(_ context.Context, id, userID string) (*apiv1alpha1.Session, error) {
+	return s.source(id, userID), nil
+}
+
+func (s *testStore) GetCheckpointSource(_ context.Context, id, userID string) (*apiv1alpha1.Session, error) {
+	return s.source(id, userID), nil
 }
 
 func (s *testStore) ReserveSessionCheckpoint(_ context.Context, checkpoint *apiv1alpha1.Checkpoint, _, _ string) (*apiv1alpha1.Checkpoint, *database.SessionTaskSnapshot, error) {
@@ -93,8 +114,8 @@ func (s *testStore) GetSessionCheckpointSnapshot(context.Context, string, string
 	return s.snapshot, s.tagUID, nil
 }
 
-func (*testStore) ListSessionCheckpoints(context.Context, string, string, string, int) ([]*apiv1alpha1.Checkpoint, error) {
-	return nil, nil
+func (s *testStore) ListSessionCheckpoints(context.Context, string, string, string, int) ([]*apiv1alpha1.Checkpoint, error) {
+	return s.listed, nil
 }
 
 func (s *testStore) BeginDeleteSessionCheckpoint(context.Context, string, string) (*database.SessionTaskSnapshot, string, error) {
@@ -118,10 +139,10 @@ func (s *testStore) UpdateCheckpointName(_ context.Context, _, _, name string) (
 	return s.prepared, nil
 }
 
-func (s *testStore) ForkSession(_ context.Context, _ string, userID, _ string, sessionID string) (*apiv1alpha1.Session, bool, error) {
+func (s *testStore) ForkSession(_ context.Context, _ string, userID, _ string, sessionID string, fresh bool) (*apiv1alpha1.Session, bool, error) {
 	if s.forked == nil {
 		s.forked = &apiv1alpha1.Session{
-			Id: sessionID, Creator: userID,
+			Id: sessionID, Creator: userID, FreshConversation: fresh,
 			State: apiv1alpha1.RuntimeState_RUNTIME_STATE_CREATING,
 		}
 		return s.forked, true, nil
@@ -353,7 +374,7 @@ func TestFullSnapshotCheckpointsButCannotFork(t *testing.T) {
 	require.Equal(t, apiv1alpha1.CheckpointState_CHECKPOINT_STATE_READY, checkpoint.State)
 	require.Equal(t, "FULL", store.snapshot.ContentScope)
 
-	_, err = service.Fork(ctx, checkpoint.Id, "fork-request")
+	_, err = service.Fork(ctx, checkpoint.Id, "fork-request", false)
 	require.Equal(t, serviceerrors.CodeFailedPrecondition, serviceerrors.CodeOf(err))
 	require.Nil(t, workflow.session, "a FULL checkpoint must not reach runtime creation")
 
@@ -373,7 +394,7 @@ func TestForkCreatesSessionFromCheckpoint(t *testing.T) {
 	service := NewService(store, testAuthorizer{}, tags, workflow)
 	ctx := auth.AuthSessionTo(context.Background(), testSession{userID: "alice"})
 
-	session, err := service.Fork(ctx, checkpoint.GetId(), "fork-request")
+	session, err := service.Fork(ctx, checkpoint.GetId(), "fork-request", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -447,7 +468,7 @@ func TestForkRejectsReplacedTag(t *testing.T) {
 			}}
 			service := NewService(store, testAuthorizer{}, tags, &testWorkflow{})
 			ctx := auth.AuthSessionTo(t.Context(), testSession{userID: "alice"})
-			_, err := service.Fork(ctx, checkpoint.Id, "fork-request")
+			_, err := service.Fork(ctx, checkpoint.Id, "fork-request", false)
 			require.Error(t, err)
 			require.Nil(t, store.forked)
 		})

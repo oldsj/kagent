@@ -30,10 +30,13 @@ Agent list. Helm defaults to namespace `kagent` and these five Agents:
 installation uses another namespace.
 
 Allowed RPCs are Session Create/Get/List/Suspend/Resume/Delete, Agent GetAgent,
-and A2A SendStreamingMessage/GetTask/ListTasks/CancelTask/SubscribeToTask/
+Checkpoint Create/Get/List/Delete and ForkSession, and A2A SendStreamingMessage/GetTask/ListTasks/CancelTask/SubscribeToTask/
 GetExtendedAgentCard. Sessions must be created by `mainloop` and reference an
-allowed Agent. Lists apply that intersection before page slicing and cursor
-construction. All-creators lists and share tokens are denied. A2A requires an
+allowed Agent. Checkpoint calls apply the same rule to the Session a checkpoint
+was taken from, read from the checkpoint's pinned revision so it holds after the
+source Session is deleted; the store scopes every checkpoint and fork to the
+`mainloop` owner. Checkpoint rename stays denied. Lists apply that intersection
+before page slicing and cursor construction. All-creators lists and share tokens are denied. A2A requires an
 allowed Agent route; task IDs resolve through their stored Session and streaming
 sends require an existing owned context or task. Synchronous SendMessage, MCP,
 reflection, and all other control methods are denied. Reflection registration is

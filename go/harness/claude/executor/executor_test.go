@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	apiworkspace "github.com/kagent-dev/kagent/go/api/workspace"
 	"github.com/kagent-dev/kagent/go/harness/claude/config"
 	"github.com/kagent-dev/kagent/go/harness/claude/internal/adapter"
@@ -243,4 +245,69 @@ func TestPreparationRuntimeRecoveryPreservesApprovalAndHistory(t *testing.T) {
 			}
 		})
 	}
+}
+
+type forkConversation struct{ fresh bool }
+
+func (forkConversation) SessionID() (string, error) { return "fork-session", nil }
+func (c forkConversation) FreshConversation(context.Context) (bool, error) {
+	return c.fresh, nil
+}
+
+// A fresh fork's first turn drops the restored Claude conversation, and only
+// that: settings, packages and the workspace stay.
+func TestFreshForkDropsClaudeConversation(t *testing.T) {
+	for _, fresh := range []bool{true, false} {
+		t.Run(fmt.Sprint(fresh), func(t *testing.T) {
+			data := t.TempDir()
+			cli := filepath.Join(data, "fake-claude")
+			script := "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf '%s\\n' '" + config.PinnedClaudeVersion + " (Claude Code)'; exit 0; fi\nexit 42\n"
+			require.NoError(t, os.WriteFile(cli, []byte(script), 0700))
+			cfg := config.Production("fixture-model", "no turn")
+			cfg.ClaudeExecutable = cli
+			raw, err := json.Marshal(cfg)
+			require.NoError(t, err)
+
+			const bound = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+			restored, err := continuation.New(filepath.Join(data, "adapter"), "claude", validateSessionID)
+			require.NoError(t, err)
+			require.NoError(t, restored.Bind(bound))
+			conversation := []string{"projects/work/" + bound + ".jsonl", "todos/t.json", "history.jsonl", "sessions/s.json", "plans/p.md"}
+			kept := []string{"claude/settings.json", "claude/packages/p/index.js", "workspace/main.go", "cache/modules/m"}
+			for _, name := range kept {
+				write(t, filepath.Join(data, name))
+			}
+			for _, name := range conversation {
+				write(t, filepath.Join(data, "claude", name))
+			}
+
+			executor, closer, err := New(t.Context(), Config{ConfigJSON: raw, DataDir: data, Environment: []string{"PATH=" + os.Getenv("PATH")}, Conversation: forkConversation{fresh: fresh}})
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = closer.Close() })
+			message := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("hello"))
+			message.TaskID, message.ContextID = "task-1", bound
+			for range executor.Execute(t.Context(), &a2asrv.ExecutorContext{TaskID: "task-1", ContextID: bound, Message: message}) {
+			}
+
+			_, started, err := restored.Load()
+			require.NoError(t, err)
+			require.Equal(t, !fresh, started, "the binding survives only a default fork")
+			for _, name := range conversation {
+				if fresh {
+					require.NoFileExists(t, filepath.Join(data, "claude", name))
+				} else {
+					require.FileExists(t, filepath.Join(data, "claude", name))
+				}
+			}
+			for _, name := range kept {
+				require.FileExists(t, filepath.Join(data, name))
+			}
+		})
+	}
+}
+
+func write(t *testing.T, path string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, []byte("data"), 0o600))
 }

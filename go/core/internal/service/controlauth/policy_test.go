@@ -21,6 +21,8 @@ func TestServicePolicy(t *testing.T) {
 		{"Agent", auth.VerbGet, "mainloop-main", true}, {"Agent", auth.VerbGet, "other", false}, {"Agent", auth.VerbCreate, "mainloop-main", false},
 		{"Session", auth.VerbGet, "id", true}, {"Session", auth.VerbCreate, "id/shares", false}, {"SessionAllCreators", auth.VerbGet, "", false},
 		{"Harness", auth.VerbGet, "mainloop-main", false}, {"ModelConfig", auth.VerbGet, "mainloop-main", false},
+		{"Checkpoint", auth.VerbGet, "id", true}, {"Checkpoint", auth.VerbDelete, "id", true},
+		{"Checkpoint", auth.VerbUpdate, "id", false}, {"Checkpoint", auth.VerbGet, "id/shares", false}, {"Checkpoint", auth.VerbDelete, "a/b", false},
 	} {
 		t.Run(tc.kind+"/"+string(tc.verb)+"/"+tc.name, func(t *testing.T) {
 			err := p.Check(t.Context(), principal, tc.verb, auth.Resource{Type: tc.kind, Namespace: "kagent", Name: tc.name})
@@ -51,6 +53,18 @@ func TestServicePolicy(t *testing.T) {
 	}
 	require.Error(t, p.CheckSession(t.Context(), &api.Session{Creator: "mainloop", Agent: &api.ResourceReference{Namespace: "kagent", Name: "other"}}))
 	require.Error(t, CheckMethod("/future.Service/Method"))
+}
+
+func TestCheckpointMethodsAreAllowed(t *testing.T) {
+	for _, method := range []string{
+		api.CheckpointService_CreateCheckpoint_FullMethodName, api.CheckpointService_GetCheckpoint_FullMethodName,
+		api.CheckpointService_ListCheckpoints_FullMethodName, api.CheckpointService_DeleteCheckpoint_FullMethodName,
+		api.CheckpointService_ForkSession_FullMethodName,
+	} {
+		require.NoError(t, CheckMethod(method), method)
+	}
+	// Renaming is not part of the Mainloop surface.
+	require.Error(t, CheckMethod(api.CheckpointService_UpdateCheckpointName_FullMethodName))
 }
 
 func TestCleartextMCPOrigins(t *testing.T) {

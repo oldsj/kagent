@@ -104,16 +104,20 @@ class TaskStoreServiceGetWorkspaceRequest(_message.Message):
     def __init__(self, session_id: _Optional[str] = ...) -> None: ...
 
 class TaskStoreServiceGetWorkspaceResponse(_message.Message):
-    __slots__ = ("workspace", "preparation_required", "preparation_ready", "preparation")
+    __slots__ = ("workspace", "preparation_required", "preparation_ready", "preparation", "fresh_conversation", "session_id")
     WORKSPACE_FIELD_NUMBER: _ClassVar[int]
     PREPARATION_REQUIRED_FIELD_NUMBER: _ClassVar[int]
     PREPARATION_READY_FIELD_NUMBER: _ClassVar[int]
     PREPARATION_FIELD_NUMBER: _ClassVar[int]
+    FRESH_CONVERSATION_FIELD_NUMBER: _ClassVar[int]
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     workspace: _common_pb2.Workspace
     preparation_required: bool
     preparation_ready: bool
     preparation: NativeWorkspacePreparation
-    def __init__(self, workspace: _Optional[_Union[_common_pb2.Workspace, _Mapping]] = ..., preparation_required: _Optional[bool] = ..., preparation_ready: _Optional[bool] = ..., preparation: _Optional[_Union[NativeWorkspacePreparation, _Mapping]] = ...) -> None: ...
+    fresh_conversation: bool
+    session_id: str
+    def __init__(self, workspace: _Optional[_Union[_common_pb2.Workspace, _Mapping]] = ..., preparation_required: _Optional[bool] = ..., preparation_ready: _Optional[bool] = ..., preparation: _Optional[_Union[NativeWorkspacePreparation, _Mapping]] = ..., fresh_conversation: _Optional[bool] = ..., session_id: _Optional[str] = ...) -> None: ...
 
 class NativeWorkspacePreparation(_message.Message):
     __slots__ = ("session_id", "context_id", "create_request_id", "action_id", "request_digest", "execution_id", "challenge_id", "sequence", "generation_id", "atespace", "actor_name", "actor_uid", "prepared_revision", "workspace", "development_image", "platform", "policy_identity", "payload_image", "provider", "schema", "cli_version", "profile", "setup_digest", "config_digest", "mcp_digest")

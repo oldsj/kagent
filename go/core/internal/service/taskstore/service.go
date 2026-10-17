@@ -225,7 +225,7 @@ func (s *Service) getWorkspaceOperation(ctx context.Context, input *apiv1alpha1.
 	if err != nil {
 		return nil, err
 	}
-	result := &apiv1alpha1.TaskStoreServiceGetWorkspaceResponse{Workspace: session.GetWorkspace()}
+	result := &apiv1alpha1.TaskStoreServiceGetWorkspaceResponse{Workspace: session.GetWorkspace(), FreshConversation: session.GetFreshConversation(), SessionId: session.GetId()}
 	if database.RequiresWorkspacePreparation(session) {
 		store, ok := s.store.(interface {
 			WorkspacePreparationRequired(context.Context, *apiv1alpha1.Session) (bool, error)

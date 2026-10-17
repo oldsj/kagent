@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"path/filepath"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
@@ -28,6 +29,11 @@ type Config struct {
 	// Workspace reads the Session's workspace request. It is required when the
 	// configuration enables Git, and ignored otherwise.
 	Workspace workspace.Source
+	// Conversation says whether the Session is a fork that starts without the
+	// native conversation in its restored data. Nil leaves that data as it is,
+	// which only a configuration check and an embedder without a control plane
+	// should do.
+	Conversation continuation.FreshSource
 }
 
 // New validates the configuration and Claude installation, then returns the
@@ -60,6 +66,12 @@ func New(ctx context.Context, cfg Config) (a2asrv.AgentExecutor, io.Closer, erro
 	if err != nil {
 		_ = runner.Close()
 		return nil, nil, err
+	}
+	if cfg.Conversation != nil {
+		store.RequireFresh(continuation.Fresh{
+			Source: cfg.Conversation, MarkerDir: cfg.DataDir + "/.kagent",
+			Clear: claudeConversationPaths(cfg.DataDir + "/claude"),
+		})
 	}
 	// Read here rather than taken as a Config field: the identity travels in the
 	// compiled configuration this function already has, and an embedder that
@@ -96,6 +108,17 @@ func New(ctx context.Context, cfg Config) (a2asrv.AgentExecutor, io.Closer, erro
 		return nil, nil, err
 	}
 	return executor, closer, nil
+}
+
+// claudeConversationPaths are the transcript and per-conversation files Claude
+// keeps under its configuration directory. Settings and credentials are not
+// among them.
+func claudeConversationPaths(dir string) []string {
+	var paths []string
+	for _, name := range []string{"projects", "todos", "shell-snapshots", "file-history", "session-env", "sessions", "plans", "history.jsonl"} {
+		paths = append(paths, filepath.Join(dir, name))
+	}
+	return paths
 }
 
 func validateSessionID(id string) error {
