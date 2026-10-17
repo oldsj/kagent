@@ -24,6 +24,10 @@ const (
 	approvalQueueSize = 16
 )
 
+// approvalKeepAlive is how often a waiting approve call tells Claude it is
+// still alive. It must stay well under Claude's 90s transport-error grace.
+var approvalKeepAlive = 15 * time.Second
+
 // ApprovalBroker exposes Claude's native permission-prompt MCP tool and turns
 // its synchronous calls into runtime-neutral approval requests.
 type ApprovalBroker struct {
@@ -88,8 +92,12 @@ func NewApprovalBroker(protectedServers []string, maxBodyBytes int) (*ApprovalBr
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name: ApprovalToolName, Description: "Resolve a kagent human approval request for a Claude tool call",
 	}, broker.handle)
+	// The event store lets Claude resume a call's response stream after the
+	// loopback connection is reset, instead of failing a call that may wait
+	// hours for the owner.
 	mcpHandler := mcp.NewStreamableHTTPHandler(
-		func(*http.Request) *mcp.Server { return mcpServer }, nil,
+		func(*http.Request) *mcp.Server { return mcpServer },
+		&mcp.StreamableHTTPOptions{EventStore: mcp.NewMemoryEventStore(nil)},
 	)
 	broker.server = &http.Server{
 		Handler:           broker.authorizeAndLimit(mcpHandler),
@@ -140,7 +148,7 @@ func (b *ApprovalBroker) authorizeAndLimit(next http.Handler) http.Handler {
 	})
 }
 
-func (b *ApprovalBroker) handle(ctx context.Context, _ *mcp.CallToolRequest, input *permissionPromptInput) (*mcp.CallToolResult, any, error) {
+func (b *ApprovalBroker) handle(ctx context.Context, req *mcp.CallToolRequest, input *permissionPromptInput) (*mcp.CallToolResult, any, error) {
 	if input == nil || input.ToolUseID == "" || !b.protects(input.ToolName) {
 		return nil, nil, fmt.Errorf("invalid Claude permission request")
 	}
@@ -173,7 +181,10 @@ func (b *ApprovalBroker) handle(ctx context.Context, _ *mcp.CallToolRequest, inp
 		return nil, nil, fmt.Errorf("approval queue is full")
 	}
 
-	// Wait for the approval decision
+	// Wait for the approval decision. An owner can take hours, so keep the
+	// call visibly alive: see keepAlive.
+	stopKeepAlive := b.keepAlive(ctx, req)
+	defer stopKeepAlive()
 	var output permissionPromptOutput
 	select {
 	case decision := <-pending.decision:
@@ -190,6 +201,38 @@ func (b *ApprovalBroker) handle(ctx context.Context, _ *mcp.CallToolRequest, inp
 		return nil, nil, fmt.Errorf("encode Claude permission decision: %w", err)
 	}
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(raw)}}}, nil, nil
+}
+
+// keepAlive sends MCP progress notifications on the call's stream until the
+// returned stop function runs. Claude aborts a call with "transport dropped
+// mid-call" when its HTTP transport reports an error (a reset connection, a
+// restored actor) and no progress notification arrives within 90s. A
+// notification on the resumed stream clears that countdown. Claude only
+// listens when the call carries a progress token; without one this does nothing.
+func (b *ApprovalBroker) keepAlive(ctx context.Context, req *mcp.CallToolRequest) (stop func()) {
+	if req == nil || req.Session == nil || req.Params == nil || req.Params.GetProgressToken() == nil {
+		return func() {}
+	}
+	token := req.Params.GetProgressToken()
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(approvalKeepAlive)
+		defer ticker.Stop()
+		for progress := 1.0; ; progress++ {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				// Best effort: a failed send is retried on the next tick.
+				_ = req.Session.NotifyProgress(ctx, &mcp.ProgressNotificationParams{
+					ProgressToken: token, Progress: progress, Message: "waiting for human approval",
+				})
+			}
+		}
+	}()
+	return func() { cancel(); <-done }
 }
 
 func (b *ApprovalBroker) protects(toolName string) bool {

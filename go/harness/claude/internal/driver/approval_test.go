@@ -266,3 +266,67 @@ func bridgeDecisionToFile(t *testing.T, pending *PendingApprovalRequest, path st
 		}
 	}()
 }
+
+func TestApprovalBrokerSendsProgressWhileWaiting(t *testing.T) {
+	previous := approvalKeepAlive
+	approvalKeepAlive = 10 * time.Millisecond
+	t.Cleanup(func() { approvalKeepAlive = previous })
+
+	broker, err := NewApprovalBroker([]string{"production_db"}, 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = broker.Close() })
+
+	progress := make(chan float64, 64)
+	client := mcp.NewClient(&mcp.Implementation{Name: "approval-test", Version: "1"}, &mcp.ClientOptions{
+		ProgressNotificationHandler: func(_ context.Context, request *mcp.ProgressNotificationClientRequest) {
+			select {
+			case progress <- request.Params.Progress:
+			default:
+			}
+		},
+	})
+	session, err := client.Connect(t.Context(), &mcp.StreamableClientTransport{
+		Endpoint: broker.URL(), HTTPClient: &http.Client{Transport: &headerTransport{
+			headers: broker.Headers(), base: http.DefaultTransport,
+		}}, DisableStandaloneSSE: true,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+
+	params := &mcp.CallToolParams{
+		Name: ApprovalToolName,
+		Arguments: map[string]any{
+			"tool_name": "mcp__production_db__write", "input": map[string]any{}, "tool_use_id": "call-progress",
+		},
+	}
+	params.SetProgressToken("approve-progress")
+	done := make(chan error, 1)
+	go func() {
+		_, callErr := session.CallTool(t.Context(), params)
+		done <- callErr
+	}()
+
+	pending := <-broker.Requests()
+	var last float64
+	for range 3 {
+		select {
+		case value := <-progress:
+			if value <= last {
+				t.Fatalf("progress %v after %v, want strictly increasing", value, last)
+			}
+			last = value
+		case <-time.After(5 * time.Second):
+			t.Fatal("no progress notification while approval was pending")
+		}
+	}
+	if err := pending.resolve(runtime.ApprovalDecision{ID: pending.approvalRequest().ID, Approved: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("CallTool() = %v", err)
+	}
+}
