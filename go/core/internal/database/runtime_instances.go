@@ -116,17 +116,20 @@ func beginRuntimeOperation(ctx context.Context, tx pgx.Tx, row runtimeInstanceRo
 	return row, err
 }
 
-// RuntimeOperationTimeout bounds one inline attempt and its execution claim.
-// A client can retry an abandoned attempt after this bound without a sweeper.
-const RuntimeOperationTimeout = 2 * time.Minute
+// DefaultRuntimeOperationTimeout bounds one inline attempt and its execution
+// claim when the caller sets no deadline. A client can retry an abandoned attempt
+// after the bound without a sweeper.
+const DefaultRuntimeOperationTimeout = 10 * time.Minute
 
 func (c *Client) claimRuntimeOperation(ctx context.Context, id, kind string, operationID, executorID uuid.UUID) (bool, error) {
 	if operationID == uuid.Nil || executorID == uuid.Nil {
 		return false, ErrFailedPrecondition
 	}
-	lifetime := RuntimeOperationTimeout
+	lifetime := DefaultRuntimeOperationTimeout
 	if deadline, ok := ctx.Deadline(); ok {
-		lifetime = min(lifetime, time.Until(deadline))
+		// The claim lasts as long as the attempt: a shorter claim could let a
+		// second executor start while this one is still inside a Substrate call.
+		lifetime = time.Until(deadline)
 	}
 	if err := ctx.Err(); err != nil {
 		return false, err

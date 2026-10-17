@@ -179,3 +179,30 @@ tests:
       - matchRegex:
           path: data.KAGENT_AUTH_SERVICE_POLICY
           pattern: '"cleartextMCPOrigins":\["http://mainloop-mcp.mainloop.svc.cluster.local"\]'
+
+  - it: keeps short Substrate calls and a snapshot-sized lifecycle deadline by default
+    set:
+      controller.substrate.enabled: true
+    asserts:
+      - equal:
+          path: data.KAGENT_SUBSTRATE_CALL_TIMEOUT
+          value: 30s
+      - equal:
+          path: data.KAGENT_SUBSTRATE_LIFECYCLE_CALL_TIMEOUT
+          value: 5m
+      - equal:
+          path: data.KAGENT_RUNTIME_OPERATION_TIMEOUT
+          value: 10m
+
+  - it: allows longer lifecycle deadlines
+    set:
+      controller.substrate.enabled: true
+      controller.substrate.lifecycleCallTimeout: 15m
+      controller.runtimeOperationTimeout: 20m
+    asserts:
+      - equal:
+          path: data.KAGENT_SUBSTRATE_LIFECYCLE_CALL_TIMEOUT
+          value: 15m
+      - equal:
+          path: data.KAGENT_RUNTIME_OPERATION_TIMEOUT
+          value: 20m

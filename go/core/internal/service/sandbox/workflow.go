@@ -18,7 +18,11 @@ import (
 // run executes one attempt inline. Errors retain durable intent; only another
 // lifecycle request retries it. Expiration independently requests deletion.
 func (s *Service) run(ctx context.Context, id string, kind apiv1alpha1.RuntimeOperation) (_ *apiv1alpha1.Sandbox, err error) {
-	ctx, cancel := context.WithTimeout(ctx, database.RuntimeOperationTimeout)
+	timeout := s.config.RuntimeOperationTimeout
+	if timeout <= 0 {
+		timeout = database.DefaultRuntimeOperationTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	op, err := s.config.Store.BeginSandboxOperation(ctx, id, kind)
 	if err != nil {

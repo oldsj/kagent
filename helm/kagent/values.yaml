@@ -450,6 +450,10 @@ controller:
   # Rollback: set 0 and finish that rollout before rolling the controller image back.
   quiesceDelay: "0"
 
+  # Deadline for one runtime lifecycle attempt (create, pause, suspend, resume, delete).
+  # Must exceed substrate.lifecycleCallTimeout; the controller refuses to start otherwise.
+  runtimeOperationTimeout: "10m"
+
   # Longest lifetime a session share may request; shares created without one receive it.
   # 0 leaves shares valid until revoked or the session is deleted.
   sessionShareMaxTTL: "0"
@@ -473,6 +477,12 @@ controller:
     enabled: false
     ateApiEndpoint: ""
     atenetRouterURL: ""
+    # Deadline for each pause, suspend, and resume call. Snapshots scale with workspace
+    # size: 5m covers multi-GB Data snapshots at about 25 MB/s. Substrate's own
+    # --actor-workflow-deadline (ateApi.extraArgs) must be at least as long.
+    lifecycleCallTimeout: "5m"
+    # Deadline for every other Substrate API call.
+    callTimeout: "30s"
     # Example when enabled:
     #   enabled: true
     #   ateApiEndpoint: "dns:///api.ate-system.svc:443"

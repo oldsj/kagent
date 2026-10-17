@@ -133,6 +133,7 @@ This reference covers user-configurable settings for the controller, CLI, standa
 | `KAGENT_POSTGRES_DATABASE_URL` | String | `postgres://postgres:kagent@kagent-postgresql.kagent.svc.cluster.local:5432/postgres` | PostgreSQL connection URL. The default applies only to the controller; kagent db requires this variable or --db-url. Helm supplies its configured connection URL. |
 | `KAGENT_POSTGRES_DATABASE_URL_FILE` | String | `(none)` | File containing the PostgreSQL connection URL; takes precedence over KAGENT_POSTGRES_DATABASE_URL in the controller. |
 | `KAGENT_QUIESCE_DELAY` | Duration | `0s` | Delay after native cleanup publishes a turn before automatic workspace pause or suspension. Clamped to 0–30m; zero keeps immediate eligibility. Stored deadlines survive restarts and are superseded by new turns. |
+| `KAGENT_RUNTIME_OPERATION_TIMEOUT` | Duration | `10m0s` | Deadline for one runtime lifecycle attempt, including its execution claim and any Substrate calls. An abandoned attempt can be retried after this bound. Must exceed KAGENT_SUBSTRATE_LIFECYCLE_CALL_TIMEOUT. |
 | `KAGENT_RUNTIME_PAYLOAD_CATALOG` | String | `(none)` | JSON provider/platform to {image, cliVersion} native payload catalog (e.g. claude/linux/arm64); images must be digest-pinned. Empty disables composed Sessions. |
 | `KAGENT_RUNTIME_REVISION_GC_INTERVAL` | Duration | `1m0s` | Interval between unreferenced runtime revision cleanup sweeps. Must be positive. |
 | `KAGENT_SANDBOX_CPU` | String | `1` | CPU limit for standalone sandbox runtimes. |
@@ -151,6 +152,8 @@ This reference covers user-configurable settings for the controller, CLI, standa
 | `KAGENT_SUBSTRATE_ATE_API_CA_FILE` | String | `(none)` | PEM CA bundle used to verify the Substrate API server. Empty uses system trust roots. |
 | `KAGENT_SUBSTRATE_ATE_API_CLIENT_CERT_FILE` | String | `(none)` | PEM bundle containing both the client certificate and private key for Substrate API mTLS. Reloaded for each TLS handshake. |
 | `KAGENT_SUBSTRATE_ATE_API_ENDPOINT` | String | `dns:///api.ate-system.svc:443` | Substrate control-plane gRPC endpoint. |
+| `KAGENT_SUBSTRATE_CALL_TIMEOUT` | Duration | `30s` | Deadline for each Substrate API call other than Actor pause, suspend, and resume. Must be positive. |
+| `KAGENT_SUBSTRATE_LIFECYCLE_CALL_TIMEOUT` | Duration | `5m0s` | Deadline for each Substrate Actor pause, suspend, and resume call. Size it for the largest workspace snapshot at the observed storage rate; Substrate's own workflow deadline (ateApi --actor-workflow-deadline) must be at least as long. Must be positive and shorter than KAGENT_RUNTIME_OPERATION_TIMEOUT. |
 | `KAGENT_WATCH_NAMESPACES` | String | `(none)` | Comma-separated namespaces to watch. Empty watches all namespaces. |
 | `KUBECONFIG` | String | `(none)` | Kubernetes client configuration file list for the controller, CLI Kubernetes operations, and tests. When unset, client-go uses its normal in-cluster or user kubeconfig discovery. |
 | `OTEL_EXPORTER_OTLP_COMPRESSION` | String | `gzip` | OTLP compression default applied by kagent. The native Codex process has this variable removed because its exporter does not support gzip. |

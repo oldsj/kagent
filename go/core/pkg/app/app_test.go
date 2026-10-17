@@ -8,6 +8,7 @@ import (
 	"os"
 	"reflect"
 	"testing"
+	"time"
 
 	apiauthorization "github.com/kagent-dev/kagent/go/api/authorization"
 	"github.com/kagent-dev/kagent/go/core/internal/grpcserver"
@@ -15,6 +16,7 @@ import (
 	"github.com/kagent-dev/kagent/go/core/pkg/auth"
 	kagentenv "github.com/kagent-dev/kagent/go/core/pkg/env"
 	"github.com/kagent-dev/kagent/go/core/pkg/migrations"
+	"github.com/stretchr/testify/require"
 )
 
 // stubAuthenticator and stubAuthorizer stand in for a library consumer's own
@@ -249,4 +251,27 @@ func TestMergePolicies(t *testing.T) {
 			t.Fatalf("mergePolicies(nil) = %v, %v", merged, err)
 		}
 	})
+}
+
+func TestValidateRuntimeDeadlines(t *testing.T) {
+	for _, test := range []struct {
+		name                       string
+		call, lifecycle, operation time.Duration
+		wantErr                    string
+	}{
+		{"defaults", 30 * time.Second, 5 * time.Minute, 10 * time.Minute, ""},
+		{"zero call", 0, 5 * time.Minute, 10 * time.Minute, "KAGENT_SUBSTRATE_CALL_TIMEOUT"},
+		{"negative lifecycle", 30 * time.Second, -time.Second, 10 * time.Minute, "KAGENT_SUBSTRATE_LIFECYCLE_CALL_TIMEOUT"},
+		{"attempt equals lifecycle call", 30 * time.Second, 5 * time.Minute, 5 * time.Minute, "KAGENT_RUNTIME_OPERATION_TIMEOUT"},
+		{"attempt shorter than lifecycle call", 30 * time.Second, 5 * time.Minute, 2 * time.Minute, "KAGENT_RUNTIME_OPERATION_TIMEOUT"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateRuntimeDeadlines(test.call, test.lifecycle, test.operation)
+			if test.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, test.wantErr)
+		})
+	}
 }

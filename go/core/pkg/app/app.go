@@ -276,11 +276,16 @@ func Run(ctx context.Context, opts Options) error {
 	if err != nil {
 		return err
 	}
+	callTimeout, lifecycleCallTimeout, operationTimeout := kagentenv.SubstrateCallTimeout.Get(), kagentenv.SubstrateLifecycleCallTimeout.Get(), kagentenv.RuntimeOperationTimeout.Get()
+	if err := validateRuntimeDeadlines(callTimeout, lifecycleCallTimeout, operationTimeout); err != nil {
+		return err
+	}
 	actors, err := substrate.Dial(ctx, substrate.Config{
-		AteAPIEndpoint: env(kagentenv.SubstrateATEAPIEndpoint),
-		CAFile:         kagentenv.SubstrateATEAPICAFile.Get(),
-		ClientCertFile: kagentenv.SubstrateATEAPIClientCertFile.Get(),
-		CallTimeout:    30 * time.Second,
+		AteAPIEndpoint:       env(kagentenv.SubstrateATEAPIEndpoint),
+		CAFile:               kagentenv.SubstrateATEAPICAFile.Get(),
+		ClientCertFile:       kagentenv.SubstrateATEAPIClientCertFile.Get(),
+		CallTimeout:          callTimeout,
+		LifecycleCallTimeout: lifecycleCallTimeout,
 	})
 	if err != nil {
 		return err
@@ -340,7 +345,7 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	runtimeCredentials := substrate.NewRuntimeCredentialIssuer(credentialClient, resourceNamespace)
 	callbackOrigin := fmt.Sprintf("http://%s.%s:8083", utils.GetControllerName(), resourceNamespace)
-	sessionWorkflow := sessionsvc.NewActorWorkflow(store, actors, runtimeCredentials, callbackOrigin)
+	sessionWorkflow := sessionsvc.NewActorWorkflow(store, actors, runtimeCredentials, callbackOrigin, sessionsvc.WithAttemptTimeout(operationTimeout))
 	runtimeTasks := taskstore.NewService(store, actors, kagentenv.QuiesceDelay.Get())
 	if err := manager.Add(sessionWorkflow); err != nil {
 		return fmt.Errorf("register idle session worker: %w", err)
@@ -401,7 +406,7 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 	sandboxes, err := sandboxservice.NewService(sandboxservice.Config{Store: store, Kube: manager.GetClient(), Authorizer: authorizer, Actors: actors, Guests: guests,
-		DefaultTTL: kagentenv.SandboxDefaultTTL.Get(), MaxTTL: kagentenv.SandboxMaxTTL.Get(), ExpirationPollInterval: kagentenv.SandboxExpirationPollInterval.Get()})
+		DefaultTTL: kagentenv.SandboxDefaultTTL.Get(), MaxTTL: kagentenv.SandboxMaxTTL.Get(), ExpirationPollInterval: kagentenv.SandboxExpirationPollInterval.Get(), RuntimeOperationTimeout: operationTimeout})
 	if err != nil {
 		return err
 	}
@@ -519,4 +524,19 @@ func namespaceCache(names []string) map[string]cache.Config {
 		result[name] = cache.Config{}
 	}
 	return result
+}
+
+// validateRuntimeDeadlines keeps each lifecycle attempt longer than the single
+// Substrate call it issues. If an attempt expired first, its claim would lapse
+// while the call was still running and a retry could start a second mutation.
+func validateRuntimeDeadlines(call, lifecycleCall, operation time.Duration) error {
+	switch {
+	case call <= 0:
+		return fmt.Errorf("%s must be positive", kagentenv.SubstrateCallTimeout.Name())
+	case lifecycleCall <= 0:
+		return fmt.Errorf("%s must be positive", kagentenv.SubstrateLifecycleCallTimeout.Name())
+	case operation <= lifecycleCall:
+		return fmt.Errorf("%s (%s) must exceed %s (%s)", kagentenv.RuntimeOperationTimeout.Name(), operation, kagentenv.SubstrateLifecycleCallTimeout.Name(), lifecycleCall)
+	}
+	return nil
 }

@@ -3,9 +3,11 @@ package session
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2apb/v1"
@@ -577,6 +579,45 @@ func TestBindingReplyLossPreservesOriginalIdentity(t *testing.T) {
 				require.Equal(t, "actor-issued", after.Phase)
 				require.Empty(t, after.ActorUID)
 			}
+		})
+	}
+}
+
+// deadlineRecordingActors reports how long each Suspend call may run.
+type deadlineRecordingActors struct {
+	*lifecycleTestActors
+	remaining time.Duration
+}
+
+func (a *deadlineRecordingActors) SuspendActor(ctx context.Context, atespace, name string) (*ateapipb.Actor, error) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return nil, errors.New("lifecycle attempt has no deadline")
+	}
+	a.remaining = time.Until(deadline)
+	return a.lifecycleTestActors.SuspendActor(ctx, atespace, name)
+}
+
+func TestLifecycleAttemptTimeout(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		options  []ActorWorkflowOption
+		min, max time.Duration
+	}{
+		{"default", nil, 9 * time.Minute, database.DefaultRuntimeOperationTimeout},
+		{"configured", []ActorWorkflowOption{WithAttemptTimeout(time.Hour)}, 59 * time.Minute, time.Hour},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, session := lifecycleFixture(t)
+			actors := &deadlineRecordingActors{lifecycleTestActors: &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}}
+			workflow := NewActorWorkflow(store, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083", test.options...)
+			session, err := workflow.Create(t.Context(), session)
+			require.NoError(t, err)
+			actors.actors[actorKey("team-a", fixtureActorName(t, store, session.GetId()))].Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
+			_, err = workflow.Suspend(t.Context(), session)
+			require.NoError(t, err)
+			require.Greater(t, actors.remaining, test.min)
+			require.LessOrEqual(t, actors.remaining, test.max)
 		})
 	}
 }
