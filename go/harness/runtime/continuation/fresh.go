@@ -47,11 +47,12 @@ func (s *Store) RequireFresh(fresh Fresh) {
 // Session as settled so later turns, and snapshots of this Session, keep the new
 // conversation. Every other Session is recorded without a change. A failure
 // leaves nothing recorded and must fail the turn: running on would continue the
-// conversation the fork was asked to drop.
+// conversation the fork was asked to drop. The store lock is held only for the
+// local deletes and the marker, never across the control-plane call.
 func (s *Store) Settle(ctx context.Context) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
 	f := s.fresh
+	s.mu.RUnlock()
 	if f == nil {
 		return nil
 	}
@@ -59,15 +60,19 @@ func (s *Store) Settle(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("identify Session: %w", err)
 	}
-	marker := filepath.Join(f.MarkerDir, freshMarker)
-	if b, err := os.ReadFile(marker); err == nil && strings.TrimSpace(string(b)) == id {
-		return nil
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("read conversation marker: %w", err)
+	if settled, err := f.settled(id); err != nil || settled {
+		return err
 	}
 	fresh, err := f.Source.FreshConversation(ctx)
 	if err != nil {
 		return fmt.Errorf("read fresh conversation flag: %w", err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// A concurrent Settle may have finished while the lock was free. Deleting
+	// again would drop the binding its turn has since made.
+	if settled, err := f.settled(id); err != nil || settled {
+		return err
 	}
 	if fresh {
 		if err := os.Remove(s.path); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -82,8 +87,20 @@ func (s *Store) Settle(ctx context.Context) error {
 	if err := utils.EnsurePrivateDir(f.MarkerDir); err != nil {
 		return fmt.Errorf("prepare conversation marker directory: %w", err)
 	}
-	if err := utils.ReplacePrivateFile(marker, []byte(id+"\n")); err != nil {
+	if err := utils.ReplacePrivateFile(filepath.Join(f.MarkerDir, freshMarker), []byte(id+"\n")); err != nil {
 		return fmt.Errorf("record conversation marker: %w", err)
 	}
 	return nil
+}
+
+// settled reports whether the Session has already been recorded.
+func (f *Fresh) settled(id string) (bool, error) {
+	b, err := os.ReadFile(filepath.Join(f.MarkerDir, freshMarker))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read conversation marker: %w", err)
+	}
+	return strings.TrimSpace(string(b)) == id, nil
 }

@@ -41,6 +41,27 @@ type testStore struct {
 	finalizeErr error
 	reserveErr  error
 	scope       string
+	// agent is the Agent the checkpoint's source Session runs; nil means the
+	// allowlisted one the Mainloop fixtures use.
+	agent *apiv1alpha1.ResourceReference
+	// listed is what ListSessionCheckpoints returns.
+	listed []*apiv1alpha1.Checkpoint
+}
+
+func (s *testStore) source(id, userID string) *apiv1alpha1.Session {
+	agent := s.agent
+	if agent == nil {
+		agent = &apiv1alpha1.ResourceReference{Namespace: "kagent", Name: "mainloop-main"}
+	}
+	return &apiv1alpha1.Session{Id: id, Creator: userID, Agent: agent}
+}
+
+func (s *testStore) GetSession(_ context.Context, id, userID string) (*apiv1alpha1.Session, error) {
+	return s.source(id, userID), nil
+}
+
+func (s *testStore) GetCheckpointSource(_ context.Context, id, userID string) (*apiv1alpha1.Session, error) {
+	return s.source(id, userID), nil
 }
 
 func (s *testStore) ReserveSessionCheckpoint(_ context.Context, checkpoint *apiv1alpha1.Checkpoint, _, _ string) (*apiv1alpha1.Checkpoint, *database.SessionTaskSnapshot, error) {
@@ -93,8 +114,8 @@ func (s *testStore) GetSessionCheckpointSnapshot(context.Context, string, string
 	return s.snapshot, s.tagUID, nil
 }
 
-func (*testStore) ListSessionCheckpoints(context.Context, string, string, string, int) ([]*apiv1alpha1.Checkpoint, error) {
-	return nil, nil
+func (s *testStore) ListSessionCheckpoints(context.Context, string, string, string, int) ([]*apiv1alpha1.Checkpoint, error) {
+	return s.listed, nil
 }
 
 func (s *testStore) BeginDeleteSessionCheckpoint(context.Context, string, string) (*database.SessionTaskSnapshot, string, error) {

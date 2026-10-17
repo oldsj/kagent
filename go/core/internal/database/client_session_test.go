@@ -864,6 +864,16 @@ func TestFreshForkCarriesNoHistory(t *testing.T) {
 	_, err = client.FinalizeSessionCheckpoint(ctx, checkpoint.GetId(), "tag-uid", "s3://tags/checkpoint", "")
 	require.NoError(t, err)
 
+	// Session policy sees the checkpoint's source from its pinned revision, for its owner only.
+	origin, err := client.GetCheckpointSource(ctx, checkpoint.GetId(), "alice")
+	require.NoError(t, err)
+	require.Equal(t, source.GetId(), origin.GetId())
+	require.Equal(t, "alice", origin.GetCreator())
+	require.Equal(t, source.GetAgent().GetNamespace(), origin.GetAgent().GetNamespace())
+	require.Equal(t, source.GetAgent().GetName(), origin.GetAgent().GetName())
+	_, err = client.GetCheckpointSource(ctx, checkpoint.GetId(), "bob")
+	require.ErrorIs(t, err, ErrNotFound)
+
 	tasksOf := func(session *apiv1alpha1.Session) []*a2a.Task {
 		tasks, _, err := client.ListSessionTasks(ctx, session.GetId(), "", a2a.TaskStateUnspecified, nil, 10, nil)
 		require.NoError(t, err)

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -15,11 +16,15 @@ type freshSource struct {
 	fresh   bool
 	err     error
 	asked   int
+	during  func()
 }
 
 func (s *freshSource) SessionID() (string, error) { return s.session, nil }
 func (s *freshSource) FreshConversation(context.Context) (bool, error) {
 	s.asked++
+	if s.during != nil {
+		s.during()
+	}
 	return s.fresh, s.err
 }
 
@@ -124,5 +129,24 @@ func TestSettleFailsClosed(t *testing.T) {
 func TestSettleWithoutFreshnessDoesNothing(t *testing.T) {
 	store, err := New(t.TempDir(), "claude", func(string) error { return nil })
 	require.NoError(t, err)
+	require.NoError(t, store.Settle(t.Context()))
+}
+
+// The store stays usable while the control plane is slow or retrying.
+func TestSettleDoesNotHoldStoreLockDuringControlPlaneCall(t *testing.T) {
+	source := &freshSource{session: "fork-1", fresh: true}
+	store, _ := freshFixture(t, source)
+	loaded := make(chan struct{})
+	source.during = func() {
+		go func() {
+			_, _, _ = store.Load()
+			close(loaded)
+		}()
+		select {
+		case <-loaded:
+		case <-time.After(5 * time.Second):
+			t.Error("Load blocked behind the control-plane call")
+		}
+	}
 	require.NoError(t, store.Settle(t.Context()))
 }

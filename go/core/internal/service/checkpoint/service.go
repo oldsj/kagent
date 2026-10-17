@@ -35,6 +35,15 @@ type store interface {
 	DeleteSessionCheckpoint(context.Context, string, string) error
 	ForkSession(ctx context.Context, checkpointID, userID, requestID, sessionID string, freshConversation bool) (*apiv1alpha1.Session, bool, error)
 	UpdateCheckpointName(context.Context, string, string, string) (*apiv1alpha1.Checkpoint, error)
+	GetSession(ctx context.Context, id, userID string) (*apiv1alpha1.Session, error)
+	GetCheckpointSource(ctx context.Context, checkpointID, userID string) (*apiv1alpha1.Session, error)
+}
+
+// sessionPolicy is the part of an authorizer that scopes which Sessions a service
+// identity may touch, such as the Agents Mainloop may use. Session operations
+// apply it before any effect; checkpoints are Session state and must too.
+type sessionPolicy interface {
+	CheckSession(context.Context, *apiv1alpha1.Session) error
 }
 
 type workflow interface {
@@ -84,6 +93,18 @@ func (s *Service) Create(ctx context.Context, sessionID, requestID, expectedHead
 	userID, err := s.authorize(ctx, auth.VerbCreate, "Session", sessionID)
 	if err != nil {
 		return nil, err
+	}
+	if policy, ok := s.authorizer.(sessionPolicy); ok {
+		source, err := s.store.GetSession(ctx, sessionID, userID)
+		if errors.Is(err, database.ErrNotFound) {
+			return nil, serviceerrors.NewNotFound("Session not found", err)
+		}
+		if err != nil {
+			return nil, serviceerrors.NewInternal("Failed to get Session", err)
+		}
+		if err := checkSource(ctx, policy, source); err != nil {
+			return nil, err
+		}
 	}
 	key := fmt.Sprintf("%q/%q/%q/%q", userID, sessionID, requestID, expectedHeadTaskID)
 	result, err, _ := s.creates.Do(key, func() (any, error) {
@@ -214,6 +235,9 @@ func (s *Service) Get(ctx context.Context, checkpointID string) (*apiv1alpha1.Ch
 	if err != nil {
 		return nil, err
 	}
+	if err := s.checkCheckpointSource(ctx, checkpointID, userID); err != nil {
+		return nil, err
+	}
 	checkpoint, err := s.store.GetSessionCheckpoint(ctx, checkpointID, userID)
 	if errors.Is(err, database.ErrNotFound) {
 		return nil, serviceerrors.NewNotFound("Checkpoint not found", err)
@@ -247,6 +271,12 @@ func (s *Service) List(ctx context.Context, request ListRequest) (ListResult, er
 	if err != nil {
 		return ListResult{}, serviceerrors.NewInternal("Failed to list checkpoints", err)
 	}
+	// Every row belongs to one source Session, so the first row stands for all.
+	if len(rows) > 0 {
+		if err := s.checkCheckpointSource(ctx, rows[0].GetId(), userID); err != nil {
+			return ListResult{}, err
+		}
+	}
 	result := ListResult{Checkpoints: rows[:min(len(rows), pageSize)]}
 	if len(rows) > pageSize {
 		result.NextPageToken = encodePageToken(rows[pageSize-1].GetId())
@@ -260,6 +290,9 @@ func (s *Service) Delete(ctx context.Context, checkpointID string) error {
 	}
 	userID, err := s.authorize(ctx, auth.VerbDelete, "Checkpoint", checkpointID)
 	if err != nil {
+		return err
+	}
+	if err := s.checkCheckpointSource(ctx, checkpointID, userID); err != nil {
 		return err
 	}
 	snapshot, tagUID, err := s.store.BeginDeleteSessionCheckpoint(ctx, checkpointID, userID)
@@ -315,6 +348,9 @@ func (s *Service) Fork(ctx context.Context, checkpointID, requestID string, fres
 	if err != nil {
 		return nil, err
 	}
+	if err := s.checkCheckpointSource(ctx, checkpointID, userID); err != nil {
+		return nil, err
+	}
 	snapshot, tagUID, err := s.store.GetSessionCheckpointSnapshot(ctx, checkpointID, userID)
 	if errors.Is(err, database.ErrNotFound) {
 		return nil, serviceerrors.NewNotFound("Checkpoint not found", err)
@@ -363,6 +399,31 @@ func (s *Service) Fork(ctx context.Context, checkpointID, requestID string, fres
 		return nil, serviceerrors.NewUnavailable("Failed to create fork Session", err)
 	}
 	return session, nil
+}
+
+// checkCheckpointSource applies the Session policy to the Session a checkpoint
+// was taken from. The Agent comes from the checkpoint's pinned revision, so the
+// check holds after the source Session is deleted.
+func (s *Service) checkCheckpointSource(ctx context.Context, checkpointID, userID string) error {
+	policy, ok := s.authorizer.(sessionPolicy)
+	if !ok {
+		return nil
+	}
+	source, err := s.store.GetCheckpointSource(ctx, checkpointID, userID)
+	if errors.Is(err, database.ErrNotFound) {
+		return serviceerrors.NewNotFound("Checkpoint not found", err)
+	}
+	if err != nil {
+		return serviceerrors.NewInternal("Failed to get checkpoint source", err)
+	}
+	return checkSource(ctx, policy, source)
+}
+
+func checkSource(ctx context.Context, policy sessionPolicy, source *apiv1alpha1.Session) error {
+	if err := policy.CheckSession(ctx, source); err != nil {
+		return serviceerrors.NewPermissionDenied("Session is outside the service scope", err)
+	}
+	return nil
 }
 
 func (s *Service) authorize(ctx context.Context, verb auth.Verb, resourceType, name string) (string, error) {

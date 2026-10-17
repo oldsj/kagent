@@ -109,6 +109,28 @@ immutable. The copied head boundary uses the retained Tag URI, allowing a fresh 
 to be checkpointed before its first turn. Fork creation verifies the Tag UID and URI
 as well as the Actor's source Tag, suspended state, template, and external snapshot.
 
+### Fresh-conversation forks
+
+`ForkSession` with `fresh_conversation` keeps the checkpoint's data snapshot, and
+so the workspace and caches, but copies no events or tasks: the fork starts with
+an empty public history. The native conversation lives inside that snapshot
+(`/data/adapter/state.json` and the Claude or Codex transcripts), so the control
+plane marks the Session (`Session.fresh_conversation`) and the runtime discards
+that state before its first turn. It asks through `TaskStoreService.GetWorkspace`,
+removes the continuation binding and the provider's transcript paths, and records
+the Session ID in `/data/.kagent/conversation-settled` so the reset runs once per
+Session. If the question cannot be answered the turn fails rather than resuming
+the old conversation. Replaying a fork request with a different mode is an
+idempotency conflict.
+
+The reset exists only in harness payloads that contain it, and a fork reuses the
+checkpoint's pinned revision. Roll out the controller and the harness payload pins
+together, and never fresh-fork a checkpoint taken by a runtime that predates the
+reset: that runtime would resume the old native conversation under an empty visible
+history, and nothing reports it. Roll the controller out before the harnesses.
+Rolling the controller back strands Sessions whose first turn has not yet run,
+because the new harness fails closed when the control plane cannot confirm the flag.
+
 Checkpoint sharing is not implemented. Future sharing must be restricted to data
 snapshots without process state.
 

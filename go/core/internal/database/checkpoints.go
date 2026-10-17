@@ -409,6 +409,28 @@ func (c *Client) GetSessionCheckpoint(ctx context.Context, id, userID string) (*
 	return toSessionCheckpoint(row)
 }
 
+// GetCheckpointSource returns the Session an owned checkpoint was taken from, as
+// far as Session policy looks: its ID, creator and Agent. The Agent is read from
+// the checkpoint's pinned revision, so it is available after the source Session
+// is deleted. Missing checkpoints and other owners return ErrNotFound.
+func (c *Client) GetCheckpointSource(ctx context.Context, id, userID string) (*apiv1alpha1.Session, error) {
+	row, err := readCheckpoint(ctx, c.db, id, userID, nil)
+	if err != nil {
+		return nil, fmt.Errorf("get checkpoint source: %w", notFoundOr(err))
+	}
+	if row.PreparedRevision == nil {
+		return nil, fmt.Errorf("checkpoint %s has no runtime revision", id)
+	}
+	revision, err := c.GetRuntimeRevision(ctx, *row.PreparedRevision)
+	if err != nil {
+		return nil, fmt.Errorf("get checkpoint runtime revision: %w", err)
+	}
+	return &apiv1alpha1.Session{
+		Id: row.SourceSessionID.String(), Creator: row.UserID,
+		Agent: &apiv1alpha1.ResourceReference{Namespace: revision.Namespace, Name: revision.AgentName},
+	}, nil
+}
+
 // GetSessionCheckpointSnapshot returns an owned checkpoint's snapshot reference and
 // tag UID in any lifecycle state. Before finalization the URI refers to the source
 // snapshot; afterward it refers to the retained copy. Missing checkpoints and other owners
