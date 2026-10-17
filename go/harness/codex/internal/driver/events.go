@@ -29,6 +29,42 @@ type activeTool struct {
 	approvalMatched bool
 }
 
+type turnError struct {
+	CodexErrorInfo json.RawMessage `json:"codexErrorInfo"`
+}
+
+// Native free text is deliberately not decoded: even an otherwise ordinary
+// transport error can contain credentials or account data. Public summaries
+// come only from recognized structured fields, with a fixed fallback.
+func codexFailureMessage(failure *turnError) string {
+	const fallback = "Codex execution failed"
+	const authFailure = "Codex authentication failed; renew the configured model credential in the control plane."
+	if failure == nil {
+		return fallback
+	}
+	var code string
+	if json.Unmarshal(failure.CodexErrorInfo, &code) == nil && code == "unauthorized" {
+		return authFailure
+	}
+	type httpFailure struct {
+		HTTPStatusCode int `json:"httpStatusCode"`
+	}
+	var info struct {
+		HTTPConnectionFailed           *httpFailure `json:"httpConnectionFailed"`
+		ResponseStreamConnectionFailed *httpFailure `json:"responseStreamConnectionFailed"`
+		ResponseStreamDisconnected     *httpFailure `json:"responseStreamDisconnected"`
+		ResponseTooManyFailedAttempts  *httpFailure `json:"responseTooManyFailedAttempts"`
+	}
+	if json.Unmarshal(failure.CodexErrorInfo, &info) == nil {
+		for _, failure := range []*httpFailure{info.HTTPConnectionFailed, info.ResponseStreamConnectionFailed, info.ResponseStreamDisconnected, info.ResponseTooManyFailedAttempts} {
+			if failure != nil && failure.HTTPStatusCode == 401 {
+				return authFailure
+			}
+		}
+	}
+	return fallback
+}
+
 func (t *eventTranslator) translate(message rpcMessage, sink runtime.EventSink) (runtime.Outcome, bool, error) {
 	if other, err := t.isOtherThreadNotification(message); err != nil || other {
 		return runtime.Outcome{}, false, err
@@ -63,7 +99,7 @@ func (t *eventTranslator) translate(message rpcMessage, sink runtime.EventSink) 
 			ThreadID string
 			Turn     struct {
 				ID, Status string
-				Error      *struct{ Message string }
+				Error      *turnError
 			}
 		}
 		if err := json.Unmarshal(message.Params, &params); err != nil {
@@ -81,7 +117,7 @@ func (t *eventTranslator) translate(message rpcMessage, sink runtime.EventSink) 
 		case "interrupted":
 			return runtime.Outcome{Failure: &runtime.Failure{Message: "Codex execution was interrupted"}}, true, nil
 		case "failed":
-			return runtime.Outcome{Failure: &runtime.Failure{Message: "Codex execution failed"}}, true, nil
+			return runtime.Outcome{Failure: &runtime.Failure{Message: codexFailureMessage(params.Turn.Error)}}, true, nil
 		default:
 			return runtime.Outcome{}, false, fmt.Errorf("unsupported Codex terminal status %q", params.Turn.Status)
 		}

@@ -235,6 +235,14 @@ The worker checks the executable version before requesting refresh. An empty
 image setting disables automatic refresh. Leader election must be enabled.
 Secrets without an `auth.json` key retain manual access-token rotation.
 
+Refresh state annotations are operation markers, not an enrollment or health
+status. A valid pair outside the ten-minute expiry margin is left unchanged,
+and successful rotation removes its claim, state, hash, and retry annotations.
+Replacing a populated runtime pair does not require an idle state annotation;
+the controller schedules that pair from its new expiry without reading the seed.
+Backend authentication failures do not currently trigger early refresh, so
+rejection before the claimed expiry requires owner reauthentication.
+
 The controller checks access-token expiry every 15 seconds and schedules
 refresh ten minutes before expiry, including the gateway's five-minute cache
 window. ModelConfigs sharing a Secret share one deterministic Job name and one

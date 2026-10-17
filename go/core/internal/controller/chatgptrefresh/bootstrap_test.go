@@ -99,6 +99,52 @@ func TestBootstrapLateSeedAndAutomaticHandoff(t *testing.T) {
 	require.NotContains(t, string(serialized), string(seed.Data["access-token"]))
 }
 
+func TestRenewedRuntimeSchedulesWithStaleSeedAndNoRefreshState(t *testing.T) {
+	now := time.Unix(1900000000, 0)
+	expires := now.Add(10 * 24 * time.Hour)
+	runtime, seed, model := bootstrapFixtures(t)
+	// Owner replacement populates the runtime directly. The old seed may be
+	// expired or unavailable; it is not an input to rotation of this pair.
+	runtime.Data = map[string][]byte{
+		AuthKey:        credential(t, expires, "SYNTHETIC_NEW_REFRESH"),
+		"access-token": []byte(jwt(expires)),
+	}
+	replaceSeedToken(t, seed, seedJWT(now.Add(-time.Hour), "synthetic-account"))
+	kube := kubeClient(t, runtime, seed, model)
+	c := New(kube, []string{"team"}, "codex:pinned")
+	key := client.ObjectKeyFromObject(runtime)
+	descriptor := credentialDescriptor{key: "access-token", account: "synthetic-account"}
+	var initial corev1.Secret
+	require.NoError(t, kube.Get(t.Context(), key, &initial))
+	for _, instant := range []time.Time{now, expires.Add(-safetyMargin - time.Nanosecond)} {
+		require.NoError(t, c.reconcileCredential(t.Context(), key, descriptor, instant))
+		var unchanged corev1.Secret
+		require.NoError(t, kube.Get(t.Context(), key, &unchanged))
+		require.Equal(t, initial, unchanged)
+		var jobs batchv1.JobList
+		require.NoError(t, kube.List(t.Context(), &jobs))
+		require.Empty(t, jobs.Items)
+	}
+	// At the margin, a fresh controller schedules without requiring any prior
+	// claim/state marker, and uses the new runtime rather than its stale seed.
+	c = New(kube, []string{"team"}, "codex:pinned")
+	require.NoError(t, c.reconcileCredential(t.Context(), key, descriptor, expires.Add(-safetyMargin)))
+	var pending corev1.Secret
+	require.NoError(t, kube.Get(t.Context(), key, &pending))
+	require.Equal(t, initial.Data, pending.Data)
+	require.Equal(t, statePending, pending.Annotations[StateAnnotation])
+	require.NotEmpty(t, pending.Annotations[ClaimAnnotation])
+	require.Equal(t, authHash(initial.Data[AuthKey]), pending.Annotations[HashAnnotation])
+	var jobs batchv1.JobList
+	require.NoError(t, kube.List(t.Context(), &jobs))
+	require.Len(t, jobs.Items, 1)
+	job := jobs.Items[0]
+	require.Equal(t, runtime.UID, metav1.GetControllerOf(&job).UID)
+	require.Equal(t, "codex:pinned", job.Spec.Template.Spec.Containers[0].Image)
+	require.Contains(t, job.Spec.Template.Spec.Containers[0].Args, runtime.Name)
+	require.Equal(t, pending.Annotations[ClaimAnnotation], job.Annotations[ClaimAnnotation])
+}
+
 func TestBootstrapInvalidInputsDoNotPersistFailure(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
