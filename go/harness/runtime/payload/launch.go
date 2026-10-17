@@ -15,8 +15,12 @@ import (
 func Launch(root, system, data, platform string, check bool, environment []string, replace func(string, []string, []string) error) error {
 	selected := ""
 	selectedPresent := false
+	imagePath := ""
 	for _, entry := range environment {
 		name, value, _ := strings.Cut(entry, "=")
+		if name == "PATH" {
+			imagePath = value
+		}
 		if name == PlatformEnvironment {
 			if selectedPresent {
 				return fmt.Errorf("duplicate selected runtime platform")
@@ -62,7 +66,7 @@ func Launch(root, system, data, platform string, check bool, environment []strin
 		PlatformEnvironment: selected,
 		"HOME":              filepath.Join(data, "home"), "CLAUDE_CONFIG_DIR": filepath.Join(data, "claude"), "CODEX_HOME": filepath.Join(data, "codex"),
 		"XDG_CONFIG_HOME": filepath.Join(data, "home", ".config"), "XDG_CACHE_HOME": filepath.Join(data, "cache"), "XDG_DATA_HOME": filepath.Join(data, "home", ".local", "share"),
-		"TMPDIR": filepath.Join(data, "tmp"), "PATH": root + "/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		"TMPDIR": filepath.Join(data, "tmp"), "PATH": runtimePath(root, imagePath),
 		"GIT_EXEC_PATH": root + "/libexec/git-core", "GIT_TEMPLATE_DIR": root + "/share/git-core/templates", "USE_BUILTIN_RIPGREP": "0", "DISABLE_UPDATES": "1",
 	}
 	if manifest.Provider == "claude" {
@@ -122,4 +126,33 @@ func Launch(root, system, data, platform string, check bool, environment []strin
 	}
 	harness := filepath.Join(root, "bin", "kagent-"+manifest.Provider)
 	return replace(harness, []string{harness}, cleaned)
+}
+
+// defaultSystemPath is appended after the image's PATH so a minimal or empty
+// image PATH still finds the standard system tools.
+const defaultSystemPath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+// runtimePath puts the payload's helper directory first and keeps the image's
+// own PATH entries (such as a development image's toolchain directories) after
+// it. The system directories follow unless the image already lists them.
+// Empty and relative entries are dropped: they would resolve against the
+// workspace checkout.
+func runtimePath(root, imagePath string) string {
+	seen := map[string]bool{}
+	var dirs []string
+	add := func(dir string) {
+		if !filepath.IsAbs(dir) || seen[dir] {
+			return
+		}
+		seen[dir] = true
+		dirs = append(dirs, dir)
+	}
+	add(root + "/bin")
+	for dir := range strings.SplitSeq(imagePath, ":") {
+		add(dir)
+	}
+	for dir := range strings.SplitSeq(defaultSystemPath, ":") {
+		add(dir)
+	}
+	return strings.Join(dirs, ":")
 }
