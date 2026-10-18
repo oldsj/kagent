@@ -73,6 +73,50 @@ func (c *Client) SettleSessionTask(ctx context.Context, sessionID, taskID string
 	})
 }
 
+// AbandonedBoundaryAfter is how long a saved boundary may wait for its native
+// cleanup callback before the control plane settles it for the runtime. Cleanup
+// takes seconds; a boundary this old belongs to a runtime that died or gave up.
+const AbandonedBoundaryAfter = 10 * time.Minute
+
+// SettleAbandonedSessionBoundaries publishes boundaries whose runtime never
+// called SettleSessionTask within olderThan, so a dead runtime cannot hold
+// lifecycle admission closed forever. It settles with no quiesce delay through
+// SettleSessionTask, which rechecks under the session lock; a runtime that
+// settles concurrently wins harmlessly. Publishing keeps the history the
+// runtime already saved, and the idle worker then suspends the Actor as for any
+// settled turn. It returns the number of boundaries it settled, and stops at
+// the first error.
+func (c *Client) SettleAbandonedSessionBoundaries(ctx context.Context, olderThan time.Duration, limit int) (int, error) {
+	type abandoned struct {
+		SessionID string
+		TaskID    string
+		Sequence  int64
+	}
+	candidates, err := queryMany(ctx, c.db, `
+		SELECT i.id::text AS session_id, e.task_id, e.sequence
+		FROM session_task_event e JOIN session_record i ON i.history_id = e.history_id
+		WHERE NOT e.published AND e.expected_version IS NOT NULL AND e.quiescence_pending IS NOT NULL
+		  AND e.created_at <= clock_timestamp() - $1::bigint * INTERVAL '1 microsecond'
+		  AND i.state <> 'RUNTIME_STATE_DELETED'
+		ORDER BY e.sequence LIMIT $2
+	`, pgx.RowToStructByName[abandoned], olderThan.Microseconds(), limit)
+	if err != nil {
+		return 0, err
+	}
+	settled := 0
+	for _, candidate := range candidates {
+		if err := c.SettleSessionTask(ctx, candidate.SessionID, candidate.TaskID, candidate.Sequence, 0); err != nil {
+			// A deleted session or a superseded boundary has nothing left to settle.
+			if errors.Is(err, ErrNotFound) || errors.Is(err, ErrConflict) {
+				continue
+			}
+			return settled, err
+		}
+		settled++
+	}
+	return settled, nil
+}
+
 // boundedQuiesceDelay keeps post-turn execution within zero to thirty minutes.
 func boundedQuiesceDelay(delay time.Duration) time.Duration {
 	return min(max(delay, 0), 30*time.Minute)

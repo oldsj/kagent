@@ -23,7 +23,8 @@ type workflowStore interface {
 	AdvanceRuntimeGeneration(context.Context, uuid.UUID, string, string, string) error
 	RevokeRuntimeGeneration(context.Context, string) error
 	SessionGenerationEligible(context.Context, string) (bool, error)
-	ClaimSessionQuiescence(context.Context) (*database.SessionQuiescence, error)
+	ClaimSessionQuiescence(context.Context, time.Duration) (*database.SessionQuiescence, error)
+	SettleAbandonedSessionBoundaries(context.Context, time.Duration, int) (int, error)
 	FinishSessionQuiescence(context.Context, *database.SessionQuiescence, *database.SessionTaskSnapshot) error
 	GetSessionForRuntime(context.Context, string, string) (*apiv1alpha1.Session, error)
 	GetSessionCheckpointSnapshot(context.Context, string, string) (*database.SessionTaskSnapshot, string, error)

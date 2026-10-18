@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/google/uuid"
@@ -20,13 +21,27 @@ type SessionQuiescence struct {
 	ExecutorID uuid.UUID
 }
 
+// DefaultQuiescenceClaimLease bounds a claim when the caller names no lease.
+const DefaultQuiescenceClaimLease = DefaultRuntimeOperationTimeout
+
 // ClaimSessionQuiescence claims an idle session at its latest settled task
 // version. A new turn supersedes unclaimed idle work; a claim blocks task writes,
 // checkpoints, and explicit lifecycle operations until it finishes. Missing work,
 // including boundaries before their durable deadline, returns ErrNotFound.
 // Older writers leave a NULL deadline, which keeps immediate eligibility.
-// Uncertain issued work is never reassigned after a timeout.
-func (c *Client) ClaimSessionQuiescence(ctx context.Context) (*SessionQuiescence, error) {
+//
+// A claim moves the event's deadline to now+lease, so one predicate covers first
+// claims and takeovers: once the lease ends, or the claim has no deadline (a
+// crashed older writer left it), the next worker claims the same boundary under
+// a new executor ID. The lease must outlast one attempt, because the previous
+// executor may still be inside its Substrate call; Quiesce observes an Actor that
+// is already suspended instead of suspending it again. The superseded executor
+// cannot finish, since its ID no longer matches. A zero or negative lease uses
+// DefaultQuiescenceClaimLease.
+func (c *Client) ClaimSessionQuiescence(ctx context.Context, lease time.Duration) (*SessionQuiescence, error) {
+	if lease <= 0 {
+		lease = DefaultQuiescenceClaimLease
+	}
 	var result *SessionQuiescence
 	err := c.withTx(ctx, func(tx pgx.Tx) error {
 		type candidate struct {
@@ -39,7 +54,6 @@ func (c *Client) ClaimSessionQuiescence(ctx context.Context) (*SessionQuiescence
 			FROM session_task_event e JOIN session_record i ON i.history_id = e.history_id
 			WHERE e.published AND e.quiescence_pending = TRUE
 			  AND (e.quiescence_due_at IS NULL OR e.quiescence_due_at <= statement_timestamp())
-			  AND e.quiescence_executor_id IS NULL
 			  AND i.state = 'RUNTIME_STATE_READY'
 			  AND i.operation = 'RUNTIME_OPERATION_NONE'
 			  AND (i.dispatch_expires_at IS NULL OR i.dispatch_expires_at <= clock_timestamp())
@@ -72,13 +86,13 @@ func (c *Client) ClaimSessionQuiescence(ctx context.Context) (*SessionQuiescence
 		// Recheck after locking: the candidate query's snapshot may predate a
 		// new turn that committed just before we acquired the session lock.
 		tag, err := tx.Exec(ctx, `
-			UPDATE session_task_event SET quiescence_executor_id = $2
+			UPDATE session_task_event SET quiescence_executor_id = $2,
+			    quiescence_due_at = clock_timestamp() + $4::bigint * INTERVAL '1 microsecond'
 			WHERE sequence = $1 AND published AND quiescence_pending
 			  AND (quiescence_due_at IS NULL OR quiescence_due_at <= statement_timestamp())
-			  AND quiescence_executor_id IS NULL
 			  AND NOT EXISTS (SELECT 1 FROM session WHERE id = $3 AND dispatch_expires_at > clock_timestamp())
 			  AND NOT EXISTS (SELECT 1 FROM session_checkpoint WHERE source_session_id = $3 AND state = 'CREATING')
-		`, result.Version, result.ExecutorID, session.ID)
+		`, result.Version, result.ExecutorID, session.ID, lease.Microseconds())
 		if err != nil {
 			return err
 		}

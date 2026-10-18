@@ -81,10 +81,8 @@ func TestNativePreparationIssueCASAndAdmission(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "pending", receipt.Classification)
 	require.Nil(t, receipt.EffectObservedAt)
-	for _, kind := range []api.RuntimeOperation{api.RuntimeOperation_RUNTIME_OPERATION_SUSPEND, api.RuntimeOperation_RUNTIME_OPERATION_DELETE} {
-		_, err := peer.BeginSessionOperation(t.Context(), session.Id, kind)
-		require.Error(t, err)
-	}
+	_, err = peer.BeginSessionOperation(t.Context(), session.Id, api.RuntimeOperation_RUNTIME_OPERATION_SUSPEND)
+	require.Error(t, err) // Delete may discard pending preparation; see TestUserDeleteDiscardsUnsettledWork.
 	firstConn, err := sharedDB.Acquire(t.Context())
 	require.NoError(t, err)
 	secondConn, err := sharedDB.Acquire(t.Context())

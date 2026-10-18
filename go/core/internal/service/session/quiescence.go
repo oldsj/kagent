@@ -28,7 +28,7 @@ func (w *ActorWorkflow) Start(ctx context.Context) error {
 			timer := time.NewTicker(time.Second)
 			defer timer.Stop()
 			for ctx.Err() == nil {
-				work, err := w.store.ClaimSessionQuiescence(ctx)
+				work, err := w.store.ClaimSessionQuiescence(ctx, w.quiescenceLease())
 				if err == nil {
 					w.quiesceIdleSession(ctx, work)
 					continue
@@ -44,8 +44,37 @@ func (w *ActorWorkflow) Start(ctx context.Context) error {
 			}
 		})
 	}
+	workers.Go(func() { w.settleAbandonedBoundaries(ctx) })
 	workers.Wait()
 	return nil
+}
+
+// quiescenceLease is how long a claim holds its boundary before another worker
+// may take it over. It covers one runtime attempt plus the bounded retries that
+// record its outcome.
+func (w *ActorWorkflow) quiescenceLease() time.Duration {
+	return w.attemptTimeout + time.Minute
+}
+
+// settleAbandonedBoundaries publishes boundaries whose runtime never reported
+// native cleanup, so admission cannot stay closed behind a dead runtime. Every
+// API replica may run it; settlement rechecks under the session lock.
+func (w *ActorWorkflow) settleAbandonedBoundaries(ctx context.Context) {
+	timer := time.NewTicker(30 * time.Second)
+	defer timer.Stop()
+	for {
+		settled, err := w.store.SettleAbandonedSessionBoundaries(ctx, database.AbandonedBoundaryAfter, 100)
+		if err != nil && ctx.Err() == nil {
+			logging.FromContext(ctx).ErrorContext(ctx, "settle abandoned runtime boundaries", "error", err)
+		} else if settled > 0 {
+			logging.FromContext(ctx).InfoContext(ctx, "settled abandoned runtime boundaries", "count", settled)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+	}
 }
 
 func (w *ActorWorkflow) quiesceIdleSession(ctx context.Context, work *database.SessionQuiescence) {
@@ -59,8 +88,8 @@ func (w *ActorWorkflow) quiesceIdleSession(ctx context.Context, work *database.S
 	}
 	cancel()
 	if err != nil {
-		// No timeout-based takeover: the Substrate request may still complete.
-		// Keep admission closed until its outcome can be safely reconciled.
+		// The Substrate request may still complete, so admission stays closed. The
+		// claim lease expires and the next worker re-observes the Actor before acting.
 		logging.FromContext(ctx).ErrorContext(ctx, "runtime boundary outcome unknown", "session_id", work.Session.Id, "version", work.Version, "error", err)
 		return
 	}
