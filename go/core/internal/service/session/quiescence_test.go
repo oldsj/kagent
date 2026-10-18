@@ -139,7 +139,7 @@ type substrateStateActors struct {
 
 func (a *substrateStateActors) requireState(ctx context.Context, op, space, name string, allowed ...ateapipb.ActorState) error {
 	a.mutations.Add(1)
-	actor, err := a.lifecycleTestActors.GetActor(ctx, space, name)
+	actor, err := a.GetActor(ctx, space, name)
 	if err != nil {
 		return err
 	}
