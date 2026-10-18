@@ -21,6 +21,11 @@ import (
 )
 
 // Runner is the execution capability consumed by the A2A supervisor.
+//
+// Run must return within a bounded time after its context is canceled, even
+// when the native process ignores interrupts or its output never closes. The
+// executor serializes the Actor's one native conversation on Run returning, so
+// a Run that blocks keeps cancellation, and every later turn, waiting.
 type Runner interface {
 	Run(context.Context, runtime.Turn, runtime.EventSink) (runtime.Outcome, error)
 }
@@ -530,7 +535,10 @@ func inputRequiredMessage(reqCtx *a2asrv.ExecutorContext, request runtime.InputR
 	}
 }
 
-// Cancel stops the matching active or parked task and waits for its Runner to exit.
+// Cancel stops the matching active or parked task and waits for its Runner to
+// exit. The wait is bounded by the Runner contract: a Runner must return
+// promptly once its context is canceled. A task this Actor no longer runs is
+// settled as canceled immediately.
 func (e *Executor) Cancel(ctx context.Context, reqCtx *a2asrv.ExecutorContext) iter.Seq2[a2atype.Event, error] {
 	return func(yield func(a2atype.Event, error) bool) {
 		if reqCtx == nil || reqCtx.TaskID == "" || reqCtx.ContextID == "" {
@@ -589,6 +597,15 @@ func (e *Executor) Cancel(ctx context.Context, reqCtx *a2asrv.ExecutorContext) i
 			return
 		case nil:
 			e.mu.Unlock()
+			// Nothing in this Actor owns the task: its execution already ended
+			// without persisting a final state (for example, because saving
+			// that state failed), or the Actor was replaced. No native turn
+			// can still produce output for it, so settle the stored task as
+			// canceled. Yielding nothing would leave the SDK's cancellation
+			// waiting for an event that never comes, and the task working.
+			if reqCtx.StoredTask != nil && !reqCtx.StoredTask.Status.State.Terminal() {
+				yield(a2atype.NewStatusUpdateEvent(reqCtx, a2atype.TaskStateCanceled, nil), nil)
+			}
 			return
 		default:
 			e.mu.Unlock()
