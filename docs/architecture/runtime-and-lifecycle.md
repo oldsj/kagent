@@ -217,7 +217,13 @@ the same boundary under a new executor ID and re-observes the Actor, adopting an
 already suspended result instead of suspending again. The superseded executor can
 no longer record an outcome. Completed results stay readable throughout. The
 recorded actor UID is checked before lifecycle calls; a same-name replacement
-cannot be adopted implicitly.
+cannot be adopted implicitly. Substrate Suspend and Pause are re-entrant and
+serialized per Actor, so a retry after a lost response is safe.
+
+A crashed Actor is already stopped and left no checkpoint. Suspending it, by the
+idle worker or an explicit request, settles without a Substrate call and without a
+snapshot reference, so the task cannot be checkpointed or forked. Resume of a
+crashed session is refused; delete still works.
 
 A runtime that dies after saving a boundary but before native cleanup reports
 leaves the boundary unpublished, which blocks new task writes and lifecycle
@@ -311,6 +317,11 @@ For this specific failure, an operator must:
 This procedure changes neither task history nor snapshot scope. It is an operator
 recovery procedure, not an automatic adoption API. The controller continues to
 reject mismatched snapshots and preserves the claim when verification fails.
+
+A crashed Actor is already stopped and left no checkpoint. Suspending it, by the
+idle worker or an explicit request, settles without a Substrate call and without a
+snapshot reference, so the task cannot be checkpointed or forked. Resume of a
+crashed session is refused; delete still works.
 
 ```mermaid
 sequenceDiagram

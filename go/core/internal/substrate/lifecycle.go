@@ -106,6 +106,12 @@ func prepareActorTransition(ctx context.Context, actors LifecycleClient, binding
 			switch actor.GetStatus().GetState() {
 			case ateapipb.ActorState_ACTOR_STATE_RUNNING, ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 				ateapipb.ActorState_ACTOR_STATE_PAUSED, ateapipb.ActorState_ACTOR_STATE_RESUMING, ateapipb.ActorState_ACTOR_STATE_SUSPENDING:
+			case ateapipb.ActorState_ACTOR_STATE_CRASHED:
+				// A crashed Actor is already stopped, so suspending it is a no-op.
+				// It has no state to resume.
+				if operation != apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_SUSPEND {
+					return nil, fmt.Errorf("actor cannot perform %s from %s", operation, actor.GetStatus().GetState())
+				}
 			default:
 				return nil, fmt.Errorf("actor cannot perform %s from %s", operation, actor.GetStatus().GetState())
 			}
@@ -167,9 +173,13 @@ func ApplyActorTransition(ctx context.Context, actors LifecycleClient, transitio
 			err = transition.checkResult(actor, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 		}
 	case apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_SUSPEND:
-		actor, err = actors.SuspendActor(ctx, binding.Atespace, binding.Name)
-		if err == nil {
-			err = transition.checkResult(actor, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+		// Substrate rejects suspending a crashed Actor, which is already stopped
+		// and left no checkpoint, so the suspension settles without a call.
+		if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+			actor, err = actors.SuspendActor(ctx, binding.Atespace, binding.Name)
+			if err == nil {
+				err = transition.checkResult(actor, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+			}
 		}
 	case apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_DELETE:
 		if actor != nil {
