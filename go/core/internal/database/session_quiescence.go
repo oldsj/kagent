@@ -109,11 +109,22 @@ func (c *Client) ClaimSessionQuiescence(ctx context.Context, lease time.Duration
 // Retries are harmless, and a stale claim cannot release another operation.
 // Task state and history remain readable throughout lifecycle work.
 func (c *Client) FinishSessionQuiescence(ctx context.Context, work *SessionQuiescence, snapshot *SessionTaskSnapshot) error {
+	if work != nil && work.State.Terminal() && (snapshot == nil || snapshot.URI == "" || snapshot.Atespace == "" || snapshot.ContentScope == "") {
+		return fmt.Errorf("terminal task quiescence requires a runtime snapshot")
+	}
+	return c.finishSessionQuiescence(ctx, work, snapshot)
+}
+
+// FinishLostSessionQuiescence settles a claim whose runtime crashed, so no
+// checkpoint exists. The task keeps no snapshot and cannot be checkpointed or
+// forked; the session is released as for any other settled boundary.
+func (c *Client) FinishLostSessionQuiescence(ctx context.Context, work *SessionQuiescence) error {
+	return c.finishSessionQuiescence(ctx, work, nil)
+}
+
+func (c *Client) finishSessionQuiescence(ctx context.Context, work *SessionQuiescence, snapshot *SessionTaskSnapshot) error {
 	if work == nil || work.ExecutorID == uuid.Nil {
 		return fmt.Errorf("claimed task boundary is required")
-	}
-	if work.State.Terminal() && (snapshot == nil || snapshot.URI == "" || snapshot.Atespace == "" || snapshot.ContentScope == "") {
-		return fmt.Errorf("terminal task quiescence requires a runtime snapshot")
 	}
 	return c.withTx(ctx, func(tx pgx.Tx) error {
 		session, err := lockSession(ctx, tx, work.Session.Id)

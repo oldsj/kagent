@@ -621,3 +621,36 @@ func TestLifecycleAttemptTimeout(t *testing.T) {
 		})
 	}
 }
+
+func TestQuiesceAndPauseAreIdempotentAndSettleCrashes(t *testing.T) {
+	store, session := lifecycleFixture(t)
+	base := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
+	session, err := NewActorWorkflow(store, base, fixtureCredentials{}, "http://kagent-controller.kagent:8083").Create(t.Context(), session)
+	require.NoError(t, err)
+	actor := base.actors[actorKey("team-a", fixtureActorName(t, store, session.Id))]
+	actor.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
+	actors := &substrateStateActors{lifecycleTestActors: base}
+	workflow := NewActorWorkflow(store, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083")
+
+	// Retried after a lost response, neither operation reissues a rejected call.
+	require.NoError(t, workflow.Pause(t.Context(), session))
+	require.NoError(t, workflow.Pause(t.Context(), session))
+	require.EqualValues(t, 1, actors.mutations.Load())
+	first, err := workflow.Quiesce(t.Context(), session)
+	require.NoError(t, err)
+	actors.mutations.Store(0)
+	actor.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED // An earlier attempt completed.
+	again, err := workflow.Quiesce(t.Context(), session)
+	require.NoError(t, err)
+	require.Equal(t, first, again)
+	require.Zero(t, actors.mutations.Load())
+
+	// A crash has nothing to checkpoint and is reported without a runtime call.
+	actor.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
+	actor.Status.ExternalSnapshot = nil
+	snapshot, err := workflow.Quiesce(t.Context(), session)
+	require.ErrorIs(t, err, errActorCrashed)
+	require.Nil(t, snapshot)
+	require.ErrorIs(t, workflow.Pause(t.Context(), session), errActorCrashed)
+	require.Zero(t, actors.mutations.Load())
+}

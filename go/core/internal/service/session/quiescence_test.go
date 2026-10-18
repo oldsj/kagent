@@ -218,3 +218,138 @@ func TestIdleQuiescenceRecoveryAfterScopeRejection(t *testing.T) {
 		})
 	}
 }
+
+// crashSettlementStore counts how the worker releases each claim.
+type crashSettlementStore struct {
+	*lifecycleTestStore
+	lost, normal atomic.Int32
+}
+
+func (s *crashSettlementStore) FinishLostSessionQuiescence(ctx context.Context, work *database.SessionQuiescence) error {
+	err := s.lifecycleTestStore.FinishLostSessionQuiescence(ctx, work)
+	if err == nil {
+		s.lost.Add(1)
+	}
+	return err
+}
+
+func (s *crashSettlementStore) FinishSessionQuiescence(ctx context.Context, work *database.SessionQuiescence, snapshot *database.SessionTaskSnapshot) error {
+	err := s.lifecycleTestStore.FinishSessionQuiescence(ctx, work, snapshot)
+	if err == nil {
+		s.normal.Add(1)
+	}
+	return err
+}
+
+// substrateStateActors rejects lifecycle calls from states Substrate refuses,
+// such as the observed MarkSuspending failure on a CRASHED Actor.
+type substrateStateActors struct {
+	*lifecycleTestActors
+	mutations atomic.Int32
+}
+
+func (a *substrateStateActors) requireState(ctx context.Context, op, space, name string, allowed ...ateapipb.ActorState) error {
+	a.mutations.Add(1)
+	actor, err := a.GetActor(ctx, space, name)
+	if err != nil {
+		return err
+	}
+	for _, state := range allowed {
+		if actor.GetStatus().GetState() == state {
+			return nil
+		}
+	}
+	return status.Errorf(codes.FailedPrecondition, "Mark%s prerequisite not met for Actor %s/%s (got: %s)", op, space, name, actor.GetStatus().GetState())
+}
+
+func (a *substrateStateActors) SuspendActor(ctx context.Context, space, name string) (*ateapipb.Actor, error) {
+	if err := a.requireState(ctx, "Suspending", space, name, ateapipb.ActorState_ACTOR_STATE_RUNNING, ateapipb.ActorState_ACTOR_STATE_PAUSED); err != nil {
+		return nil, err
+	}
+	return a.lifecycleTestActors.SuspendActor(ctx, space, name)
+}
+
+func (a *substrateStateActors) PauseActor(ctx context.Context, space, name string) (*ateapipb.Actor, error) {
+	if err := a.requireState(ctx, "Pausing", space, name, ateapipb.ActorState_ACTOR_STATE_RUNNING); err != nil {
+		return nil, err
+	}
+	return a.lifecycleTestActors.PauseActor(ctx, space, name)
+}
+
+func TestCrashedRuntimeSettlesIdleBoundaryAndLifecycle(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		// abandonedClaim leaves a claim that an earlier process never finished
+		// and that has no deadline, as in already stuck sessions.
+		abandonedClaim bool
+		state          a2a.TaskState
+	}{
+		{name: "terminal task", state: a2a.TaskStateCompleted},
+		{name: "terminal task with abandoned claim", state: a2a.TaskStateCompleted, abandonedClaim: true},
+		{name: "parked task", state: a2a.TaskStateInputRequired},
+		{name: "parked task with abandoned claim", state: a2a.TaskStateInputRequired, abandonedClaim: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, session := lifecycleFixture(t)
+			base := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
+			session, err := NewActorWorkflow(store, base, fixtureCredentials{}, "http://kagent-controller.kagent:8083").Create(t.Context(), session)
+			require.NoError(t, err)
+			message := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("hello"))
+			message.ContextID = session.ContextId
+			task := a2a.NewSubmittedTask(message, message)
+			task.Status.State = test.state
+			hash := sha256.Sum256([]byte("boundary"))
+			version, err := store.CreateRuntimeTask(t.Context(), session.Id, hash[:], task, "")
+			require.NoError(t, err)
+			require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, string(task.ID), version, 0))
+			actor := base.actors[actorKey("team-a", fixtureActorName(t, store, session.Id))]
+			actor.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
+			if test.abandonedClaim {
+				_, err := store.ClaimSessionQuiescence(t.Context(), 0)
+				require.NoError(t, err)
+				_, err = store.pool.Exec(t.Context(), "UPDATE session_task_event SET quiescence_due_at = NULL WHERE sequence = $1", version)
+				require.NoError(t, err)
+			}
+
+			actors := &substrateStateActors{lifecycleTestActors: base}
+			settlements := &crashSettlementStore{lifecycleTestStore: store}
+			workflow := NewActorWorkflow(settlements, actors, fixtureCredentials{}, "http://kagent-controller.kagent:8083")
+			ctx, cancel := context.WithCancel(t.Context())
+			done := make(chan error, 1)
+			go func() { done <- workflow.Start(ctx) }()
+			t.Cleanup(func() { cancel(); require.NoError(t, <-done) })
+
+			// The worker itself must settle the boundary, as a lost one, before
+			// any explicit lifecycle operation is tried.
+			require.Eventually(t, func() bool {
+				var pending bool
+				err := store.pool.QueryRow(t.Context(), "SELECT quiescence_pending FROM session_task_event WHERE sequence = $1", version).Scan(&pending)
+				return err == nil && !pending
+			}, 10*time.Second, 20*time.Millisecond)
+			require.Equal(t, int32(1), settlements.lost.Load())
+			require.Zero(t, settlements.normal.Load(), "a crash must not be recorded as a snapshotted boundary")
+			require.Zero(t, actors.mutations.Load(), "a crashed Actor must not be sent suspend or pause")
+			// Lifecycle operations are admitted instead of refused as "not yet settled".
+			_, err = store.BeginSessionOperation(t.Context(), session.Id, apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_SUSPEND)
+			require.NoError(t, err)
+			require.Equal(t, ateapipb.ActorState_ACTOR_STATE_CRASHED, actor.Status.State)
+			checkpoint := &apiv1alpha1.Checkpoint{Id: uuid.NewString(), SessionId: session.Id, HeadTaskId: string(task.ID)}
+			_, _, err = store.ReserveSessionCheckpoint(t.Context(), checkpoint, "alice", "checkpoint")
+			require.Error(t, err)
+
+			// The explicit stop reconciles from the same crashed state, repeatably,
+			// and the session can still be deleted afterwards.
+			for range 2 {
+				suspended, err := workflow.Suspend(t.Context(), session)
+				require.NoError(t, err)
+				require.Equal(t, apiv1alpha1.RuntimeState_RUNTIME_STATE_SUSPENDED, suspended.GetState())
+				require.Equal(t, apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_NONE, suspended.GetOperation())
+			}
+			require.Zero(t, actors.mutations.Load())
+			deleted, err := workflow.Delete(t.Context(), session)
+			require.NoError(t, err)
+			require.Equal(t, apiv1alpha1.RuntimeState_RUNTIME_STATE_DELETED, deleted.GetState())
+			require.Empty(t, base.actors)
+		})
+	}
+}
