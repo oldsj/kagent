@@ -193,7 +193,7 @@ func TestRuntimeCompletionDoesNotWaitForSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, version, work.Version)
 	_, err = client.ClaimSessionQuiescence(t.Context())
-	require.ErrorIs(t, err, ErrNotFound) // Claims cannot expire into a second suspend.
+	require.ErrorIs(t, err, ErrNotFound) // A live claim is never taken over.
 	require.Error(t, client.FinishSessionQuiescence(t.Context(), work, nil))
 	// Even an unfinished or failed snapshot never hides the completed task.
 	public, err = client.GetSettledSessionTask(t.Context(), session.Id, string(waiting.ID), nil)
@@ -538,4 +538,91 @@ func TestCheckpointRejectsOlderPendingTask(t *testing.T) {
 	}, "alice", uuid.NewString())
 	require.ErrorIs(t, err, ErrFailedPrecondition)
 	require.ErrorContains(t, err, "all tasks to be terminal")
+}
+
+func TestSessionQuiescenceClaimLease(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		expire string
+	}{
+		{name: "lease ended", expire: "quiescence_expires_at = clock_timestamp() - interval '1 second'"},
+		{name: "claimed before leases existed", expire: "quiescence_expires_at = NULL"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := NewClient(setupTestDB(t))
+			ctx := t.Context()
+			sessionFixture(t, client, ctx, "team-a", "revision", "assistant", "kagent")
+			session, _, err := client.CreateSession(ctx, newSessionRequest(uuid.NewString(), "assistant", "kagent", ""), uuid.NewString())
+			require.NoError(t, err)
+			session, err = markSessionReady(ctx, client, session.Id, "agent.example")
+			require.NoError(t, err)
+			message := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("hello"))
+			message.ContextID = session.ContextId
+			task := a2a.NewSubmittedTask(message, message)
+			task.Status.State = a2a.TaskStateCompleted
+			version, err := client.CreateRuntimeTask(ctx, session.Id, taskMutationHash("completed"), task, "")
+			require.NoError(t, err)
+			require.NoError(t, client.SettleSessionTask(ctx, session.Id, string(task.ID), version))
+			stale, err := client.ClaimSessionQuiescence(ctx)
+			require.NoError(t, err)
+
+			// A live claim holds capacity and cannot be taken over.
+			_, err = client.ClaimSessionQuiescence(ctx)
+			require.ErrorIs(t, err, ErrNotFound)
+			_, err = client.BeginSessionOperation(ctx, session.Id, apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_SUSPEND)
+			require.ErrorIs(t, err, ErrFailedPrecondition)
+
+			_, err = client.db.Exec(ctx, "UPDATE session_task_event SET "+test.expire+" WHERE sequence = $1", stale.Version)
+			require.NoError(t, err)
+			work, err := client.ClaimSessionQuiescence(ctx)
+			require.NoError(t, err)
+			require.Equal(t, stale.Version, work.Version)
+			require.NotEqual(t, stale.ExecutorID, work.ExecutorID)
+
+			// The earlier attempt can no longer record an outcome.
+			snapshot := &SessionTaskSnapshot{Atespace: "team-a", URI: "s3://snapshot/stale", ContentScope: "DATA"}
+			require.ErrorIs(t, client.FinishSessionQuiescence(ctx, stale, snapshot), ErrNotFound)
+			require.Error(t, client.FinishSessionQuiescence(ctx, work, nil), "a snapshot is required unless the runtime was lost")
+
+			// A crashed runtime settles without inventing a checkpoint, repeatably.
+			require.NoError(t, client.FinishLostSessionQuiescence(ctx, work))
+			require.NoError(t, client.FinishLostSessionQuiescence(ctx, work))
+			_, err = client.ClaimSessionQuiescence(ctx)
+			require.ErrorIs(t, err, ErrNotFound)
+			settled, err := client.GetSettledSessionTask(ctx, session.Id, string(task.ID), nil)
+			require.NoError(t, err)
+			require.Equal(t, a2a.TaskStateCompleted, settled.Status.State)
+			_, _, err = client.ReserveSessionCheckpoint(ctx, &apiv1alpha1.Checkpoint{Id: uuid.NewString(), SessionId: session.Id, HeadTaskId: string(task.ID)}, "alice", uuid.NewString())
+			require.Error(t, err, "a lost runtime has no checkpoint to retain")
+			operation, err := client.BeginSessionOperation(ctx, session.Id, apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_SUSPEND)
+			require.NoError(t, err)
+			require.Equal(t, apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_SUSPEND, operation.Instance.Operation)
+		})
+	}
+}
+
+func TestSessionQuiescenceLeaseEndAdmitsLifecycle(t *testing.T) {
+	client := NewClient(setupTestDB(t))
+	ctx := t.Context()
+	sessionFixture(t, client, ctx, "team-a", "revision", "assistant", "kagent")
+	session, _, err := client.CreateSession(ctx, newSessionRequest(uuid.NewString(), "assistant", "kagent", ""), uuid.NewString())
+	require.NoError(t, err)
+	session, err = markSessionReady(ctx, client, session.Id, "agent.example")
+	require.NoError(t, err)
+	message := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("hello"))
+	message.ContextID = session.ContextId
+	task := a2a.NewSubmittedTask(message, message)
+	task.Status.State = a2a.TaskStateCompleted
+	version, err := client.CreateRuntimeTask(ctx, session.Id, taskMutationHash("completed"), task, "")
+	require.NoError(t, err)
+	require.NoError(t, client.SettleSessionTask(ctx, session.Id, string(task.ID), version))
+	_, err = client.ClaimSessionQuiescence(ctx)
+	require.NoError(t, err)
+	_, err = client.db.Exec(ctx, "UPDATE session_task_event SET quiescence_expires_at = clock_timestamp() - interval '1 second' WHERE sequence = $1", version)
+	require.NoError(t, err)
+
+	// An explicit stop need not wait for a claim whose lease has ended.
+	operation, err := client.BeginSessionOperation(ctx, session.Id, apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_SUSPEND)
+	require.NoError(t, err)
+	require.Equal(t, apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_SUSPEND, operation.Instance.Operation)
 }

@@ -172,3 +172,58 @@ func TestActorDeleteStopsRunningCompute(t *testing.T) {
 	require.NoError(t, ApplyActorTransition(t.Context(), actors, transition))
 	require.Empty(t, actors.calls, "a missing Actor already satisfies deletion")
 }
+
+func TestActorSuspendSettlesStoppedActors(t *testing.T) {
+	binding := ActorBinding{Atespace: "team-a", Name: "instance", TemplateAtespace: "team-a", TemplateName: "revision"}
+	for _, test := range []struct {
+		name      string
+		state     ateapipb.ActorState
+		wantCalls []string
+	}{
+		{name: "running actor is suspended", state: ateapipb.ActorState_ACTOR_STATE_RUNNING, wantCalls: []string{"suspend"}},
+		{name: "paused actor is suspended", state: ateapipb.ActorState_ACTOR_STATE_PAUSED, wantCalls: []string{"suspend"}},
+		{name: "crashed actor is already stopped", state: ateapipb.ActorState_ACTOR_STATE_CRASHED},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			actors := &transitionActors{}
+			_, err := actors.CreateActor(t.Context(), "team-a", "instance", "team-a", "revision")
+			require.NoError(t, err)
+			actors.actor.Status.State = test.state
+			actors.calls = nil
+			wantState := ateapipb.ActorState_ACTOR_STATE_SUSPENDED
+			if test.state == ateapipb.ActorState_ACTOR_STATE_CRASHED {
+				wantState = test.state // A crash is not rewritten into a checkpointed suspension.
+			}
+
+			// A retry, such as the reconciler's, reaches the same settled result.
+			for attempt := range 2 {
+				actors.calls = nil
+				transition, err := PrepareActorRetry(t.Context(), actors, binding, apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_SUSPEND, nil)
+				require.NoError(t, err, "attempt %d", attempt)
+				require.NoError(t, ApplyActorTransition(t.Context(), actors, transition), "attempt %d", attempt)
+				require.Equal(t, test.wantCalls, actors.calls, "attempt %d", attempt)
+				require.Equal(t, wantState, actors.actor.Status.State)
+			}
+		})
+	}
+}
+
+func TestActorDeleteAfterCrashedSuspend(t *testing.T) {
+	actors := &transitionActors{}
+	_, err := actors.CreateActor(t.Context(), "team-a", "instance", "team-a", "revision")
+	require.NoError(t, err)
+	actors.actor.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
+	actors.calls = nil
+	binding := ActorBinding{Atespace: "team-a", Name: "instance", TemplateAtespace: "team-a", TemplateName: "revision"}
+	for _, operation := range []apiv1alpha1.RuntimeOperation{
+		apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_SUSPEND,
+		apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_DELETE,
+		apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_DELETE,
+	} {
+		transition, err := PrepareActorTransition(t.Context(), actors, binding, operation, nil)
+		require.NoError(t, err)
+		require.NoError(t, ApplyActorTransition(t.Context(), actors, transition))
+	}
+	require.Equal(t, []string{"delete"}, actors.calls, "a crashed actor is never suspended before deletion")
+	require.Nil(t, actors.actor)
+}

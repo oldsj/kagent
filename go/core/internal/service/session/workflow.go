@@ -18,6 +18,7 @@ import (
 type workflowStore interface {
 	ClaimSessionQuiescence(context.Context) (*database.SessionQuiescence, error)
 	FinishSessionQuiescence(context.Context, *database.SessionQuiescence, *database.SessionTaskSnapshot) error
+	FinishLostSessionQuiescence(context.Context, *database.SessionQuiescence) error
 	GetSessionForRuntime(context.Context, string, string) (*apiv1alpha1.Session, error)
 	GetSessionCheckpointSnapshot(context.Context, string, string) (*database.SessionTaskSnapshot, string, error)
 	GetRuntimeRevision(context.Context, string) (*database.RuntimeRevision, error)
@@ -45,8 +46,13 @@ func NewActorWorkflow(store workflowStore, actors actorClient) *ActorWorkflow {
 	return &ActorWorkflow{store: store, actors: actors}
 }
 
+// errActorCrashed reports that the runtime already stopped without a
+// checkpoint. The stop is final, so callers settle it instead of retrying.
+var errActorCrashed = errors.New("actor crashed")
+
 // Pause checkpoints the runtime on its current worker without changing the
-// Session logical state or persisting A2A task state.
+// Session logical state or persisting A2A task state. An already paused Actor
+// is settled, and a crashed one returns errActorCrashed.
 func (w *ActorWorkflow) Pause(ctx context.Context, session *apiv1alpha1.Session) error {
 	revision, err := w.store.GetRuntimeRevision(ctx, session.GetPreparedRevision())
 	if err != nil {
@@ -60,6 +66,12 @@ func (w *ActorWorkflow) Pause(ctx context.Context, session *apiv1alpha1.Session)
 	if err := w.verifyActor(ctx, session, revision, current); err != nil {
 		return err
 	}
+	switch current.GetStatus().GetState() {
+	case ateapipb.ActorState_ACTOR_STATE_PAUSED:
+		return nil // An earlier attempt completed; Substrate rejects pausing again.
+	case ateapipb.ActorState_ACTOR_STATE_CRASHED:
+		return fmt.Errorf("pause Actor %s/%s: %w", atespace, name, errActorCrashed)
+	}
 	actor, err := w.actors.PauseActor(ctx, atespace, name)
 	if err != nil {
 		return fmt.Errorf("pause Actor %s/%s: %w", atespace, name, err)
@@ -72,7 +84,9 @@ func (w *ActorWorkflow) Pause(ctx context.Context, session *apiv1alpha1.Session)
 
 // Quiesce durably suspends the runtime without changing the Session's
 // logical READY state and records its external snapshot URI. Only a checkpoint
-// retains a copy after the Actor advances.
+// retains a copy after the Actor advances. An Actor already suspended with a
+// snapshot, from an earlier attempt, is not suspended again. A crashed one has no snapshot to
+// record and returns errActorCrashed.
 func (w *ActorWorkflow) Quiesce(ctx context.Context, session *apiv1alpha1.Session) (*database.SessionTaskSnapshot, error) {
 	revision, err := w.store.GetRuntimeRevision(ctx, session.GetPreparedRevision())
 	if err != nil {
@@ -86,9 +100,17 @@ func (w *ActorWorkflow) Quiesce(ctx context.Context, session *apiv1alpha1.Sessio
 	if err := w.verifyActor(ctx, session, revision, current); err != nil {
 		return nil, err
 	}
-	actor, err := w.actors.SuspendActor(ctx, atespace, name)
-	if err != nil {
-		return nil, fmt.Errorf("suspend Actor %s/%s: %w", atespace, name, err)
+	actor := current
+	switch {
+	case current.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED:
+		return nil, fmt.Errorf("suspend Actor %s/%s: %w", atespace, name, errActorCrashed)
+	case current.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_SUSPENDED && current.GetStatus().GetExternalSnapshot().GetSnapshotUri() != "":
+		// An earlier attempt completed; its snapshot is validated below.
+	default:
+		actor, err = w.actors.SuspendActor(ctx, atespace, name)
+		if err != nil {
+			return nil, fmt.Errorf("suspend Actor %s/%s: %w", atespace, name, err)
+		}
 	}
 	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 		return nil, fmt.Errorf("suspend Actor %s/%s returned status %s", atespace, name, actor.GetStatus().GetState())

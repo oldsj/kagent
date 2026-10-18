@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/google/uuid"
@@ -20,10 +21,17 @@ type SessionQuiescence struct {
 	ExecutorID uuid.UUID
 }
 
+// quiescenceLease outlasts one runtime attempt (RuntimeOperationTimeout) plus
+// the bounded time to record its outcome.
+const quiescenceLease = RuntimeOperationTimeout + time.Minute
+
 // ClaimSessionQuiescence claims an idle session at its latest settled task
 // version. A new turn supersedes unclaimed idle work; a claim blocks task writes,
-// checkpoints, and explicit lifecycle operations until it finishes. Missing work
-// returns ErrNotFound. Uncertain issued work is never reassigned after a timeout.
+// checkpoints, and explicit lifecycle operations until it finishes or its lease
+// ends. Missing work returns ErrNotFound. A live claim is never taken over; once
+// its lease ends, another attempt may retry it. Retries must check the runtime's
+// current state first, because the earlier request may have completed. A claim
+// with no lease predates leases and counts as ended.
 func (c *Client) ClaimSessionQuiescence(ctx context.Context) (*SessionQuiescence, error) {
 	var result *SessionQuiescence
 	err := c.withTx(ctx, func(tx pgx.Tx) error {
@@ -36,7 +44,7 @@ func (c *Client) ClaimSessionQuiescence(ctx context.Context) (*SessionQuiescence
 			SELECT i.id::text AS session_id, e.task_id, e.sequence
 			FROM session_task_event e JOIN session_record i ON i.history_id = e.history_id
 			WHERE e.published AND e.quiescence_pending = TRUE
-			  AND e.quiescence_executor_id IS NULL
+			  AND (e.quiescence_executor_id IS NULL OR e.quiescence_expires_at IS NULL OR e.quiescence_expires_at <= clock_timestamp())
 			  AND i.state = 'RUNTIME_STATE_READY'
 			  AND i.operation = 'RUNTIME_OPERATION_NONE'
 			  AND (i.dispatch_expires_at IS NULL OR i.dispatch_expires_at <= clock_timestamp())
@@ -69,12 +77,13 @@ func (c *Client) ClaimSessionQuiescence(ctx context.Context) (*SessionQuiescence
 		// Recheck after locking: the candidate query's snapshot may predate a
 		// new turn that committed just before we acquired the session lock.
 		tag, err := tx.Exec(ctx, `
-			UPDATE session_task_event SET quiescence_executor_id = $2
+			UPDATE session_task_event SET quiescence_executor_id = $2,
+			    quiescence_expires_at = clock_timestamp() + $4 * interval '1 millisecond'
 			WHERE sequence = $1 AND published AND quiescence_pending
-			  AND quiescence_executor_id IS NULL
+			  AND (quiescence_executor_id IS NULL OR quiescence_expires_at IS NULL OR quiescence_expires_at <= clock_timestamp())
 			  AND NOT EXISTS (SELECT 1 FROM session WHERE id = $3 AND dispatch_expires_at > clock_timestamp())
 			  AND NOT EXISTS (SELECT 1 FROM session_checkpoint WHERE source_session_id = $3 AND state = 'CREATING')
-		`, result.Version, result.ExecutorID, session.ID)
+		`, result.Version, result.ExecutorID, session.ID, quiescenceLease.Milliseconds())
 		if err != nil {
 			return err
 		}
@@ -91,11 +100,22 @@ func (c *Client) ClaimSessionQuiescence(ctx context.Context) (*SessionQuiescence
 // Retries are harmless, and a stale claim cannot release another operation.
 // Task state and history remain readable throughout lifecycle work.
 func (c *Client) FinishSessionQuiescence(ctx context.Context, work *SessionQuiescence, snapshot *SessionTaskSnapshot) error {
+	if work != nil && work.State.Terminal() && (snapshot == nil || snapshot.URI == "" || snapshot.Atespace == "" || snapshot.ContentScope == "") {
+		return fmt.Errorf("terminal task quiescence requires a runtime snapshot")
+	}
+	return c.finishSessionQuiescence(ctx, work, snapshot)
+}
+
+// FinishLostSessionQuiescence settles a claim whose runtime crashed, so no
+// checkpoint exists. The task keeps no snapshot and cannot be checkpointed or
+// forked; the session is released as for any other settled boundary.
+func (c *Client) FinishLostSessionQuiescence(ctx context.Context, work *SessionQuiescence) error {
+	return c.finishSessionQuiescence(ctx, work, nil)
+}
+
+func (c *Client) finishSessionQuiescence(ctx context.Context, work *SessionQuiescence, snapshot *SessionTaskSnapshot) error {
 	if work == nil || work.ExecutorID == uuid.Nil {
 		return fmt.Errorf("claimed task boundary is required")
-	}
-	if work.State.Terminal() && (snapshot == nil || snapshot.URI == "" || snapshot.Atespace == "" || snapshot.ContentScope == "") {
-		return fmt.Errorf("terminal task quiescence requires a runtime snapshot")
 	}
 	return c.withTx(ctx, func(tx pgx.Tx) error {
 		session, err := lockSession(ctx, tx, work.Session.Id)

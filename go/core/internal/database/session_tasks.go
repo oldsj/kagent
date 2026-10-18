@@ -805,13 +805,14 @@ func readTaskMessages(ctx context.Context, db dbExecutor, historyID uuid.UUID, t
 	`, pgx.RowToStructByName[taskHistoryRow], historyID, taskIDs, historyLength, includeUnpublished)
 }
 
-// requireSettledRuntime rejects unfinished native cleanup, claimed idle work, or
-// another unexpired dispatch. A writer may pass its own dispatch ID.
+// requireSettledRuntime rejects unfinished native cleanup, idle work under a live
+// claim, or another unexpired dispatch. A writer may pass its own dispatch ID.
 // Callers hold the session lock so new execution and lifecycle claims cannot race.
 func requireSettledRuntime(ctx context.Context, db dbExecutor, historyID uuid.UUID, dispatchID string) error {
 	pending, err := queryOne(ctx, db, `
 		SELECT EXISTS (SELECT 1 FROM session_task_event WHERE history_id = $1
-		    AND (NOT published OR (quiescence_pending AND quiescence_executor_id IS NOT NULL)))
+		    AND (NOT published OR (quiescence_pending AND quiescence_executor_id IS NOT NULL
+		        AND quiescence_expires_at > clock_timestamp())))
 		    OR EXISTS (SELECT 1 FROM session WHERE history_id = $1 AND dispatch_expires_at > clock_timestamp()
 		        AND ($2::text = '' OR dispatch_id::text <> $2))
 	`, pgx.RowTo[bool], historyID, dispatchID)

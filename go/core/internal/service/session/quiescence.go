@@ -58,17 +58,26 @@ func (w *ActorWorkflow) quiesceIdleSession(ctx context.Context, work *database.S
 		err = w.Pause(runtimeCtx, work.Session)
 	}
 	cancel()
-	if err != nil {
-		// No timeout-based takeover: the Substrate request may still complete.
-		// Keep admission closed until its outcome can be safely reconciled.
+	crashed := errors.Is(err, errActorCrashed)
+	if err != nil && !crashed {
+		// No takeover while the claim's lease is live: the Substrate request may
+		// still complete. Once it ends, a retry reads the Actor's state first.
 		logging.FromContext(ctx).ErrorContext(ctx, "runtime boundary outcome unknown", "session_id", work.Session.Id, "version", work.Version, "error", err)
 		return
+	}
+	if crashed {
+		// The stop is final and took no checkpoint; settle it without one.
+		logging.FromContext(ctx).WarnContext(ctx, "runtime crashed before its idle boundary; settling without a snapshot", "session_id", work.Session.Id, "version", work.Version)
 	}
 	// Keep a known snapshot until its reference is stored. Retry database failures
 	// without repeating runtime work; give shutdown one bounded completion attempt.
 	for delay := 100 * time.Millisecond; ; delay = min(2*delay, 5*time.Second) {
 		finishCtx, finishCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		err = w.store.FinishSessionQuiescence(finishCtx, work, snapshot)
+		if crashed {
+			err = w.store.FinishLostSessionQuiescence(finishCtx, work)
+		} else {
+			err = w.store.FinishSessionQuiescence(finishCtx, work, snapshot)
+		}
 		finishCancel()
 		if err == nil {
 			return

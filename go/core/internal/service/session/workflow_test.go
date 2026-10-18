@@ -158,11 +158,12 @@ func lifecycleFixture(t *testing.T) (*lifecycleTestStore, *apiv1alpha1.Session) 
 	require.NoError(t, client.RecordRuntimeRevision(t.Context(), *revision, true))
 	session, _, err := client.CreateSession(t.Context(), &apiv1alpha1.Session{Id: uuid.NewString(), Creator: "alice", Agent: &apiv1alpha1.ResourceReference{Namespace: "team-a", Name: "assistant"}}, uuid.NewString())
 	require.NoError(t, err)
-	return &lifecycleTestStore{Client: client, revision: revision}, session
+	return &lifecycleTestStore{Client: client, pool: pool, revision: revision}, session
 }
 
 type lifecycleTestStore struct {
 	*database.Client
+	pool     *pgxpool.Pool // set by lifecycleFixture for tests that age durable claims
 	revision *database.RuntimeRevision
 }
 
@@ -459,4 +460,37 @@ func TestActorWorkflowSessionCredentialsAcrossRetryResumeAndFork(t *testing.T) {
 	_, err = workflow.Create(ctx, fork)
 	require.NoError(t, err)
 	require.Nil(t, actors.policy.Rules[0].GetHttp().GetEffects(), "fork has no source Session credential")
+}
+
+func TestQuiesceAndPauseAreIdempotentAndSettleCrashes(t *testing.T) {
+	store, session := lifecycleFixture(t)
+	base := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
+	session, err := NewActorWorkflow(store, base).Create(t.Context(), session)
+	require.NoError(t, err)
+	actor := base.actors[actorKey("team-a", substrate.ActorName(session.Id))]
+	actor.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
+	actors := &substrateStateActors{lifecycleTestActors: base}
+	workflow := NewActorWorkflow(store, actors)
+
+	// Retried after a lost response, neither operation reissues a rejected call.
+	require.NoError(t, workflow.Pause(t.Context(), session))
+	require.NoError(t, workflow.Pause(t.Context(), session))
+	require.EqualValues(t, 1, actors.mutations.Load())
+	first, err := workflow.Quiesce(t.Context(), session)
+	require.NoError(t, err)
+	actors.mutations.Store(0)
+	actor.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED // An earlier attempt completed.
+	again, err := workflow.Quiesce(t.Context(), session)
+	require.NoError(t, err)
+	require.Equal(t, first, again)
+	require.Zero(t, actors.mutations.Load())
+
+	// A crash has nothing to checkpoint and is reported without a runtime call.
+	actor.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
+	actor.Status.ExternalSnapshot = nil
+	snapshot, err := workflow.Quiesce(t.Context(), session)
+	require.ErrorIs(t, err, errActorCrashed)
+	require.Nil(t, snapshot)
+	require.ErrorIs(t, workflow.Pause(t.Context(), session), errActorCrashed)
+	require.Zero(t, actors.mutations.Load())
 }

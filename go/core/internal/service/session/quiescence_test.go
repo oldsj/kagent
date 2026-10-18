@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 	"github.com/kagent-dev/kagent/go/core/internal/database"
+	"github.com/kagent-dev/kagent/go/core/internal/substrate"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -105,4 +106,110 @@ func (s *quiescenceRetryStore) FinishSessionQuiescence(ctx context.Context, work
 		return status.Error(codes.Unavailable, "database unavailable")
 	}
 	return s.Client.FinishSessionQuiescence(ctx, work, snapshot)
+}
+
+// substrateStateActors rejects lifecycle calls from states Substrate refuses,
+// such as the observed MarkSuspending failure on a CRASHED Actor.
+type substrateStateActors struct {
+	*lifecycleTestActors
+	mutations atomic.Int32
+}
+
+func (a *substrateStateActors) requireState(ctx context.Context, op, space, name string, allowed ...ateapipb.ActorState) error {
+	a.mutations.Add(1)
+	actor, err := a.lifecycleTestActors.GetActor(ctx, space, name)
+	if err != nil {
+		return err
+	}
+	for _, state := range allowed {
+		if actor.GetStatus().GetState() == state {
+			return nil
+		}
+	}
+	return status.Errorf(codes.FailedPrecondition, "Mark%s prerequisite not met for Actor %s/%s (got: %s)", op, space, name, actor.GetStatus().GetState())
+}
+
+func (a *substrateStateActors) SuspendActor(ctx context.Context, space, name string) (*ateapipb.Actor, error) {
+	if err := a.requireState(ctx, "Suspending", space, name, ateapipb.ActorState_ACTOR_STATE_RUNNING, ateapipb.ActorState_ACTOR_STATE_PAUSED); err != nil {
+		return nil, err
+	}
+	return a.lifecycleTestActors.SuspendActor(ctx, space, name)
+}
+
+func (a *substrateStateActors) PauseActor(ctx context.Context, space, name string) (*ateapipb.Actor, error) {
+	if err := a.requireState(ctx, "Pausing", space, name, ateapipb.ActorState_ACTOR_STATE_RUNNING); err != nil {
+		return nil, err
+	}
+	return a.lifecycleTestActors.PauseActor(ctx, space, name)
+}
+
+func TestCrashedRuntimeSettlesIdleBoundaryAndLifecycle(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		// abandonedClaim leaves a claim that an earlier process never finished
+		// and that predates leases, as in already stuck sessions.
+		abandonedClaim bool
+		state          a2a.TaskState
+	}{
+		{name: "terminal task", state: a2a.TaskStateCompleted},
+		{name: "terminal task with abandoned claim", state: a2a.TaskStateCompleted, abandonedClaim: true},
+		{name: "parked task", state: a2a.TaskStateInputRequired},
+		{name: "parked task with abandoned claim", state: a2a.TaskStateInputRequired, abandonedClaim: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, session := lifecycleFixture(t)
+			base := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
+			session, err := NewActorWorkflow(store, base).Create(t.Context(), session)
+			require.NoError(t, err)
+			message := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("hello"))
+			message.ContextID = session.ContextId
+			task := a2a.NewSubmittedTask(message, message)
+			task.Status.State = test.state
+			hash := sha256.Sum256([]byte("boundary"))
+			version, err := store.CreateRuntimeTask(t.Context(), session.Id, hash[:], task, "")
+			require.NoError(t, err)
+			require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, string(task.ID), version))
+			actor := base.actors[actorKey("team-a", substrate.ActorName(session.Id))]
+			actor.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
+			if test.abandonedClaim {
+				_, err := store.ClaimSessionQuiescence(t.Context())
+				require.NoError(t, err)
+				_, err = store.pool.Exec(t.Context(), "UPDATE session_task_event SET quiescence_expires_at = NULL WHERE sequence = $1", version)
+				require.NoError(t, err)
+			}
+
+			actors := &substrateStateActors{lifecycleTestActors: base}
+			workflow := NewActorWorkflow(store, actors)
+			ctx, cancel := context.WithCancel(t.Context())
+			done := make(chan error, 1)
+			go func() { done <- workflow.Start(ctx) }()
+			t.Cleanup(func() { cancel(); require.NoError(t, <-done) })
+
+			// Settlement means a new turn is admitted instead of being refused
+			// as "not yet settled", and no checkpoint was recorded or invented.
+			require.Eventually(t, func() bool {
+				_, err := store.BeginSessionOperation(t.Context(), session.Id, apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_SUSPEND)
+				return err == nil
+			}, 10*time.Second, 20*time.Millisecond)
+			require.Zero(t, actors.mutations.Load(), "a crashed Actor must not be sent suspend or pause")
+			require.Equal(t, ateapipb.ActorState_ACTOR_STATE_CRASHED, actor.Status.State)
+			checkpoint := &apiv1alpha1.Checkpoint{Id: uuid.NewString(), SessionId: session.Id, HeadTaskId: string(task.ID)}
+			_, _, err = store.ReserveSessionCheckpoint(t.Context(), checkpoint, "alice", "checkpoint")
+			require.Error(t, err)
+
+			// The explicit stop reconciles from the same crashed state, repeatably,
+			// and the session can still be deleted afterwards.
+			for range 2 {
+				suspended, err := workflow.Suspend(t.Context(), session)
+				require.NoError(t, err)
+				require.Equal(t, apiv1alpha1.RuntimeState_RUNTIME_STATE_SUSPENDED, suspended.GetState())
+				require.Equal(t, apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_NONE, suspended.GetOperation())
+			}
+			require.Zero(t, actors.mutations.Load())
+			deleted, err := workflow.Delete(t.Context(), session)
+			require.NoError(t, err)
+			require.Equal(t, apiv1alpha1.RuntimeState_RUNTIME_STATE_DELETED, deleted.GetState())
+			require.Empty(t, base.actors)
+		})
+	}
 }
