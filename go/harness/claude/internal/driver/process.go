@@ -15,6 +15,7 @@ import (
 
 	"github.com/kagent-dev/kagent/go/harness/internal/utils"
 	"github.com/kagent-dev/kagent/go/harness/runtime"
+	"github.com/kagent-dev/kagent/go/pkg/logging"
 	"go.opentelemetry.io/otel/propagation"
 )
 
@@ -56,6 +57,7 @@ type parseItem struct {
 
 type processSession struct {
 	command   *exec.Cmd
+	stdout    io.Closer
 	items     <-chan parseItem
 	stopEmit  chan struct{}
 	wait      <-chan error
@@ -195,6 +197,9 @@ func (d *ProcessDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime
 	}
 	stderr := utils.NewBoundedBuffer(d.config.MaxStderrBytes)
 	cmd.Stderr = stderr
+	// Wait copies stderr until every holder of the pipe closes it. A descendant
+	// that outlives Claude would otherwise keep Wait, and the turn, alive.
+	cmd.WaitDelay = d.config.InterruptGrace
 	if err := cmd.Start(); err != nil {
 		return runtime.Outcome{}, fmt.Errorf("start Claude: %w", err)
 	}
@@ -226,13 +231,13 @@ func (d *ProcessDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime
 		close(waitDone)
 	}()
 	session := &processSession{
-		command: cmd, items: items, stopEmit: stopEmit, wait: waitDone, stderr: stderr,
+		command: cmd, stdout: stdout, items: items, stopEmit: stopEmit, wait: waitDone, stderr: stderr,
 	}
 	go sendPrompt(ctx, stdin, message, gate, parseDone)
 	sessionOwnedByPendingTurn := false
 	defer func() {
 		if !sessionOwnedByPendingTurn {
-			d.stopSession(session)
+			d.stopSession(ctx, session)
 		}
 	}()
 	outcome, err := d.consume(ctx, session, sink)
@@ -347,13 +352,15 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 				// A process that exits before its result can explain the failure
 				// only on stderr. Reap it to finish draining stderr; malformed
 				// output can also stop the parser while the process is still alive.
-				d.stopSession(session)
+				d.stopSession(ctx, session)
 				if stderr := strings.TrimSpace(session.stderr.String()); stderr != "" {
 					return runtime.Outcome{}, fmt.Errorf("%w: %s", item.err, stderr)
 				}
 				return runtime.Outcome{}, item.err
 			}
-			if waitErr := <-session.wait; waitErr != nil {
+			// ErrWaitDelay means Claude succeeded but a descendant still held
+			// stderr. The deferred stop reaps the process group.
+			if waitErr := <-session.wait; waitErr != nil && !errors.Is(waitErr, exec.ErrWaitDelay) {
 				return runtime.Outcome{}, fmt.Errorf("claude exited with an error: %w: %s", waitErr, session.stderr.String())
 			}
 			if session.terminal == nil {
@@ -374,7 +381,7 @@ func (p *pendingTurn) Resume(ctx context.Context, response runtime.InputResponse
 	sessionOwnedByPendingTurn := false
 	defer func() {
 		if !sessionOwnedByPendingTurn {
-			p.driver.stopSession(p.session)
+			p.driver.stopSession(ctx, p.session)
 		}
 	}()
 	decision, ok := response.(*runtime.ApprovalDecision)
@@ -393,11 +400,11 @@ func (p *pendingTurn) Resume(ctx context.Context, response runtime.InputResponse
 }
 
 // Cancel denies the outstanding permission MCP call and reaps the Claude process.
-func (p *pendingTurn) Cancel(_ context.Context) error {
+func (p *pendingTurn) Cancel(ctx context.Context) error {
 	_ = p.pending.resolve(runtime.ApprovalDecision{
 		ID: p.pending.request.ID, Approved: false, RejectionReason: "The task was canceled.",
 	})
-	p.driver.stopSession(p.session)
+	p.driver.stopSession(ctx, p.session)
 	return nil
 }
 
@@ -443,24 +450,73 @@ func emitEvent(event Event, sink runtime.EventSink, terminal bool) (*runtime.Out
 	}
 }
 
-func (d *ProcessDriver) stopSession(session *processSession) {
+// stopSession reaps the Claude process within a bounded time, so the Actor's
+// one native conversation is released even when the process tree misbehaves.
+// It interrupts the process group, kills it after InterruptGrace, and then
+// bounds each remaining step by a small multiple of InterruptGrace:
+//
+//   - Wait starts only after the parser reaches EOF on stdout. A descendant that
+//     left the process group can hold stdout open indefinitely, so the parser's
+//     end of the pipe is closed to end the read.
+//   - Wait itself is bounded by WaitDelay for a descendant holding stderr.
+//
+// If the process still has not been reaped, stopSession gives up on it rather
+// than block the executor. By then every process in the group has been sent
+// SIGKILL and can run no further user code, so abandoning the reaper goroutines
+// cannot leave a second live writer on the native conversation.
+func (d *ProcessDriver) stopSession(ctx context.Context, session *processSession) {
 	session.stopOnce.Do(func() {
 		close(session.stopEmit)
+		grace := d.config.InterruptGrace
 		_ = utils.InterruptProcessGroup(session.command.Process)
-		timer := time.NewTimer(d.config.InterruptGrace)
-		defer timer.Stop()
-		select {
-		case <-session.wait:
-			// The group leader can exit on the interrupt while a descendant that
-			// ignores it remains alive. Kill any processes still in the group.
-			_ = utils.KillProcessGroup(session.command.Process)
-		case <-timer.C:
-			_ = utils.KillProcessGroup(session.command.Process)
-			<-session.wait
+		// The group leader can exit on the interrupt while a descendant that
+		// ignores it remains alive, so the group is always killed.
+		received(session.wait, grace)
+		_ = utils.KillProcessGroup(session.command.Process)
+		if !received(session.wait, grace) {
+			_ = session.stdout.Close()
+			// Wait can then still spend up to WaitDelay on stderr.
+			if !received(session.wait, 2*grace) {
+				logging.FromContext(ctx).WarnContext(ctx, "abandoning Claude process that was not reaped after it was killed",
+					"pid", session.command.Process.Pid)
+				return
+			}
 		}
-		for range session.items {
+		// The parser closes items once it returns, which precedes Wait.
+		if !drained(session.items, grace) {
+			logging.FromContext(ctx).WarnContext(ctx, "abandoning Claude event stream that did not close after the process exited",
+				"pid", session.command.Process.Pid)
 		}
 	})
+}
+
+// received reports whether done delivered a value or closed within timeout.
+func received[T any](done <-chan T, timeout time.Duration) bool {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return true
+	case <-timer.C:
+		return false
+	}
+}
+
+// drained discards items until the channel closes, and reports whether it
+// closed within timeout.
+func drained[T any](items <-chan T, timeout time.Duration) bool {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		select {
+		case _, ok := <-items:
+			if !ok {
+				return true
+			}
+		case <-timer.C:
+			return false
+		}
+	}
 }
 
 var _ runtime.PendingTurn = (*pendingTurn)(nil)

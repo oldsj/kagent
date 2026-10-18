@@ -82,6 +82,14 @@ state is either active, parked on a `PendingTurn`, canceling that handle, or
 idle. Drivers therefore implement native protocol and process cleanup without
 maintaining a second global parked-task state.
 
+A runner must return within a bounded time after its context is canceled, even
+when the native process ignores interrupts or a descendant keeps its output
+open. Cancellation waits for that return before it publishes `canceled` and
+frees the Actor. Canceling a task that the executor does not own settles it as
+`canceled` immediately. Such a task is one whose execution ended without a final
+state, for example after a failed save. See
+[cancellation and failed saves](../../docs/architecture/runtime-and-lifecycle.md#cancellation-and-failed-saves).
+
 ## Development
 
 From `go/`, run the focused unit tests with:

@@ -104,6 +104,10 @@ func (d *ProcessDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime
 	}
 	stderr := utils.NewBoundedBuffer(d.config.MaxStderrBytes)
 	command.Stderr = stderr
+	// Wait copies stderr until every holder of the pipe closes it. Bound that
+	// after App Server exits, so a descendant holding stderr cannot keep a
+	// killed session, and the Actor's executor, waiting forever.
+	command.WaitDelay = d.config.InterruptGrace
 	if err := command.Start(); err != nil {
 		return runtime.Outcome{}, fmt.Errorf("start Codex App Server: %w", err)
 	}
