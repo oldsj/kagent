@@ -440,7 +440,9 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 			}
 			session.streamEnded = true
 		case waitErr := <-exited:
-			if waitErr != nil {
+			// ErrWaitDelay means Claude exited successfully while a descendant
+			// still held stderr. The deferred stop kills and reaps that tree.
+			if waitErr != nil && !errors.Is(waitErr, exec.ErrWaitDelay) {
 				stderr := session.stderr.Diagnostic()
 				if stderr != "" {
 					logging.FromContext(ctx).WarnContext(ctx, "claude exited with an error", "error", waitErr, "stderr", stderr)

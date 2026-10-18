@@ -28,12 +28,19 @@ const RuntimeTokenPlaceholder = "gateway-injection-required"
 type Store struct {
 	client       *controllerclient.Client
 	identityPath string
+	// failureRecordWindow bounds how long the failure record that follows a
+	// failed save is retried.
+	failureRecordWindow time.Duration
 }
+
+// defaultFailureRecordWindow covers a controller restart, during which the
+// TaskStore can refuse or drop calls for longer than an ordinary retry lasts.
+const defaultFailureRecordWindow = 30 * time.Second
 
 var _ sdktaskstore.Store = (*Store)(nil)
 
 func New(client *controllerclient.Client, identityPath string) *Store {
-	return &Store{client: client, identityPath: identityPath}
+	return &Store{client: client, identityPath: identityPath, failureRecordWindow: defaultFailureRecordWindow}
 }
 
 func (s *Store) sessionID() (string, error) {
@@ -104,7 +111,12 @@ func (s *Store) Create(ctx context.Context, task *a2a.Task) (sdktaskstore.TaskVe
 }
 
 func (s *Store) Update(ctx context.Context, update *sdktaskstore.UpdateRequest) (sdktaskstore.TaskVersion, error) {
-	if executionFailed(ctx) {
+	// After a failed save this execution's events are incomplete, so nothing
+	// more from it is persisted except the SDK's failure record. That record is
+	// the only write that can end the task: without it the stored task stays
+	// working although no native turn runs for it.
+	failureRecord := executionFailed(ctx)
+	if failureRecord && (update.Task == nil || update.Task.Status.State != a2a.TaskStateFailed) {
 		return 0, fmt.Errorf("previous task persistence failed")
 	}
 	task, err := pbconv.ToProtoTask(update.Task)
@@ -124,11 +136,16 @@ func (s *Store) Update(ctx context.Context, update *sdktaskstore.UpdateRequest) 
 		request.DispatchId = state.dispatchID
 	}
 	var response *apiv1alpha1.TaskStoreServiceUpdateTaskResponse
-	err = s.retry(ctx, func(ctx context.Context) error {
+	call := func(ctx context.Context) error {
 		var err error
 		response, err = s.client.TaskStoreService().UpdateTask(ctx, request)
 		return err
-	})
+	}
+	if failureRecord {
+		err = s.retryFailureRecord(ctx, call)
+	} else {
+		err = s.retry(ctx, call)
+	}
 	if err != nil {
 		recordSaveFailure(ctx)
 		return 0, sdkError(err)
@@ -201,6 +218,39 @@ func (s *Store) retry(ctx context.Context, call func(context.Context) error) err
 		}
 	}
 	panic("unreachable")
+}
+
+// retryFailureRecord retries the failure record that follows a failed save
+// with backoff for up to failureRecordWindow, including after the execution
+// context ends. It retries the refusals a restarting controller returns as
+// well as lost responses: the record carries the version of the last committed
+// save, so a retry can never overwrite a newer state, and the store rejects it
+// as a conflict instead. Conflicts and invalid requests are not retried.
+func (s *Store) retryFailureRecord(ctx context.Context, call func(context.Context) error) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.failureRecordWindow)
+	defer cancel()
+	delay := 100 * time.Millisecond
+	for {
+		rpcCtx, cancelRPC, err := s.callContext(ctx)
+		if err != nil {
+			return err
+		}
+		err = call(rpcCtx)
+		cancelRPC()
+		switch status.Code(err) {
+		case codes.Unavailable, codes.DeadlineExceeded, codes.PermissionDenied, codes.Unauthenticated:
+		default:
+			return err
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return err
+		case <-timer.C:
+		}
+		delay = min(2*delay, 2*time.Second)
+	}
 }
 
 func fromStored(stored *apiv1alpha1.StoredTask) (*sdktaskstore.StoredTask, error) {
