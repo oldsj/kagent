@@ -46,7 +46,7 @@ func TestLegacySettlementAgainstMigration7(t *testing.T) {
 					// Follow the rollback order: the new binary settles at zero delay
 					// before an old binary starts against the retained schema.
 					require.NoError(t, client.SettleSessionTask(t.Context(), session.Id, string(task.ID), version, 0))
-					work, err := client.ClaimSessionQuiescence(t.Context())
+					work, err := client.ClaimSessionQuiescence(t.Context(), 0)
 					require.NoError(t, err)
 					require.NoError(t, client.FinishSessionQuiescence(t.Context(), work, snapshot))
 					pool, err := pgxpool.NewWithConfig(t.Context(), db.Config().Copy())
@@ -76,10 +76,10 @@ func TestLegacySettlementAgainstMigration7(t *testing.T) {
 				`, pgx.RowTo[*time.Time], version)
 				require.NoError(t, err)
 				require.Nil(t, due, "old writers leave the deadline unset")
-				work, err := client.ClaimSessionQuiescence(t.Context())
+				work, err := client.ClaimSessionQuiescence(t.Context(), 0)
 				require.NoError(t, err, "NULL must mean eligible now in selection and claim")
 				require.Equal(t, version, work.Version)
-				_, err = client.ClaimSessionQuiescence(t.Context())
+				_, err = client.ClaimSessionQuiescence(t.Context(), 0)
 				require.ErrorIs(t, err, ErrNotFound)
 				require.NoError(t, client.FinishSessionQuiescence(t.Context(), work, snapshot))
 				dispatchID := uuid.New()
@@ -125,7 +125,7 @@ func TestSessionQuiescenceDelayEligibility(t *testing.T) {
 			t.Run(string(state)+"/"+delay.String(), func(t *testing.T) {
 				client := NewClient(setupTestDB(t))
 				session, task, version := quiescenceBoundaryFixture(t, client, state)
-				_, err := client.ClaimSessionQuiescence(t.Context())
+				_, err := client.ClaimSessionQuiescence(t.Context(), 0)
 				require.ErrorIs(t, err, ErrNotFound, "native cleanup still gates eligibility")
 				before := databaseTime(t, client)
 				require.NoError(t, client.SettleSessionTask(t.Context(), session.Id, string(task.ID), version, delay))
@@ -141,18 +141,18 @@ func TestSessionQuiescenceDelayEligibility(t *testing.T) {
 				require.Equal(t, due, quiescenceDeadline(t, client, version))
 				var work *SessionQuiescence
 				if delay > 0 {
-					_, err := client.ClaimSessionQuiescence(t.Context())
+					_, err := client.ClaimSessionQuiescence(t.Context(), 0)
 					require.ErrorIs(t, err, ErrNotFound)
 					require.Eventually(t, func() bool {
-						work, err = client.ClaimSessionQuiescence(t.Context())
+						work, err = client.ClaimSessionQuiescence(t.Context(), 0)
 						return err == nil
 					}, 5*time.Second, 10*time.Millisecond)
 				} else {
-					work, err = client.ClaimSessionQuiescence(t.Context())
+					work, err = client.ClaimSessionQuiescence(t.Context(), 0)
 					require.NoError(t, err)
 				}
 				require.Equal(t, version, work.Version)
-				_, err = client.ClaimSessionQuiescence(t.Context())
+				_, err = client.ClaimSessionQuiescence(t.Context(), 0)
 				require.ErrorIs(t, err, ErrNotFound, "only one worker can claim")
 				var snapshot *SessionTaskSnapshot
 				if state.Terminal() {
@@ -173,7 +173,7 @@ func TestNewTurnSupersedesDelayedQuiescence(t *testing.T) {
 			due := quiescenceDeadline(t, client, version)
 			dispatchID := uuid.New()
 			require.NoError(t, client.ReserveSessionDispatch(t.Context(), session.Id, dispatchID, "next"))
-			_, err := client.ClaimSessionQuiescence(t.Context())
+			_, err := client.ClaimSessionQuiescence(t.Context(), 0)
 			require.ErrorIs(t, err, ErrNotFound)
 			next := newSessionTask(uuid.NewString(), "next")
 			next.ContextID = session.ContextId
@@ -190,14 +190,14 @@ func TestNewTurnSupersedesDelayedQuiescence(t *testing.T) {
 			require.Eventually(t, func() bool { return databaseTime(t, client).After(due) }, 5*time.Second, 10*time.Millisecond)
 			// An old cleanup retry must not requeue the superseded boundary.
 			require.NoError(t, client.SettleSessionTask(t.Context(), session.Id, string(task.ID), version, 0))
-			_, err = client.ClaimSessionQuiescence(t.Context())
+			_, err = client.ClaimSessionQuiescence(t.Context(), 0)
 			require.ErrorIs(t, err, ErrNotFound, "a running turn cannot be paused")
 			// The next boundary owns its own deadline and can still quiesce.
 			next.Status.State = a2a.TaskStateCompleted
 			nextVersion, err = client.UpdateSessionTask(t.Context(), session.Id, nextVersion, taskMutationHash("next boundary"), next, next, "")
 			require.NoError(t, err)
 			require.NoError(t, client.SettleSessionTask(t.Context(), session.Id, string(next.ID), nextVersion, 0))
-			work, err := client.ClaimSessionQuiescence(t.Context())
+			work, err := client.ClaimSessionQuiescence(t.Context(), 0)
 			require.NoError(t, err)
 			require.Equal(t, nextVersion, work.Version)
 		})
@@ -213,12 +213,12 @@ func TestDelayedQuiescenceRemainsDispatchFenced(t *testing.T) {
 	require.NoError(t, client.ReserveSessionDispatch(t.Context(), session.Id, dispatchID, ""))
 	// The deadline may pass while the new turn is still crossing the network.
 	require.Eventually(t, func() bool { return databaseTime(t, client).After(due) }, 5*time.Second, 10*time.Millisecond)
-	_, err := client.ClaimSessionQuiescence(t.Context())
+	_, err := client.ClaimSessionQuiescence(t.Context(), 0)
 	require.ErrorIs(t, err, ErrNotFound)
 	notAccepted, err := client.RevokeSessionDispatch(t.Context(), session.Id, dispatchID, "next")
 	require.NoError(t, err)
 	require.True(t, notAccepted)
-	work, err := client.ClaimSessionQuiescence(t.Context())
+	work, err := client.ClaimSessionQuiescence(t.Context(), 0)
 	require.NoError(t, err)
 	require.Equal(t, version, work.Version)
 }
@@ -234,22 +234,22 @@ func TestSessionQuiescenceDelaySurvivesRestart(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(pool.Close)
 	restarted := NewClient(pool)
-	_, err = restarted.ClaimSessionQuiescence(t.Context())
+	_, err = restarted.ClaimSessionQuiescence(t.Context(), 0)
 	require.ErrorIs(t, err, ErrNotFound)
 	require.NoError(t, restarted.SettleSessionTask(t.Context(), session.Id, string(task.ID), version, 0))
 	require.Equal(t, due, quiescenceDeadline(t, restarted, version))
 	var work *SessionQuiescence
 	require.Eventually(t, func() bool {
-		work, err = restarted.ClaimSessionQuiescence(t.Context())
+		work, err = restarted.ClaimSessionQuiescence(t.Context(), 0)
 		return err == nil
 	}, 5*time.Second, 10*time.Millisecond)
 	require.Equal(t, version, work.Version)
-	_, err = client.ClaimSessionQuiescence(t.Context())
+	_, err = client.ClaimSessionQuiescence(t.Context(), 0)
 	require.ErrorIs(t, err, ErrNotFound, "restarts must not reissue a claimed boundary")
 	snapshot := &SessionTaskSnapshot{Atespace: "team-a", URI: "snapshot", ContentScope: "DATA"}
 	require.NoError(t, client.FinishSessionQuiescence(t.Context(), work, snapshot))
 	require.NoError(t, restarted.FinishSessionQuiescence(t.Context(), work, snapshot))
-	_, err = restarted.ClaimSessionQuiescence(t.Context())
+	_, err = restarted.ClaimSessionQuiescence(t.Context(), 0)
 	require.ErrorIs(t, err, ErrNotFound)
 }
 

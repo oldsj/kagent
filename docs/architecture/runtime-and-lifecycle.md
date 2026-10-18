@@ -210,18 +210,30 @@ database transaction. Successful snapshot references are retried on database fai
 without repeating the Substrate operation. Checkpoint creation requires the matching
 snapshot and can return FailedPrecondition after task completion while it is pending.
 
-Unclaimed idle work survives API restarts. A claim for possibly issued runtime work
-never expires: losing the worker does not prove that the suspend stopped. Uncertain
-claims still block new work, but completed results remain readable. The recorded
-actor UID is checked before lifecycle calls; a same-name replacement cannot be
-adopted implicitly.
+Unclaimed idle work survives API restarts. A claim is a lease (one runtime attempt
+plus a minute). Losing the worker does not prove that the suspend stopped, so
+uncertain claims block new work until the lease ends. The next worker then takes
+the same boundary under a new executor ID and re-observes the Actor, adopting an
+already suspended result instead of suspending again. The superseded executor can
+no longer record an outcome. Completed results stay readable throughout. The
+recorded actor UID is checked before lifecycle calls; a same-name replacement
+cannot be adopted implicitly.
+
+A runtime that dies after saving a boundary but before native cleanup reports
+leaves the boundary unpublished, which blocks new task writes and lifecycle
+changes. After 10 minutes the control plane settles such boundaries itself with
+no quiesce delay, and the idle worker then handles them like any settled turn.
+A user-requested DeleteSession is the last resort: it discards unsettled work,
+because deletion already closes task admission. Suspend, checkpoint creation and
+idle-timeout deletion stay strict.
 
 ### Recovering a claim held after snapshot scope rejection
 
 An older controller could successfully suspend an Actor with an `onQuiesce: Full`
 policy, then reject its FULL snapshot and leave its task boundary claimed. Merely
-restarting the controller does not release that claim. No claim-expiry migration
-is required for the scope fix, and a timeout does not authorize takeover.
+restarting the controller does not release that claim. Claims now expire on their
+own after the lease described above; this procedure releases one before then,
+and must also clear the lease deadline so the claim is immediately eligible.
 
 For this specific failure, an operator must:
 
@@ -256,7 +268,7 @@ For this specific failure, an operator must:
    `executor_id` as psql variables. Require exactly one returned row:
 
    ```sql
-   UPDATE session_task_event e SET quiescence_executor_id = NULL
+   UPDATE session_task_event e SET quiescence_executor_id = NULL, quiescence_due_at = NULL
    FROM session_record s
    WHERE s.history_id = e.history_id AND s.id = :'session_id'::uuid
      AND s.state = 'RUNTIME_STATE_READY'

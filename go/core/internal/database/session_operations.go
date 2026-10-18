@@ -22,7 +22,11 @@ type SessionOperation struct {
 
 // BeginSessionOperation admits or joins current lifecycle work under the
 // session lock. Creation retries and already-at-target requests return current
-// state. Delete alone may supersede unclaimed work; uncertain work blocks it.
+// state. A user-requested Delete is the last resort and the only operation that
+// may discard unsettled cleanup, quiescence or dispatch work: it closes task
+// admission first, so nothing new starts, and the runtime it destroys cannot
+// finish that work anyway. Other operations, including idle-timeout deletion,
+// stay blocked by uncertain work.
 // Callers authorize access. Deleted sessions return ErrNotFound, except Delete
 // can observe the tombstone for a caller already authorized before deletion.
 func (c *Client) BeginSessionOperation(ctx context.Context, sessionID string, kind apiv1alpha1.RuntimeOperation) (*SessionOperation, error) {
@@ -36,7 +40,7 @@ func (c *Client) BeginSessionOperation(ctx context.Context, sessionID string, ki
 			operation, err = beginSessionDeletion(ctx, tx, row, sessionDeletionUserRequested)
 			return err
 		}
-		operation, err = beginSessionOperation(ctx, tx, row, kind)
+		operation, err = beginSessionOperation(ctx, tx, row, kind, false)
 		return err
 	})
 	if err != nil {
@@ -47,13 +51,13 @@ func (c *Client) BeginSessionOperation(ctx context.Context, sessionID string, ki
 
 // beginSessionOperation admits or joins a lifecycle transition in the caller's
 // transaction. The caller holds the session lock and owns any additional policy.
-func beginSessionOperation(ctx context.Context, tx pgx.Tx, row sessionRow, kind apiv1alpha1.RuntimeOperation) (*SessionOperation, error) {
+func beginSessionOperation(ctx context.Context, tx pgx.Tx, row sessionRow, kind apiv1alpha1.RuntimeOperation, discardUnsettled bool) (*SessionOperation, error) {
 	needed, err := runtimeOperationNeeded(row.runtimeInstanceRow, kind)
 	if err != nil {
 		return nil, err
 	}
 	if needed {
-		if err := admitAgentLifecycle(ctx, tx, row, kind); err != nil {
+		if err := admitAgentLifecycle(ctx, tx, row, kind, discardUnsettled); err != nil {
 			return nil, err
 		}
 		if kind == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_DELETE {
@@ -165,9 +169,13 @@ func (c *Client) BeginSessionActivation(ctx context.Context, sessionID string, g
 
 // admitAgentLifecycle runs under the same row lock as task and checkpoint
 // admission, including the exact assigned native preparation. Common transitions have no knowledge of these agent-only records.
-func admitAgentLifecycle(ctx context.Context, tx pgx.Tx, row sessionRow, kind apiv1alpha1.RuntimeOperation) error {
-	if err := requireSettledRuntime(ctx, tx, row.HistoryID, ""); err != nil {
-		return err
+// discardUnsettled skips the unsettled-runtime check for a deletion that will
+// destroy the runtime holding that work; checkpoint creation still blocks it.
+func admitAgentLifecycle(ctx context.Context, tx pgx.Tx, row sessionRow, kind apiv1alpha1.RuntimeOperation, discardUnsettled bool) error {
+	if !discardUnsettled {
+		if err := requireSettledRuntime(ctx, tx, row.HistoryID, ""); err != nil {
+			return err
+		}
 	}
 	busy, err := queryOne(ctx, tx, `
   SELECT EXISTS (SELECT 1 FROM session_checkpoint WHERE source_session_id = $1 AND state = 'CREATING')

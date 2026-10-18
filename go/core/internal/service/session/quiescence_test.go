@@ -84,7 +84,7 @@ func TestIdleLifecycleDoesNotOwnTaskPublication(t *testing.T) {
 				visible, err = store.GetSettledSessionTask(t.Context(), session.Id, string(task.ID), nil)
 				require.NoError(t, err)
 				require.Equal(t, a2a.TaskStateCompleted, visible.Status.State)
-				_, err = store.ClaimSessionQuiescence(t.Context())
+				_, err = store.ClaimSessionQuiescence(t.Context(), 0)
 				require.ErrorIs(t, err, database.ErrNotFound, "an uncertain suspension cannot be reassigned")
 			} else {
 				require.Eventually(t, func() bool {
@@ -138,7 +138,7 @@ func TestIdleQuiescenceRecoveryAfterScopeRejection(t *testing.T) {
 			version, err := store.CreateRuntimeTask(t.Context(), session.Id, hash[:], task, "")
 			require.NoError(t, err)
 			require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, string(task.ID), version, 0))
-			oldClaim, err := store.ClaimSessionQuiescence(t.Context())
+			oldClaim, err := store.ClaimSessionQuiescence(t.Context(), 0)
 			require.NoError(t, err)
 			// Reproduce the old controller's failure: Suspend succeeded, but its
 			// FULL response was rejected and the original claim was never finished.
@@ -147,7 +147,7 @@ func TestIdleQuiescenceRecoveryAfterScopeRejection(t *testing.T) {
 			require.Equal(t, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, actor.GetStatus().GetExternalSnapshot().GetContentScope())
 			_, err = workflow.Suspend(t.Context(), session)
 			require.ErrorIs(t, err, database.ErrFailedPrecondition)
-			_, err = store.ClaimSessionQuiescence(t.Context())
+			_, err = store.ClaimSessionQuiescence(t.Context(), 0)
 			require.ErrorIs(t, err, database.ErrNotFound, "restarting a worker alone must not steal uncertain work")
 			if mismatch {
 				base.mu.Lock()
@@ -157,13 +157,13 @@ func TestIdleQuiescenceRecoveryAfterScopeRejection(t *testing.T) {
 			// Operator recovery after all old controller workers have stopped.
 			// The exact version/executor predicate cannot release another claim.
 			tag, err := store.pool.Exec(t.Context(), `
-				UPDATE session_task_event SET quiescence_executor_id = NULL
+				UPDATE session_task_event SET quiescence_executor_id = NULL, quiescence_due_at = NULL
 				WHERE sequence = $1 AND quiescence_executor_id = $2
 				  AND published AND quiescence_pending = TRUE
 			`, oldClaim.Version, oldClaim.ExecutorID)
 			require.NoError(t, err)
 			require.EqualValues(t, 1, tag.RowsAffected())
-			newClaim, err := store.ClaimSessionQuiescence(t.Context())
+			newClaim, err := store.ClaimSessionQuiescence(t.Context(), 0)
 			require.NoError(t, err)
 			require.NotEqual(t, oldClaim.ExecutorID, newClaim.ExecutorID)
 			mutations := actors.mutations.Load()

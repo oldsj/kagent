@@ -18,7 +18,7 @@ const (
 // beginSessionDeletion attaches the reason to ordinary lifecycle admission.
 // The caller holds the session lock and has checked any reason-specific policy.
 func beginSessionDeletion(ctx context.Context, tx pgx.Tx, row sessionRow, reason sessionDeletionReason) (*SessionOperation, error) {
-	operation, err := beginSessionOperation(ctx, tx, row, apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_DELETE)
+	operation, err := beginSessionOperation(ctx, tx, row, apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_DELETE, reason == sessionDeletionUserRequested)
 	if err != nil {
 		return nil, err
 	}
