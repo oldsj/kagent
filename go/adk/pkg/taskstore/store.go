@@ -227,9 +227,11 @@ func (s *Store) retry(ctx context.Context, call func(context.Context) error) err
 // save, so a retry can never overwrite a newer state, and the store rejects it
 // as a conflict instead. Conflicts and invalid requests are not retried.
 func (s *Store) retryFailureRecord(ctx context.Context, call func(context.Context) error) error {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.failureRecordWindow)
+	deadline := time.Now().Add(s.failureRecordWindow)
+	ctx, cancel := context.WithDeadline(context.WithoutCancel(ctx), deadline)
 	defer cancel()
 	delay := 100 * time.Millisecond
+	var lastErr error
 	for {
 		rpcCtx, cancelRPC, err := s.callContext(ctx)
 		if err != nil {
@@ -237,6 +239,13 @@ func (s *Store) retryFailureRecord(ctx context.Context, call func(context.Contex
 		}
 		err = call(rpcCtx)
 		cancelRPC()
+		// gRPC can fail an attempt at the deadline before ctx reports it.
+		if err != nil && lastErr != nil && !time.Now().Before(deadline) {
+			// The window closed during this attempt, so its error describes
+			// the window rather than the controller. Report the last answer.
+			return lastErr
+		}
+		lastErr = err
 		switch status.Code(err) {
 		case codes.Unavailable, codes.DeadlineExceeded, codes.PermissionDenied, codes.Unauthenticated:
 		default:
