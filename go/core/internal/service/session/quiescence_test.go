@@ -108,6 +108,28 @@ func (s *quiescenceRetryStore) FinishSessionQuiescence(ctx context.Context, work
 	return s.Client.FinishSessionQuiescence(ctx, work, snapshot)
 }
 
+// crashSettlementStore counts how the worker releases each claim.
+type crashSettlementStore struct {
+	*lifecycleTestStore
+	lost, normal atomic.Int32
+}
+
+func (s *crashSettlementStore) FinishLostSessionQuiescence(ctx context.Context, work *database.SessionQuiescence) error {
+	err := s.lifecycleTestStore.FinishLostSessionQuiescence(ctx, work)
+	if err == nil {
+		s.lost.Add(1)
+	}
+	return err
+}
+
+func (s *crashSettlementStore) FinishSessionQuiescence(ctx context.Context, work *database.SessionQuiescence, snapshot *database.SessionTaskSnapshot) error {
+	err := s.lifecycleTestStore.FinishSessionQuiescence(ctx, work, snapshot)
+	if err == nil {
+		s.normal.Add(1)
+	}
+	return err
+}
+
 // substrateStateActors rejects lifecycle calls from states Substrate refuses,
 // such as the observed MarkSuspending failure on a CRASHED Actor.
 type substrateStateActors struct {
@@ -179,19 +201,26 @@ func TestCrashedRuntimeSettlesIdleBoundaryAndLifecycle(t *testing.T) {
 			}
 
 			actors := &substrateStateActors{lifecycleTestActors: base}
-			workflow := NewActorWorkflow(store, actors)
+			settlements := &crashSettlementStore{lifecycleTestStore: store}
+			workflow := NewActorWorkflow(settlements, actors)
 			ctx, cancel := context.WithCancel(t.Context())
 			done := make(chan error, 1)
 			go func() { done <- workflow.Start(ctx) }()
 			t.Cleanup(func() { cancel(); require.NoError(t, <-done) })
 
-			// Settlement means a new turn is admitted instead of being refused
-			// as "not yet settled", and no checkpoint was recorded or invented.
+			// The worker itself must settle the boundary, as a lost one, before
+			// any explicit lifecycle operation is tried.
 			require.Eventually(t, func() bool {
-				_, err := store.BeginSessionOperation(t.Context(), session.Id, apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_SUSPEND)
-				return err == nil
+				var pending bool
+				err := store.pool.QueryRow(t.Context(), "SELECT quiescence_pending FROM session_task_event WHERE sequence = $1", version).Scan(&pending)
+				return err == nil && !pending
 			}, 10*time.Second, 20*time.Millisecond)
+			require.Equal(t, int32(1), settlements.lost.Load())
+			require.Zero(t, settlements.normal.Load(), "a crash must not be recorded as a snapshotted boundary")
 			require.Zero(t, actors.mutations.Load(), "a crashed Actor must not be sent suspend or pause")
+			// Lifecycle operations are admitted instead of refused as "not yet settled".
+			_, err = store.BeginSessionOperation(t.Context(), session.Id, apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_SUSPEND)
+			require.NoError(t, err)
 			require.Equal(t, ateapipb.ActorState_ACTOR_STATE_CRASHED, actor.Status.State)
 			checkpoint := &apiv1alpha1.Checkpoint{Id: uuid.NewString(), SessionId: session.Id, HeadTaskId: string(task.ID)}
 			_, _, err = store.ReserveSessionCheckpoint(t.Context(), checkpoint, "alice", "checkpoint")

@@ -161,11 +161,21 @@ database transaction. Successful snapshot references are retried on database fai
 without repeating the Substrate operation. Checkpoint creation requires the matching
 snapshot and can return FailedPrecondition after task completion while it is pending.
 
-Unclaimed idle work survives API restarts. A claim for possibly issued runtime work
-never expires: losing the worker does not prove that the suspend stopped. Uncertain
-claims still block new work, but completed results remain readable. The recorded
+Unclaimed idle work survives API restarts. A claim for idle runtime work lasts one
+bounded runtime attempt plus one minute. A live claim is never taken over, because
+the Substrate request may still complete; it blocks new work, but completed results
+remain readable. Once the lease ends, any worker may claim the work again, and a
+claim recorded before leases existed counts as ended. A retry reads the Actor's
+current state before acting. Substrate Suspend and Pause are re-entrant and
+serialized per Actor, so a retry after a lost response is safe, and a late finish
+from the earlier attempt is fenced out by the claim's executor ID. The recorded
 actor UID is checked before lifecycle calls; a same-name replacement cannot be
 adopted implicitly.
+
+A crashed Actor is already stopped and left no checkpoint. Suspending it, by the
+idle worker or an explicit request, settles without a Substrate call and without a
+snapshot reference, so the task cannot be checkpointed or forked. Resume of a
+crashed session is refused; delete still works.
 
 ```mermaid
 sequenceDiagram
