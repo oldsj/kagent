@@ -349,6 +349,35 @@ sequenceDiagram
     Worker->>DB: record snapshot and finish idle claim
 ```
 
+## Cancellation and failed saves
+
+A task that stays `WORKING` blocks explicit suspend, so every runtime path ends
+with the task in a terminal state or with an Actor that a later cancel can settle.
+
+- **Bounded native stop.** Canceling an active task cancels the native turn and
+  waits for its runner to return. Native runners must return within a bounded
+  time after cancellation. The Claude driver closes its ends of stdin and stdout
+  first, so a descendant that keeps them open cannot hold the parser. It then
+  interrupts and kills the native tree, including detached descendants, through
+  the pidfd cleanup described under [runtime boundaries](#runtime-boundaries).
+  `WaitDelay` bounds a descendant that holds stderr, and the leader wait is
+  bounded after the kill. A cleanup that cannot confirm the leader exited returns
+  an error and keeps the ownership slot, so no second native tree starts beside
+  it. When Claude exits successfully while a descendant still holds stderr, the
+  turn keeps its result, and cleanup reaps that descendant. The Codex driver uses
+  the same `WaitDelay` bound.
+- **Failed saves.** When a TaskStore write fails, the runtime persists nothing more
+  from that execution except the SDK's `FAILED` record, and the SDK stops the
+  native turn. A restarting controller can refuse calls (`PermissionDenied`,
+  `Unauthenticated`) or drop them for longer than an ordinary retry. For that
+  reason the failure record is retried with backoff for up to 30 seconds, even
+  after the execution context ends. It carries the version of the last committed
+  save, so a retry cannot overwrite newer state: the store rejects it as a
+  conflict. Once the record commits, the runtime settles the task normally.
+- **Canceling an orphaned task.** If the failure record also fails, the task stays
+  `WORKING` and nothing in the Actor runs for it. A2A `CancelTask` then settles it
+  as `CANCELED` immediately, and the Session can be suspended without deleting it.
+
 ## Runtime boundaries
 
 - Port `8083` serves native gRPC, gRPC-Web, A2A, authenticated MCP, and health.
