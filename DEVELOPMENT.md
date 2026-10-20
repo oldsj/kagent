@@ -79,13 +79,27 @@ with tags `0.0.0-<7-character-source-SHA>`. It does not run on pull requests.
 OCI labels record the source repository and full commit SHA; each job summary
 records its platform, tag, and immutable `name@digest` for deployment pins.
 Update pins through a separately reviewed infrastructure PR. This workflow
-builds neither Helm charts nor the infrastructure-owned workspace harness.
+does not build the infrastructure-owned workspace harness.
 
 The package owner must grant `oldsj/kagent` **write** access under **Manage
 Actions access** in each existing GHCR package's settings:
 `kagent-controller`, `kagent-claude-harness`, and `kagent-codex-harness`.
 Publication uses the job's `GITHUB_TOKEN` with `packages: write` and
 `contents: read`; no separate registry secret is needed.
+
+Once every image in the matrix has published, the workflow's `publish-charts`
+job packages `helm/kagent-crds` and `helm/kagent` with `version` and
+`appVersion` set to the same `0.0.0-<7-character-source-SHA>` tag and pushes
+both to `oci://ghcr.io/oldsj/charts`, reusing the `make helm-version` target
+that nightly and tagged releases already use. Before packaging, it points the
+`kagent` chart's default `controller.image` at the `kagent-controller` image
+this same run just published, so a plain `helm install` of the chart with no
+overrides deploys this fork's build. The job fails rather than overwriting a
+tag if a chart with that version already exists in the registry with
+different content (for example if a floating subchart dependency, like
+`oauth2-proxy`, resolved differently between two runs of the same commit).
+The package owner must also grant `oldsj/kagent` **write** access to the
+`charts%2Fkagent` and `charts%2Fkagent-crds` GHCR packages.
 
 ## Nightly releases
 
