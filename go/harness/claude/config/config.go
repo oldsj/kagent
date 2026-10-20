@@ -19,6 +19,10 @@ import (
 
 var agentNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
+// EffortLevels are the reasoning-effort values the pinned Claude Code CLI's
+// --effort flag accepts.
+var EffortLevels = []string{"low", "medium", "high", "xhigh", "max"}
+
 const (
 	Version                             = 5
 	ClaudeConfigDirEnvName              = "CLAUDE_CONFIG_DIR"

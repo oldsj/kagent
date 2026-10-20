@@ -167,8 +167,15 @@ func (d *ProcessDriver) Args(turn runtime.Turn) []string {
 	if d.config.ApprovalBroker != nil {
 		args = append(args, "--permission-prompt-tool", d.config.PermissionPromptTool)
 	}
-	if d.config.Model != "" {
-		args = append(args, "--model", d.config.Model)
+	model := turn.Model
+	if model == "" {
+		model = d.config.Model
+	}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	if turn.Effort != "" {
+		args = append(args, "--effort", turn.Effort)
 	}
 	if len(d.config.DisallowedTools) != 0 {
 		args = append(args, "--disallowedTools", strings.Join(d.config.DisallowedTools, ","))

@@ -167,9 +167,16 @@ func (d *ProcessDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime
 	if err := sink.SessionStarted(runtime.SessionStarted{ContinuationID: threadID}); err != nil {
 		return runtime.Outcome{}, err
 	}
-	result, err := client.call(ctx, 3, "turn/start", map[string]any{
+	turnParams := map[string]any{
 		"threadId": threadID, "input": []map[string]any{{"type": "text", "text": turn.Prompt}},
-	})
+	}
+	if turn.Model != "" {
+		turnParams["model"] = turn.Model
+	}
+	if turn.Effort != "" {
+		turnParams["effort"] = turn.Effort
+	}
+	result, err := client.call(ctx, 3, "turn/start", turnParams)
 	if err != nil {
 		return runtime.Outcome{}, d.protocolError(err, stderr)
 	}
