@@ -182,6 +182,27 @@ func TestDeleteActorTemplateRetriesNotFound(t *testing.T) {
 	require.Nil(t, fake.actor, "Substrate owns golden Actor cleanup")
 }
 
+// deleteTagFake records the last DeleteTag request so a test can check that a
+// caller-supplied UID reaches Substrate as a delete guard.
+type deleteTagFake struct {
+	ateapipb.ControlClient
+	request *ateapipb.DeleteTagRequest
+}
+
+func (f *deleteTagFake) DeleteTag(_ context.Context, in *ateapipb.DeleteTagRequest, _ ...grpc.CallOption) (*ateapipb.Tag, error) {
+	f.request = in
+	return &ateapipb.Tag{}, nil
+}
+
+func TestDeleteTagPassesUIDAsDeleteGuard(t *testing.T) {
+	fake := &deleteTagFake{}
+	client := &Client{ControlClient: fake, cfg: Config{CallTimeout: time.Second}}
+
+	require.NoError(t, client.DeleteTag(t.Context(), "team-a", "checkpoint-tag", "tag-uid"))
+	require.Equal(t, &ateapipb.ObjectRef{Atespace: "team-a", Name: "checkpoint-tag"}, fake.request.GetTag())
+	require.Equal(t, "tag-uid", fake.request.GetOptions().GetUid())
+}
+
 func (f *createAtespaceFake) CreateAtespace(_ context.Context, in *ateapipb.CreateAtespaceRequest, _ ...grpc.CallOption) (*ateapipb.Atespace, error) {
 	f.lastName = in.GetAtespace().GetMetadata().GetName()
 	if f.err != nil {
