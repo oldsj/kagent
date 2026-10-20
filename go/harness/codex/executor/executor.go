@@ -67,7 +67,7 @@ func New(ctx context.Context, cfg Config) (a2asrv.AgentExecutor, error) {
 			return nil, err
 		}
 	}
-	executor, err := runtimea2a.New(turns, store, parsed.RuntimeTelemetry)
+	executor, err := runtimea2a.New(turns, store, parsed.RuntimeTelemetry, config.EffortLevels...)
 	if err != nil {
 		return nil, err
 	}

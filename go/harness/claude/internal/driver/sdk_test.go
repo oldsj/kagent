@@ -78,6 +78,46 @@ func TestSDKDriverTranslatesItsTurnAndSkipsOtherResults(t *testing.T) {
 	}
 }
 
+func TestSDKDriverAppliesTurnModelAndEffortBeforeThePrompt(t *testing.T) {
+	driver, launcher, _ := newSDKFixture(t, func(b *sdkrunnertest.Bridge, op sdkrunnertest.Op) {
+		if op.Op == "user" {
+			b.SDK(sdkLine(t, `{"type":"result","subtype":"success","result":"ok","user_message_uuids":["`+op.UUID+`"]}`))
+		}
+	})
+	turn := runtime.Turn{Prompt: "x", Model: "claude-opus-5-5", Effort: "high"}
+	if outcome, err := driver.Run(context.Background(), turn, &recordingSink{}); err != nil || outcome.Failure != nil {
+		t.Fatalf("outcome = %+v err = %v", outcome, err)
+	}
+	var sequence []string
+	for _, op := range launcher.Ops() {
+		switch op.Op {
+		case "model":
+			sequence = append(sequence, "model="+op.Model)
+		case "effort":
+			sequence = append(sequence, "effort="+op.Effort)
+		case "user":
+			sequence = append(sequence, "user")
+		}
+	}
+	if got := strings.Join(sequence, ","); got != "model=claude-opus-5-5,effort=high,user" {
+		t.Fatalf("bridge ops = %s", got)
+	}
+
+	// A turn without overrides sends no control and keeps the session's setting.
+	if outcome, err := driver.Run(context.Background(), runtime.Turn{Prompt: "y"}, &recordingSink{}); err != nil || outcome.Failure != nil {
+		t.Fatalf("outcome = %+v err = %v", outcome, err)
+	}
+	var controls int
+	for _, op := range launcher.Ops() {
+		if op.Op == "model" || op.Op == "effort" {
+			controls++
+		}
+	}
+	if controls != 2 {
+		t.Fatalf("controls = %d, want only the first turn's two", controls)
+	}
+}
+
 func TestSDKDriverFailureResult(t *testing.T) {
 	driver, _, _ := newSDKFixture(t, func(b *sdkrunnertest.Bridge, op sdkrunnertest.Op) {
 		if op.Op == "user" {

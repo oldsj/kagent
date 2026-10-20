@@ -161,6 +161,16 @@ func (d *SDKDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime.Eve
 	if err := d.session.Start(ctx); err != nil {
 		return runtime.Outcome{}, fmt.Errorf("start Claude SDK runner: %w", err)
 	}
+	// The live conversation is shared with runner-port clients, so an override
+	// persists for later turns, as the model picker does; an omitted one keeps
+	// the conversation's current setting.
+	for _, control := range []struct{ what, value string }{{"model", turn.Model}, {"effort", turn.Effort}} {
+		if control.value != "" {
+			if err := d.session.Control(ctx, control.what, control.value, ""); err != nil {
+				return runtime.Outcome{}, fmt.Errorf("set Claude SDK runner %s: %w", control.what, err)
+			}
+		}
+	}
 	if err := d.session.Submit(ctx, turn.Prompt, t.uuid, sdkrunner.OriginA2A); err != nil {
 		return runtime.Outcome{}, fmt.Errorf("send prompt to Claude SDK runner: %w", err)
 	}

@@ -194,7 +194,9 @@ func (d *ProcessDriver) run(ctx context.Context, turn runtime.Turn, tool *toolCo
 		ThreadID   string          `json:"threadId"`
 		Input      []textInput     `json:"input"`
 		ToolOutput *turnToolOutput `json:"toolOutput,omitempty"`
-	}{ThreadID: threadID, Input: []textInput{}}
+		Model      string          `json:"model,omitempty"`
+		Effort     string          `json:"effort,omitempty"`
+	}{ThreadID: threadID, Input: []textInput{}, Model: turn.Model, Effort: turn.Effort}
 	if tool == nil {
 		params.Input = append(params.Input, textInput{Type: "text", Text: turn.Prompt})
 	} else {
