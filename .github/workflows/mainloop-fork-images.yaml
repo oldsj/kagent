@@ -118,7 +118,7 @@ jobs:
         run: echo "version=0.0.0-${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Helm
-        uses: azure/setup-helm@v5.0.1
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v3.18.0
 
@@ -163,27 +163,46 @@ jobs:
           CHART_REPO: oci://ghcr.io/oldsj/charts
         run: |
           set -euo pipefail
+
+          # helm package output is not byte-reproducible (file mtimes from the
+          # checkout get baked into the tarball), so compare extracted file
+          # contents rather than the archive's own sha256.
+          chart_contents_digest() {
+            local archive="$1" extract_dir
+            extract_dir="$(mktemp -d)"
+            tar -xzf "$archive" -C "$extract_dir"
+            find "$extract_dir" -type f -exec sha256sum {} + \
+              | sed "s#${extract_dir}/##" \
+              | sort -k2 \
+              | sha256sum | cut -d' ' -f1
+          }
+
           for chart in kagent-crds kagent; do
             tgz="dist/${chart}-${VERSION}.tgz"
             test -s "$tgz"
-            local_digest="$(sha256sum "$tgz" | cut -d' ' -f1)"
+            local_digest="$(chart_contents_digest "$tgz")"
 
             pull_dir="$(mktemp -d)"
             if pull_output="$(helm pull "${CHART_REPO}/${chart}" --version "$VERSION" -d "$pull_dir" 2>&1)"; then
               existing_tgz="${pull_dir}/${chart}-${VERSION}.tgz"
-              existing_digest="$(sha256sum "$existing_tgz" | cut -d' ' -f1)"
+              existing_digest="$(chart_contents_digest "$existing_tgz")"
               if [ "$existing_digest" = "$local_digest" ]; then
                 printf '### %s:%s (unchanged)\n\nAlready published with matching content: `sha256:%s`\n\n' "$chart" "$VERSION" "$local_digest" >> "$GITHUB_STEP_SUMMARY"
                 continue
               fi
-              printf '::error::%s/%s:%s already exists with different content (published sha256:%s, this build sha256:%s); refusing to overwrite\n' "$CHART_REPO" "$chart" "$VERSION" "$existing_digest" "$local_digest"
+              printf '::error::%s/%s:%s already exists with different content (published content sha256:%s, this build content sha256:%s); refusing to overwrite\n' "$CHART_REPO" "$chart" "$VERSION" "$existing_digest" "$local_digest"
               exit 1
             elif ! printf '%s' "$pull_output" | grep -qi 'not found'; then
-              printf '::error::could not check for an existing %s:%s chart: %s\n' "$chart" "$VERSION" "$pull_output"
+              printf '%s\n' "$pull_output"
+              printf '::error::could not check for an existing %s:%s chart (helm pull failed); a 403/denied error usually means the ghcr.io package charts/%s needs Actions write access granted for oldsj/kagent\n' "$chart" "$VERSION" "$chart"
               exit 1
             fi
 
-            push_output="$(helm push "$tgz" "$CHART_REPO" 2>&1)"
+            if ! push_output="$(helm push "$tgz" "$CHART_REPO" 2>&1)"; then
+              printf '%s\n' "$push_output"
+              printf '::error::helm push failed for %s:%s; a 403/denied error usually means the ghcr.io package charts/%s needs Actions write access granted for oldsj/kagent\n' "$chart" "$VERSION" "$chart"
+              exit 1
+            fi
             printf '%s\n' "$push_output"
             digest="$(printf '%s' "$push_output" | sed -n 's/^Digest: *//p')"
             test -n "$digest"
