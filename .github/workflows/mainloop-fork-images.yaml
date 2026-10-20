@@ -166,11 +166,20 @@ jobs:
 
           # helm package output is not byte-reproducible (file mtimes from the
           # checkout get baked into the tarball), so compare extracted file
-          # contents rather than the archive's own sha256.
+          # contents rather than the archive's own sha256. Subchart archives get
+          # the same treatment, and Chart.lock's generated: timestamp (when
+          # `helm dependency build` ran) is dropped, since both change on every
+          # rebuild of the same commit.
           chart_contents_digest() {
-            local archive="$1" extract_dir
+            local archive="$1" extract_dir nested
             extract_dir="$(mktemp -d)"
             tar -xzf "$archive" -C "$extract_dir"
+            while IFS= read -r -d '' nested; do
+              mkdir -p "${nested}.d"
+              tar -xzf "$nested" -C "${nested}.d"
+              rm "$nested"
+            done < <(find "$extract_dir" -name '*.tgz' -print0)
+            find "$extract_dir" -name Chart.lock -exec sed -i '/^generated:/d' {} +
             find "$extract_dir" -type f -exec sha256sum {} + \
               | sed "s#${extract_dir}/##" \
               | sort -k2 \
