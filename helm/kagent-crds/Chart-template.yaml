@@ -3,6 +3,7 @@ name: kagent-crds
 description: CRDs for kagent
 type: application
 version: ${VERSION}
+appVersion: ${VERSION}
 annotations:
   "org.opencontainers.image.source": "https://github.com/kagent-dev/kagent"
 dependencies:
