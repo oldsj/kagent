@@ -84,6 +84,98 @@ sleep 5
 	}
 }
 
+func TestProcessDriverSendsTurnModelAndEffortOverride(t *testing.T) {
+	directory := t.TempDir()
+	executable := filepath.Join(directory, "codex")
+	capture := filepath.Join(directory, "requests.jsonl")
+	script := `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "codex-cli 0.148.0"
+  exit 0
+fi
+read initialize
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"codex-app-server","version":"0.148.0"}}}'
+read initialized
+read thread
+printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"01900000-0000-7000-8000-000000000003"}}}'
+read turn
+printf '%s\n' "$turn" >> "$CAPTURE"
+printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"turn":{"id":"01900000-0000-7000-8000-000000000004","status":"inProgress"}}}'
+printf '%s\n' '{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"01900000-0000-7000-8000-000000000003","turn":{"id":"01900000-0000-7000-8000-000000000004","status":"completed"}}}'
+sleep 5
+`
+	if err := os.WriteFile(executable, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(directory, "workspace")
+	if err := os.Mkdir(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	driver := NewProcessDriver(ProcessConfig{
+		Executable: executable, ExpectedVersion: "0.148.0", StrictVersion: true, Workspace: workspace,
+		Model: "gpt-5.2-codex", Provider: "kagent-openai", DeveloperInstruction: "help",
+		Environment: append(os.Environ(), "CAPTURE="+capture), MaxFrameBytes: 4096, MaxStderrBytes: 1024, InterruptGrace: 100 * time.Millisecond,
+	})
+	if _, err := driver.Run(context.Background(), runtime.Turn{Prompt: "say hello", Model: "gpt-5.3-codex", Effort: "high"}, &recordingSink{}); err != nil {
+		t.Fatal(err)
+	}
+	requests, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{`"model":"gpt-5.3-codex"`, `"effort":"high"`} {
+		if !bytes.Contains(requests, []byte(fragment)) {
+			t.Errorf("turn/start omits %s:\n%s", fragment, requests)
+		}
+	}
+}
+
+func TestProcessDriverOmitsTurnModelAndEffortWhenUnset(t *testing.T) {
+	directory := t.TempDir()
+	executable := filepath.Join(directory, "codex")
+	capture := filepath.Join(directory, "requests.jsonl")
+	script := `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "codex-cli 0.148.0"
+  exit 0
+fi
+read initialize
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"codex-app-server","version":"0.148.0"}}}'
+read initialized
+read thread
+printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"01900000-0000-7000-8000-000000000005"}}}'
+read turn
+printf '%s\n' "$turn" >> "$CAPTURE"
+printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"turn":{"id":"01900000-0000-7000-8000-000000000006","status":"inProgress"}}}'
+printf '%s\n' '{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"01900000-0000-7000-8000-000000000005","turn":{"id":"01900000-0000-7000-8000-000000000006","status":"completed"}}}'
+sleep 5
+`
+	if err := os.WriteFile(executable, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(directory, "workspace")
+	if err := os.Mkdir(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	driver := NewProcessDriver(ProcessConfig{
+		Executable: executable, ExpectedVersion: "0.148.0", StrictVersion: true, Workspace: workspace,
+		Model: "gpt-5.2-codex", Provider: "kagent-openai", DeveloperInstruction: "help",
+		Environment: append(os.Environ(), "CAPTURE="+capture), MaxFrameBytes: 4096, MaxStderrBytes: 1024, InterruptGrace: 100 * time.Millisecond,
+	})
+	if _, err := driver.Run(context.Background(), runtime.Turn{Prompt: "say hello"}, &recordingSink{}); err != nil {
+		t.Fatal(err)
+	}
+	requests, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{`"model":`, `"effort":`} {
+		if bytes.Contains(requests, []byte(fragment)) {
+			t.Errorf("turn/start sends %s with no override:\n%s", fragment, requests)
+		}
+	}
+}
+
 func TestProcessDriverLetsAppServerExitAfterStdinEOF(t *testing.T) {
 	directory := t.TempDir()
 	executable := filepath.Join(directory, "codex")

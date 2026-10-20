@@ -44,6 +44,38 @@ Timeline positions are written at the boundary producing an item: the gateway
 for inbound messages and runtime adapters for outbound messages and artifacts.
 The gateway remains responsible for applying the resulting durable order.
 
+## Per-turn model and effort override
+
+| Key                      | Carrier | Meaning                                                      |
+| ------------------------ | ------- | ------------------------------------------------------------ |
+| `kagent.dev/model`       | message | Optional per-turn override of the harness's configured model |
+| `kagent.dev/effort`      | message | Optional per-turn override of the harness's reasoning effort |
+
+Unlike the gateway-owned keys above, these two are caller-supplied input, not
+state the gateway derives, so they live outside the `kagent.dev/a2a/`
+namespace and `SanitizeCallerRequest` never strips them. A caller (Mainloop's
+sticky `/model` and `/effort` session settings) sets them on the message that
+starts a turn; a change applies from that turn onward and never interrupts a
+turn already running.
+
+The shared A2A executor (`go/harness/runtime/a2a`) reads both keys while
+building a `runtime.Turn`, validates them, and rejects an invalid value with
+`ErrInvalidRequest` before the turn starts — never by failing a task already
+`WORKING`. `Model` must match `[A-Za-z0-9._:/-]` within a bounded length;
+`Effort` must be one of the harness's configured levels (passed to
+`runtimea2a.New`; Claude accepts `low`, `medium`, `high`, `xhigh`, `max`,
+Codex accepts `minimal`, `low`, `medium`, `high`). An absent or empty value
+means the harness's configured default applies. Both fields are optional and
+additive: a turn that omits them, and every existing caller, is unaffected.
+
+The Claude driver passes a non-empty override as `--model`/`--effort` on the
+per-turn `claude -p --resume` invocation. The Codex driver passes a non-empty
+override as the `model`/`effort` fields on the App Server's `turn/start` call.
+Neither driver's override selects or starts a new native session: Claude
+always resumes the Actor's one native conversation through `--resume`, and
+Codex always resumes or continues the one native thread through
+`thread/resume`/the existing process; only the turn's own request changes.
+
 ## Other metadata
 
 Versioned A2A extensions, such as the human-in-the-loop extension, keep their

@@ -9,6 +9,11 @@ type Turn struct {
 	Prompt         string
 	ContinuationID string
 	InputResponse  InputResponse
+	// Model and Effort are optional per-turn overrides of the harness's
+	// configured defaults. Empty means use the configured default. Both are
+	// validated before a turn starts; they never start a new native session.
+	Model  string
+	Effort string
 }
 
 // InputResponse is one structured response to a parked native turn.

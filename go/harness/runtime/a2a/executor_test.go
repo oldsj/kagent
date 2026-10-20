@@ -131,6 +131,98 @@ func TestExecuteStreamsCompletesAndPersistsSession(t *testing.T) {
 	}
 }
 
+func TestExecuteMapsTurnModelAndEffortOverride(t *testing.T) {
+	var turn runtime.Turn
+	executor, err := New(fakeRunner{run: func(_ context.Context, got runtime.Turn, _ runtime.EventSink) (runtime.Outcome, error) {
+		turn = got
+		return runtime.Outcome{}, nil
+	}}, &fakeContinuation{}, tracing.RuntimeTelemetry{}, "low", "high")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reqCtx := requestContext("task-override", "hello")
+	reqCtx.Message.Metadata = map[string]any{
+		apia2a.ModelMetadataKey:  "claude-opus-5",
+		apia2a.EffortMetadataKey: "high",
+	}
+	_, errs := collect(executor.Execute(t.Context(), reqCtx))
+	if len(errs) != 0 {
+		t.Fatalf("Execute() errors = %v", errs)
+	}
+	if turn.Model != "claude-opus-5" || turn.Effort != "high" {
+		t.Fatalf("turn = %#v", turn)
+	}
+}
+
+func TestExecuteTreatsEmptyTurnOverrideAsDefault(t *testing.T) {
+	var turn runtime.Turn
+	executor, err := New(fakeRunner{run: func(_ context.Context, got runtime.Turn, _ runtime.EventSink) (runtime.Outcome, error) {
+		turn = got
+		return runtime.Outcome{}, nil
+	}}, &fakeContinuation{}, tracing.RuntimeTelemetry{}, "high")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reqCtx := requestContext("task-empty-override", "hello")
+	reqCtx.Message.Metadata = map[string]any{
+		apia2a.ModelMetadataKey:  "",
+		apia2a.EffortMetadataKey: "",
+	}
+	_, errs := collect(executor.Execute(t.Context(), reqCtx))
+	if len(errs) != 0 {
+		t.Fatalf("Execute() errors = %v", errs)
+	}
+	if turn.Model != "" || turn.Effort != "" {
+		t.Fatalf("turn = %#v", turn)
+	}
+}
+
+func TestExecuteRejectsInvalidTurnModelOverrideBeforeStarting(t *testing.T) {
+	started := false
+	executor, err := New(fakeRunner{run: func(context.Context, runtime.Turn, runtime.EventSink) (runtime.Outcome, error) {
+		started = true
+		return runtime.Outcome{}, nil
+	}}, &fakeContinuation{}, tracing.RuntimeTelemetry{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reqCtx := requestContext("task-bad-model", "hello")
+	reqCtx.Message.Metadata = map[string]any{apia2a.ModelMetadataKey: "not a valid model!"}
+	events, errs := collect(executor.Execute(t.Context(), reqCtx))
+	if len(errs) != 1 || a2atype.ErrorReason(errs[0]) != a2atype.ErrorReason(a2atype.ErrInvalidRequest) {
+		t.Fatalf("Execute() errors = %v", errs)
+	}
+	if len(events) != 0 {
+		t.Fatalf("expected no events before an invalid turn starts, got %#v", events)
+	}
+	if started {
+		t.Fatal("runner started despite an invalid model override")
+	}
+}
+
+func TestExecuteRejectsUnsupportedTurnEffortOverrideBeforeStarting(t *testing.T) {
+	started := false
+	executor, err := New(fakeRunner{run: func(context.Context, runtime.Turn, runtime.EventSink) (runtime.Outcome, error) {
+		started = true
+		return runtime.Outcome{}, nil
+	}}, &fakeContinuation{}, tracing.RuntimeTelemetry{}, "low", "high")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reqCtx := requestContext("task-bad-effort", "hello")
+	reqCtx.Message.Metadata = map[string]any{apia2a.EffortMetadataKey: "ultra"}
+	events, errs := collect(executor.Execute(t.Context(), reqCtx))
+	if len(errs) != 1 || a2atype.ErrorReason(errs[0]) != a2atype.ErrorReason(a2atype.ErrInvalidRequest) {
+		t.Fatalf("Execute() errors = %v", errs)
+	}
+	if len(events) != 0 {
+		t.Fatalf("expected no events before an invalid turn starts, got %#v", events)
+	}
+	if started {
+		t.Fatal("runner started despite an unsupported effort override")
+	}
+}
+
 func TestExecutePreservesTextAndToolOrder(t *testing.T) {
 	executor, err := New(fakeRunner{run: func(_ context.Context, _ runtime.Turn, sink runtime.EventSink) (runtime.Outcome, error) {
 		steps := []func() error{

@@ -22,6 +22,10 @@ const Version = 4
 
 var nativeNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
+// EffortLevels are the reasoning-effort values the pinned Codex App Server's
+// turn/start effort field accepts.
+var EffortLevels = []string{"minimal", "low", "medium", "high"}
+
 // Config is compiler-owned input to the native adapter. Real model credentials
 // stay at the egress gateway; the Actor receives only placeholders.
 type Config struct {

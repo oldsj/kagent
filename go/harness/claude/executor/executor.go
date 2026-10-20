@@ -102,7 +102,7 @@ func New(ctx context.Context, cfg Config) (a2asrv.AgentExecutor, io.Closer, erro
 		closer = installer
 		turns = bootstrap
 	}
-	executor, err := runtimea2a.New(turns, store, parsed.RuntimeTelemetry)
+	executor, err := runtimea2a.New(turns, store, parsed.RuntimeTelemetry, config.EffortLevels...)
 	if err != nil {
 		_ = closer.Close()
 		return nil, nil, err

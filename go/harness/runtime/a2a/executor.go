@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"regexp"
 	"sync"
 	"time"
 
@@ -51,6 +52,10 @@ type Executor struct {
 	runner       Runner
 	continuation ContinuationStore
 	telemetry    tracing.RuntimeTelemetry
+	// effortLevels is the harness's valid reasoning-effort values for a
+	// per-turn override. An override outside this set is rejected before the
+	// turn starts.
+	effortLevels map[string]struct{}
 
 	mu sync.Mutex
 	// state serializes access to the Actor's one native conversation. It also
@@ -128,15 +133,21 @@ var (
 
 // New constructs the shared executor used by native Harness implementations.
 // The telemetry contract supplies the content-capture policy this executor
-// enforces; its zero value leaves capture disabled.
-func New(runner Runner, continuation ContinuationStore, telemetry tracing.RuntimeTelemetry) (*Executor, error) {
+// enforces; its zero value leaves capture disabled. effortLevels lists the
+// harness's valid reasoning-effort values for a per-turn override; a harness
+// that omits it rejects every non-empty effort override.
+func New(runner Runner, continuation ContinuationStore, telemetry tracing.RuntimeTelemetry, effortLevels ...string) (*Executor, error) {
 	if runner == nil || continuation == nil {
 		return nil, fmt.Errorf("runner and continuation store are required")
 	}
 	if err := telemetry.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid runtime telemetry: %w", err)
 	}
-	return &Executor{runner: runner, continuation: continuation, telemetry: telemetry}, nil
+	levels := make(map[string]struct{}, len(effortLevels))
+	for _, level := range effortLevels {
+		levels[level] = struct{}{}
+	}
+	return &Executor{runner: runner, continuation: continuation, telemetry: telemetry, effortLevels: levels}, nil
 }
 
 // Execute validates and serializes one A2A request onto the native Runner.
@@ -189,7 +200,7 @@ func (e *Executor) Execute(ctx context.Context, reqCtx *a2asrv.ExecutorContext) 
 			invocation.SetAttributes(tracing.RequestIdentity(reqCtx.ContextID, string(reqCtx.TaskID), resuming)...)
 		}
 
-		turn, err := validateRequest(reqCtx)
+		turn, err := e.validateRequest(reqCtx)
 		if err != nil {
 			fail("invalid_request", err)
 			return
@@ -789,7 +800,7 @@ func (e *Executor) deactivate(task *activeTask) bool {
 	return task.cancelRequested
 }
 
-func validateRequest(reqCtx *a2asrv.ExecutorContext) (runtime.Turn, error) {
+func (e *Executor) validateRequest(reqCtx *a2asrv.ExecutorContext) (runtime.Turn, error) {
 	if reqCtx == nil || reqCtx.Message == nil {
 		return runtime.Turn{}, fmt.Errorf("A2A request message is required")
 	}
@@ -798,6 +809,10 @@ func validateRequest(reqCtx *a2asrv.ExecutorContext) (runtime.Turn, error) {
 	}
 	if reqCtx.Message.Role != a2atype.MessageRoleUser {
 		return runtime.Turn{}, fmt.Errorf("harness runtime accepts only user messages")
+	}
+	model, effort, err := e.turnOptions(reqCtx.Message)
+	if err != nil {
+		return runtime.Turn{}, err
 	}
 	if reqCtx.StoredTask != nil && requiresInput(reqCtx.StoredTask.Status.State) {
 		approvalRequest, err := apia2a.ParseToolApprovalRequest(reqCtx.StoredTask.Status.Message)
@@ -815,7 +830,7 @@ func validateRequest(reqCtx *a2asrv.ExecutorContext) (runtime.Turn, error) {
 			decision := response.Approvals[0]
 			return runtime.Turn{InputResponse: &runtime.ApprovalDecision{
 				ID: decision.ID, Approved: decision.Approved, RejectionReason: decision.RejectionReason,
-			}}, nil
+			}, Model: model, Effort: effort}, nil
 		}
 		askRequest, err := apia2a.ParseAskUserRequest(reqCtx.StoredTask.Status.Message)
 		if err != nil {
@@ -835,7 +850,7 @@ func validateRequest(reqCtx *a2asrv.ExecutorContext) (runtime.Turn, error) {
 		for index, answer := range response.Answers {
 			answers[index] = append([]string(nil), answer.Answer...)
 		}
-		return runtime.Turn{InputResponse: &runtime.AskUserResponse{ID: response.ID, Answers: answers}}, nil
+		return runtime.Turn{InputResponse: &runtime.AskUserResponse{ID: response.ID, Answers: answers}, Model: model, Effort: effort}, nil
 	}
 	if len(reqCtx.Message.Parts) != 1 || reqCtx.Message.Parts[0] == nil {
 		return runtime.Turn{}, fmt.Errorf("harness runtime accepts exactly one user text part")
@@ -844,7 +859,34 @@ func validateRequest(reqCtx *a2asrv.ExecutorContext) (runtime.Turn, error) {
 	if text == "" {
 		return runtime.Turn{}, fmt.Errorf("harness runtime accepts a non-empty text part")
 	}
-	return runtime.Turn{Prompt: text}, nil
+	return runtime.Turn{Prompt: text, Model: model, Effort: effort}, nil
+}
+
+// turnModelPattern bounds a per-turn model override to a conservative set of
+// characters common to model IDs and aliases across providers.
+var turnModelPattern = regexp.MustCompile(`^[A-Za-z0-9._:/-]+$`)
+
+// maxTurnModelLength bounds a per-turn model override's length.
+const maxTurnModelLength = 200
+
+// turnOptions extracts and validates the optional per-turn model and
+// reasoning-effort overrides from the incoming message's metadata. A present
+// but empty value is treated the same as an absent key: use the configured
+// default. An invalid override is rejected here, before the turn starts.
+func (e *Executor) turnOptions(message *a2atype.Message) (model, effort string, err error) {
+	if value, ok := apia2a.TurnModel(message); ok && value != "" {
+		if len(value) > maxTurnModelLength || !turnModelPattern.MatchString(value) {
+			return "", "", a2atype.NewError(a2atype.ErrInvalidRequest, "turn model override is invalid")
+		}
+		model = value
+	}
+	if value, ok := apia2a.TurnEffort(message); ok && value != "" {
+		if _, allowed := e.effortLevels[value]; !allowed {
+			return "", "", a2atype.NewError(a2atype.ErrInvalidRequest, fmt.Sprintf("unsupported turn effort %q", value))
+		}
+		effort = value
+	}
+	return model, effort, nil
 }
 
 func requiresInput(state a2atype.TaskState) bool {
