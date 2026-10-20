@@ -167,6 +167,7 @@ type testTags struct {
 	actorUIDAfterCreate    string
 	created                *ateapipb.Tag
 	deleteCalls            int
+	deletedUID             string
 	getErr                 error
 	createErr              error
 	deleteErr              error
@@ -230,8 +231,9 @@ func (t *testTags) CreateTag(_ context.Context, atespace, name, actorName string
 	return t.created, t.createErr
 }
 
-func (t *testTags) DeleteTag(context.Context, string, string) error {
+func (t *testTags) DeleteTag(_ context.Context, _, _, uid string) error {
 	t.deleteCalls++
+	t.deletedUID = uid
 	if t.deleteErr != nil {
 		return t.deleteErr
 	}
@@ -358,6 +360,37 @@ func TestDeleteHidesCheckpointBeforeDeletingTag(t *testing.T) {
 	if checkpoint.State != apiv1alpha1.CheckpointState_CHECKPOINT_STATE_DELETING || tags.deleteCalls != 1 || !store.deleted {
 		t.Fatalf("checkpoint state = %s, tag deletes = %d, row deleted = %v", checkpoint.State, tags.deleteCalls, store.deleted)
 	}
+}
+
+func TestDeleteFailedCheckpointSkipsTagDeletion(t *testing.T) {
+	checkpoint := &apiv1alpha1.Checkpoint{Id: "018f47a2-4efb-7c21-a848-123456789abc", State: apiv1alpha1.CheckpointState_CHECKPOINT_STATE_FAILED}
+	store := &testStore{prepared: checkpoint, snapshot: &database.SessionTaskSnapshot{Atespace: "team-a", URI: "s3://snapshots/snapshot-1"}}
+	tags := &testTags{} // created is nil: a FAILED checkpoint never retained a tag.
+	service := NewService(store, testAuthorizer{}, tags, nil)
+	ctx := auth.AuthSessionTo(context.Background(), testSession{userID: "alice"})
+
+	require.NoError(t, service.Delete(ctx, checkpoint.GetId()))
+	require.True(t, store.deleted)
+	require.Zero(t, tags.deleteCalls, "a checkpoint that never retained a tag must not attempt to delete one")
+}
+
+func TestDeleteRejectsUnownedTagWhenNoTagWasEverRetained(t *testing.T) {
+	checkpoint := &apiv1alpha1.Checkpoint{Id: "018f47a2-4efb-7c21-a848-123456789abc", State: apiv1alpha1.CheckpointState_CHECKPOINT_STATE_FAILED}
+	store := &testStore{prepared: checkpoint, snapshot: &database.SessionTaskSnapshot{Atespace: "team-a", URI: "s3://snapshots/snapshot-1"}}
+	// A tag happens to exist at this name with matching snapshot fields but, like
+	// the checkpoint's own record, no UID of its own: it is not the one this
+	// checkpoint retained, so it must not be deleted on the checkpoint's behalf.
+	tags := &testTags{created: &ateapipb.Tag{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: tagName(checkpoint.GetId())},
+		Status:   &ateapipb.TagStatus{Snapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "s3://snapshots/snapshot-1", ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA}},
+	}}
+	service := NewService(store, testAuthorizer{}, tags, nil)
+	ctx := auth.AuthSessionTo(context.Background(), testSession{userID: "alice"})
+
+	err := service.Delete(ctx, checkpoint.GetId())
+	require.Error(t, err)
+	require.Zero(t, tags.deleteCalls, "an unowned tag must never be deleted")
+	require.False(t, store.deleted)
 }
 
 // A Full onQuiesce policy records FULL boundaries. They can be checkpointed but

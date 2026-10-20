@@ -208,15 +208,10 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 			cancel()
 			if err != nil {
 				_ = utils.KillProcessGroup(command.Process)
-			} else {
-				_ = utils.TerminateProcessGroup(command.Process)
 			}
-			select {
-			case <-wait:
-			case <-time.After(d.config.InterruptGrace):
-				_ = utils.KillProcessGroup(command.Process)
-				<-wait
-			}
+			// Codex can still be flushing the interrupted turn after it acknowledges the
+			// interrupt. Close stdin and let it exit before escalating to signals.
+			d.stopSession(session)
 			return runtime.Outcome{}, ctx.Err()
 		case waitErr := <-wait:
 			if waitErr != nil {

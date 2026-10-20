@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -396,6 +397,55 @@ sleep 5
 	}
 	if !bytes.Contains(interrupt, []byte(`"method":"turn/interrupt"`)) || !bytes.Contains(interrupt, []byte(`"threadId":"thread-1"`)) || !bytes.Contains(interrupt, []byte(`"turnId":"turn-1"`)) {
 		t.Fatalf("interrupt request = %s", interrupt)
+	}
+}
+
+func TestProcessDriverCancellationClosesStdinBeforeSignals(t *testing.T) {
+	directory := t.TempDir()
+	executable := filepath.Join(directory, "codex")
+	started := filepath.Join(directory, "started")
+	flushed := filepath.Join(directory, "flushed")
+	script := `#!/bin/sh
+read initialize
+printf '%s\n' '{"id":1,"result":{}}'
+read initialized
+read thread
+printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-1"}}}'
+read turn
+printf '%s\n' '{"id":3,"result":{"turn":{"id":"turn-1"}}}'
+: > "$STARTED"
+read interrupt
+printf '%s\n' '{"id":4,"result":{}}'
+# Finish the interrupted turn only on stdin EOF, as Codex does on a graceful shutdown.
+while read ignored; do :; done
+: > "$FLUSHED"
+`
+	if err := os.WriteFile(executable, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(directory, "workspace")
+	if err := os.Mkdir(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	driver := NewProcessDriver(ProcessConfig{
+		Executable: executable, Workspace: workspace, Model: "model", Provider: "provider",
+		Environment:   append(os.Environ(), "STARTED="+started, "FLUSHED="+flushed),
+		MaxFrameBytes: 4096, MaxStderrBytes: 1024, InterruptGrace: time.Second,
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go func() {
+		// Cancel only once the turn is running, so the cancel reaches consume.
+		for _, err := os.Stat(started); err != nil; _, err = os.Stat(started) {
+			time.Sleep(10 * time.Millisecond)
+		}
+		cancel()
+	}()
+	if _, err := driver.Run(ctx, runtime.Turn{Prompt: "work"}, &recordingSink{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() error = %v, want context.Canceled", err)
+	}
+	if _, err := os.Stat(flushed); err != nil {
+		t.Fatalf("Codex was signalled before it could finish on stdin EOF: %v", err)
 	}
 }
 

@@ -102,21 +102,23 @@ func TestInteractionsEnforcePermissionsWithoutGateway(t *testing.T) {
 		}},
 	} {
 		for _, test := range []struct {
-			name  string
-			ctx   context.Context
-			agent types.NamespacedName
-			want  error
+			name          string
+			ctx           context.Context
+			agent         types.NamespacedName
+			want          error
+			sessionGetErr error
 		}{
 			{name: "unauthenticated", ctx: context.Background(), agent: agent, want: a2atype.ErrUnauthenticated},
 			{name: "missing Agent", ctx: serviceTestContext("visitor"), want: a2atype.ErrInvalidRequest},
 			{name: "denied caller", ctx: serviceTestContext("visitor"), agent: agent, want: a2atype.ErrUnauthorized},
+			{name: "missing session", ctx: auth.ShareContextTo(serviceTestContext("visitor"), &auth.ShareContext{SessionID: id, UserID: "owner"}), agent: agent, want: a2atype.ErrTaskNotFound, sessionGetErr: database.ErrNotFound},
 			{name: "read-only share", ctx: auth.ShareContextTo(serviceTestContext("visitor"), &auth.ShareContext{SessionID: id, UserID: "owner", ReadOnly: true}), agent: agent},
 			{name: "other Agent", ctx: auth.ShareContextTo(serviceTestContext("visitor"), &auth.ShareContext{SessionID: id, UserID: "owner"}), agent: types.NamespacedName{Namespace: "team-a", Name: "other"}, want: a2atype.ErrUnauthorized},
 		} {
 			t.Run(operation.name+"/"+test.name, func(t *testing.T) {
 				stored := &apiv1alpha1.Session{Id: id, ContextId: id, State: apiv1alpha1.RuntimeState_RUNTIME_STATE_SUSPENDED,
 					Agent: &apiv1alpha1.ResourceReference{Namespace: agent.Namespace, Name: agent.Name}}
-				sessionStore := &serviceTestStore{getResult: stored}
+				sessionStore := &serviceTestStore{getResult: stored, getErr: test.sessionGetErr}
 				authorizer := &recordingAuthorizer{denied: map[string]bool{id: true}}
 				tasks := &interactionTestStore{task: &a2atype.Task{ID: "task", ContextID: id, Status: a2atype.TaskStatus{State: a2atype.TaskStateCompleted}}}
 				service := NewInteractionService(tasks, nil, NewService(sessionStore, authorizer, nil))
