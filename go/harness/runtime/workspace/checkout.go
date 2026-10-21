@@ -99,15 +99,18 @@ func (g *gitRunner) checkout(ctx context.Context, c checkout) error {
 		if c.Credential || c.ReadURL == "" || c.PushURL == "" {
 			return errors.New("invalid Git proxy transport")
 		}
+		var proxyNamespace string
 		for i, rawURL := range []string{c.ReadURL, c.PushURL} {
 			u, err := url.Parse(rawURL)
 			if err != nil || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 				return errors.New("invalid Git proxy transport")
 			}
 			origin := u.Scheme + "://" + u.Host
-			if origin != apiworkspace.ReadProxyOrigin && (i == 0 || origin != apiworkspace.PushProxyOrigin) {
+			namespace, ok := apiworkspace.ParseGitProxyOrigin(origin, i == 0)
+			if !ok || (i == 1 && namespace != proxyNamespace) {
 				return errors.New("invalid Git proxy transport")
 			}
+			proxyNamespace = namespace
 			proxyOrigins = append(proxyOrigins, origin)
 		}
 	}
@@ -363,7 +366,13 @@ func TransportDigest(policy apiworkspace.Git, repo string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	expected := map[string]string{"remote.origin.url": read, "remote.origin.pushurl": push, "http.followredirects": "false", "http." + apiworkspace.ReadProxyOrigin + "/.extraheader": placeholderHeader, "http." + apiworkspace.PushProxyOrigin + "/.extraheader": placeholderHeader}
+	expected := map[string]string{"remote.origin.url": read, "remote.origin.pushurl": push, "http.followredirects": "false"}
+	if policy.ReadProxyOrigin != nil {
+		expected["http."+*policy.ReadProxyOrigin+"/.extraheader"] = placeholderHeader
+	}
+	if policy.PushProxyOrigin != nil {
+		expected["http."+*policy.PushProxyOrigin+"/.extraheader"] = placeholderHeader
+	}
 	data, err := json.Marshal(expected)
 	return Digest(data), err
 }
@@ -389,7 +398,8 @@ func (b *Bootstrapper) observe(ctx context.Context, request Request) (string, st
 	if err != nil {
 		return "", "", "", err
 	}
-	required := map[string]string{"remote.origin.url": read, "remote.origin.pushurl": push, "http.followredirects": "false", "http." + apiworkspace.ReadProxyOrigin + "/.extraheader": placeholderHeader, "http." + apiworkspace.PushProxyOrigin + "/.extraheader": placeholderHeader}
+	required := map[string]string{"remote.origin.url": read, "remote.origin.pushurl": push, "http.followredirects": "false",
+		"http." + *b.policy.ReadProxyOrigin + "/.extraheader": placeholderHeader, "http." + *b.policy.PushProxyOrigin + "/.extraheader": placeholderHeader}
 	allowed := map[string]string{"core.repositoryformatversion": "0", "core.filemode": "true", "core.bare": "false", "core.logallrefupdates": "true", "remote.origin.fetch": "+refs/heads/*:refs/remotes/origin/*"}
 	seen := map[string]bool{}
 	for item := range strings.SplitSeq(strings.TrimSuffix(config, "\x00"), "\x00") {

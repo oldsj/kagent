@@ -137,18 +137,22 @@ spec:
                   pushProxyOrigin:
                     description: |-
                       PushProxyOrigin routes publication through the separate trusted push
-                      listener. Omitted leaves receive-pack on the read listener, which denies it.
-                      A transport origin does not grant publication authority.
+                      listener of the same Mainloop Git instance as ReadProxyOrigin. Omitted
+                      leaves receive-pack on the read listener, which denies it. A transport
+                      origin does not grant publication authority.
                     enum:
                     - http://mainloop-git-push.mainloop.svc.cluster.local
+                    - http://mainloop-git-push.mainloop-dev.svc.cluster.local
                     type: string
                   readProxyOrigin:
                     description: |-
                       ReadProxyOrigin routes canonical GitHub checkouts through the trusted read
-                      listener. Authorization comes from per-Session references, never a GitHub
-                      credential. Omitted retains standalone direct Git behavior.
+                      listener of a known Mainloop Git instance. Authorization comes from
+                      per-Session references, never a GitHub credential. Omitted retains
+                      standalone direct Git behavior.
                     enum:
                     - http://mainloop-git-read.mainloop.svc.cluster.local
+                    - http://mainloop-git-read.mainloop-dev.svc.cluster.local
                     type: string
                 required:
                 - origins
@@ -165,6 +169,13 @@ spec:
                     self.origins[0] == ''github.com'')'
                 - message: Git proxies cannot use credentialSecretRef
                   rule: '!has(self.readProxyOrigin) || !has(self.credentialSecretRef)'
+                - message: readProxyOrigin and pushProxyOrigin must belong to the
+                    same Mainloop Git instance
+                  rule: '!has(self.readProxyOrigin) || !has(self.pushProxyOrigin)
+                    || (self.readProxyOrigin == ''http://mainloop-git-read.mainloop.svc.cluster.local''
+                    && self.pushProxyOrigin == ''http://mainloop-git-push.mainloop.svc.cluster.local'')
+                    || (self.readProxyOrigin == ''http://mainloop-git-read.mainloop-dev.svc.cluster.local''
+                    && self.pushProxyOrigin == ''http://mainloop-git-push.mainloop-dev.svc.cluster.local'')'
               kagent:
                 description: KagentHarness configures the kagent runtime adapter.
                 properties:

@@ -172,3 +172,56 @@ func TestGitPurposeRules(t *testing.T) {
 		require.Error(t, err)
 	}
 }
+
+func gitInstanceRules(namespace string) []CredentialRule {
+	read, push := "http://mainloop-git-read."+namespace+".svc.cluster.local", "http://mainloop-git-push."+namespace+".svc.cluster.local"
+	return []CredentialRule{
+		{Namespace: "kagent", SecretNamePattern: namespace + "-git-read-*", Key: "authorization", Header: "authorization", Origin: read, Purpose: "git-read"},
+		{Namespace: "kagent", SecretNamePattern: namespace + "-git-push-*", Key: "authorization", Header: "authorization", Origin: push, Purpose: "git-push"},
+	}
+}
+
+func TestGitInstanceNamespaceAllowlist(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		namespaces []string
+		rules      []CredentialRule
+		wantErr    bool
+	}{
+		{"default behavior unchanged, mainloop accepted", nil, gitInstanceRules("mainloop"), false},
+		{"empty allowlist defaults like nil", []string{}, gitInstanceRules("mainloop"), false},
+		{"explicit default equivalent to nil", []string{"mainloop"}, gitInstanceRules("mainloop"), false},
+		{"dev instance accepted when allowlisted", []string{"mainloop", "mainloop-dev"}, gitInstanceRules("mainloop-dev"), false},
+		{"unknown namespace rejected", []string{"mainloop"}, gitInstanceRules("mainloop-dev"), true},
+		{"dev origin with prod pattern rejected", []string{"mainloop", "mainloop-dev"}, []CredentialRule{
+			{Namespace: "kagent", SecretNamePattern: "mainloop-git-read-*", Key: "authorization", Header: "authorization", Origin: "http://mainloop-git-read.mainloop-dev.svc.cluster.local", Purpose: "git-read"},
+		}, true},
+		{"prod origin with dev pattern rejected", []string{"mainloop", "mainloop-dev"}, []CredentialRule{
+			{Namespace: "kagent", SecretNamePattern: "mainloop-dev-git-push-*", Key: "authorization", Header: "authorization", Origin: "http://mainloop-git-push.mainloop.svc.cluster.local", Purpose: "git-push"},
+		}, true},
+		{"invalid namespace format rejected", []string{"Mainloop_Dev"}, nil, true},
+		{"duplicate namespace rejected", []string{"mainloop", "mainloop"}, nil, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := New(Config{Namespace: "kagent", Agents: []string{"mainloop-main"}, GitInstanceNamespaces: tc.namespaces, Credentials: tc.rules})
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestGitInstanceNamespaceOverlapRejected(t *testing.T) {
+	_, err := New(Config{Namespace: "kagent", Agents: []string{"mainloop-main"}, GitInstanceNamespaces: []string{"mainloop", "mainloop-git-read-x"}})
+	require.Error(t, err)
+}
+
+func TestGitInstanceNamespaceReservedOriginCoversAllowlist(t *testing.T) {
+	p, err := New(Config{Namespace: "kagent", Agents: []string{"mainloop-main"}, GitInstanceNamespaces: []string{"mainloop", "mainloop-dev"}})
+	require.NoError(t, err)
+	require.True(t, reservedGitOrigin("http://mainloop-git-read.mainloop-dev.svc.cluster.local", p.config.GitInstanceNamespaces))
+	require.True(t, reservedGitOrigin("http://mainloop-git-push.mainloop-dev.svc.cluster.local", p.config.GitInstanceNamespaces))
+	require.False(t, reservedGitOrigin("http://mainloop-git-read.other.svc.cluster.local", p.config.GitInstanceNamespaces))
+}

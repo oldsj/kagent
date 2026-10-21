@@ -157,10 +157,10 @@ func CheckPreparationRuntime(session *api.Session, revision *database.RuntimeRev
 	read, push := 0, 0
 	for _, credential := range session.GetCredentials() {
 		if credential.GetHeader() == "authorization" && credential.GetSecretRef().GetKey() == "authorization" {
-			if credential.GetOrigin() == apiworkspace.ReadProxyOrigin {
+			if credential.GetOrigin() == *policy.ReadProxyOrigin {
 				read++
 			}
-			if credential.GetOrigin() == apiworkspace.PushProxyOrigin {
+			if credential.GetOrigin() == *policy.PushProxyOrigin {
 				push++
 			}
 		}

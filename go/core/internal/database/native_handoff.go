@@ -24,11 +24,18 @@ func RequiresWorkspacePreparation(session *api.Session) bool {
 }
 
 // UsesEnforcingGitProxies reports whether a revision's effective egress reaches
-// Git through both Mainloop proxies, the only configuration preparation accepts.
-// The compiler adds both origins only for a proxy-mode Git policy; extra proxy
-// destinations on a direct-Git revision fail closed into enforcement.
+// Git through both proxies of a single known Mainloop Git instance, the only
+// configuration preparation accepts. The compiler adds both origins only for a
+// proxy-mode Git policy; extra proxy destinations on a direct-Git revision
+// fail closed into enforcement.
 func UsesEnforcingGitProxies(destinations []string) bool {
-	return slices.Contains(destinations, apiworkspace.ReadProxyOrigin+":80") && slices.Contains(destinations, apiworkspace.PushProxyOrigin+":80")
+	for _, namespace := range apiworkspace.KnownGitInstanceNamespaces {
+		readOrigin, pushOrigin := apiworkspace.GitInstanceOrigins(namespace)
+		if slices.Contains(destinations, readOrigin+":80") && slices.Contains(destinations, pushOrigin+":80") {
+			return true
+		}
+	}
+	return false
 }
 
 // RequiresPreparedAdmission gates task admission on a confirmed preparation.
@@ -393,9 +400,7 @@ func (c *Client) CompleteWorkspacePreparation(ctx context.Context, binding Runti
 			if assignment.GetProvider() == "claude" {
 				expectedHook = "append_system_prompt"
 			}
-			policy := workspaceProxyPolicy()
-			expectedTransport, err := workspace.TransportDigest(policy, assignment.GetWorkspace().GetRepo())
-			if err != nil || input.GetHead() != assignment.GetWorkspace().GetRef() || input.GetBranch() != assignment.GetWorkspace().GetBranch() || input.GetTransportDigest() != expectedTransport || input.GetNativeHook() != expectedHook {
+			if input.GetHead() != assignment.GetWorkspace().GetRef() || input.GetBranch() != assignment.GetWorkspace().GetBranch() || input.GetNativeHook() != expectedHook || !matchesKnownGitInstanceTransport(input.GetTransportDigest(), assignment.GetWorkspace().GetRepo()) {
 				return ErrFailedPrecondition
 			}
 			receipt.Classification = "confirmed"
@@ -454,6 +459,23 @@ func requireNativeTaskAdmission(ctx context.Context, tx pgx.Tx, row sessionRow) 
 	return nil
 }
 
-func workspaceProxyPolicy() apiworkspace.Git {
-	return apiworkspace.Git{Origins: []string{"github.com"}, ReadProxyOrigin: new(apiworkspace.ReadProxyOrigin), PushProxyOrigin: new(apiworkspace.PushProxyOrigin)}
+// matchesKnownGitInstanceTransport reports whether digest is the
+// TransportDigest of repo under any known Mainloop Git instance's enforcing
+// proxy pair. The specific instance a session used is not itself recorded;
+// matching against every known instance is safe because each candidate policy
+// is already one of the few hardcoded, paired-by-construction enforcing
+// configurations, never an arbitrary or attacker-chosen one.
+func matchesKnownGitInstanceTransport(digest, repo string) bool {
+	for _, namespace := range apiworkspace.KnownGitInstanceNamespaces {
+		expected, err := workspace.TransportDigest(gitInstancePolicy(namespace), repo)
+		if err == nil && digest == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func gitInstancePolicy(namespace string) apiworkspace.Git {
+	readOrigin, pushOrigin := apiworkspace.GitInstanceOrigins(namespace)
+	return apiworkspace.Git{Origins: []string{"github.com"}, ReadProxyOrigin: &readOrigin, PushProxyOrigin: &pushOrigin}
 }

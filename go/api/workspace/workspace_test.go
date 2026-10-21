@@ -111,3 +111,71 @@ func TestProxyPolicyAndTransport(t *testing.T) {
 		t.Fatalf("legacy = %q %q %v", read, push, err)
 	}
 }
+
+func TestGitInstanceOrigins(t *testing.T) {
+	read, push := GitInstanceOrigins("mainloop")
+	if read != ReadProxyOrigin || push != PushProxyOrigin {
+		t.Fatalf("mainloop instance origins = %q, %q; want the exact trusted listeners", read, push)
+	}
+}
+
+func TestProxyPolicyAcceptsAnyWellFormedInstance(t *testing.T) {
+	devRead, devPush := GitInstanceOrigins("mainloop-dev")
+	dev := Git{Origins: []string{"github.com"}, ReadProxyOrigin: &devRead, PushProxyOrigin: &devPush}
+	if err := dev.Validate(); err != nil {
+		t.Fatalf("a second well-formed, self-consistent instance must validate: %v", err)
+	}
+	read, _, err := dev.Transport("https://github.com/o/r")
+	if err != nil || read != devRead+"/o/r.git" {
+		t.Fatalf("dev transport = %q, %v", read, err)
+	}
+
+	mainloopRead, _ := GitInstanceOrigins("mainloop")
+	mismatched := Git{Origins: []string{"github.com"}, ReadProxyOrigin: &mainloopRead, PushProxyOrigin: &devPush}
+	if err := mismatched.Validate(); err == nil {
+		t.Fatal("a session must never pair one instance's read origin with another instance's push origin")
+	}
+}
+
+func TestParseGitProxyOrigin(t *testing.T) {
+	for _, tc := range []struct {
+		origin        string
+		read          bool
+		wantNamespace string
+		wantOK        bool
+	}{
+		{ReadProxyOrigin, true, "mainloop", true},
+		{PushProxyOrigin, false, "mainloop", true},
+		{"http://mainloop-git-read.mainloop-dev.svc.cluster.local", true, "mainloop-dev", true},
+		{ReadProxyOrigin, false, "", false},
+		{PushProxyOrigin, true, "", false},
+		{"http://mainloop-git-read.Mainloop.svc.cluster.local", true, "", false},
+		{"https://mainloop-git-read.mainloop.svc.cluster.local", true, "", false},
+		{ReadProxyOrigin + "/", true, "", false},
+	} {
+		t.Run(tc.origin, func(t *testing.T) {
+			ns, ok := ParseGitProxyOrigin(tc.origin, tc.read)
+			if ns != tc.wantNamespace || ok != tc.wantOK {
+				t.Fatalf("ParseGitProxyOrigin(%q, %v) = %q, %v; want %q, %v", tc.origin, tc.read, ns, ok, tc.wantNamespace, tc.wantOK)
+			}
+		})
+	}
+}
+
+func TestIsGitProxyHost(t *testing.T) {
+	for _, tc := range []struct {
+		host string
+		want bool
+	}{
+		{"mainloop-git-read.mainloop.svc.cluster.local", true},
+		{"mainloop-git-push.mainloop.svc.cluster.local", true},
+		{"mainloop-git-read.mainloop-dev.svc.cluster.local", true},
+		{"mainloop-git-push.mainloop-dev.svc.cluster.local", true},
+		{"mainloop-mcp.mainloop.svc.cluster.local", false},
+		{"github.com", false},
+	} {
+		if got := IsGitProxyHost(tc.host); got != tc.want {
+			t.Fatalf("IsGitProxyHost(%q) = %v, want %v", tc.host, got, tc.want)
+		}
+	}
+}

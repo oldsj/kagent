@@ -36,6 +36,11 @@ type Config struct {
 	Credentials                      []CredentialRule `json:"credentials"`
 	CleartextMCPOrigins              []string         `json:"cleartextMCPOrigins"`
 	DevelopmentEnvironmentRegistries []string         `json:"developmentEnvironmentRegistries"`
+	// GitInstanceNamespaces lists the Mainloop Git instances (by the namespace
+	// their git-read/git-push proxies and Secrets live in) this controller may
+	// approve Git credential tuples for. A nil or empty value defaults to
+	// ["mainloop"], the original single-instance behavior.
+	GitInstanceNamespaces []string `json:"gitInstanceNamespaces,omitempty"`
 }
 
 type Policy struct {
@@ -54,8 +59,30 @@ func New(config Config) (*Policy, error) {
 			return nil, errors.New("invalid service Agent allowlist")
 		}
 	}
+	gitInstanceNamespaces := config.GitInstanceNamespaces
+	if len(gitInstanceNamespaces) == 0 {
+		gitInstanceNamespaces = []string{"mainloop"}
+	}
+	seenNamespace := make(map[string]bool, len(gitInstanceNamespaces))
+	for _, namespace := range gitInstanceNamespaces {
+		if len(validation.IsDNS1123Label(namespace)) != 0 {
+			return nil, errors.New("invalid Git instance namespace allowlist")
+		}
+		if seenNamespace[namespace] {
+			return nil, errors.New("Git instance namespace allowlist contains a duplicate")
+		}
+		seenNamespace[namespace] = true
+	}
+	for i, namespace := range gitInstanceNamespaces {
+		for _, other := range gitInstanceNamespaces[i+1:] {
+			if overlappingGitInstanceNamespaces(namespace, other) {
+				return nil, errors.New("Git instance namespace allowlist entries produce overlapping Secret name patterns")
+			}
+		}
+	}
+	config.GitInstanceNamespaces = append([]string(nil), gitInstanceNamespaces...)
 	for i, origin := range config.CleartextMCPOrigins {
-		if !validCleartextMCPOrigin(origin) || reservedGitOrigin(origin) {
+		if !validCleartextMCPOrigin(origin) || reservedGitOrigin(origin, config.GitInstanceNamespaces) {
 			return nil, errors.New("cleartext MCP allowlist requires exact HTTP origins on svc.cluster.local hosts")
 		}
 		if slices.Contains(config.CleartextMCPOrigins[:i], origin) {
@@ -70,15 +97,15 @@ func New(config Config) (*Policy, error) {
 		}
 		switch rule.Purpose {
 		case "git-read":
-			if rule.Origin != workspace.ReadProxyOrigin || rule.SecretNamePattern != "mainloop-git-read-*" || rule.Key != "authorization" {
+			if !approvedGitInstanceTuple(config.GitInstanceNamespaces, rule, true) {
 				return nil, errors.New("invalid approved Git read tuple")
 			}
 		case "git-push":
-			if rule.Origin != workspace.PushProxyOrigin || rule.SecretNamePattern != "mainloop-git-push-*" || rule.Key != "authorization" {
+			if !approvedGitInstanceTuple(config.GitInstanceNamespaces, rule, false) {
 				return nil, errors.New("invalid approved Git push tuple")
 			}
 		case "mcp":
-			if reservedGitOrigin(rule.Origin) || (origin.Scheme != "https" && (origin.Scheme != "http" || !slices.Contains(config.CleartextMCPOrigins, rule.Origin))) {
+			if reservedGitOrigin(rule.Origin, config.GitInstanceNamespaces) || (origin.Scheme != "https" && (origin.Scheme != "http" || !slices.Contains(config.CleartextMCPOrigins, rule.Origin))) {
 				return nil, errors.New("invalid approved MCP tuple")
 			}
 		default:
@@ -98,13 +125,52 @@ func New(config Config) (*Policy, error) {
 	return &Policy{config: config}, nil
 }
 
-func reservedGitOrigin(origin string) bool {
+func reservedGitOrigin(origin string, gitInstanceNamespaces []string) bool {
 	u, err := url.Parse(origin)
 	if err != nil {
 		return false
 	}
 	host := workspace.NormalizeHost(u.Hostname())
-	return host == "mainloop-git-read.mainloop.svc.cluster.local" || host == "mainloop-git-push.mainloop.svc.cluster.local"
+	for _, namespace := range gitInstanceNamespaces {
+		readOrigin, pushOrigin := workspace.GitInstanceOrigins(namespace)
+		readHost, _ := url.Parse(readOrigin)
+		pushHost, _ := url.Parse(pushOrigin)
+		if host == readHost.Hostname() || host == pushHost.Hostname() {
+			return true
+		}
+	}
+	return false
+}
+
+// overlappingGitInstanceNamespaces reports whether two Git instance namespaces
+// would produce Secret name glob patterns where one could match a Secret
+// intended for the other, for either the read or push purpose.
+func overlappingGitInstanceNamespaces(a, b string) bool {
+	for _, suffix := range []string{"-git-read-", "-git-push-"} {
+		if strings.HasPrefix(b, a+suffix) || strings.HasPrefix(a, b+suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// approvedGitInstanceTuple reports whether rule exactly matches one of the
+// allowlisted Git instances' read (or push) origin and Secret name pattern.
+func approvedGitInstanceTuple(gitInstanceNamespaces []string, rule CredentialRule, read bool) bool {
+	if rule.Key != "authorization" {
+		return false
+	}
+	for _, namespace := range gitInstanceNamespaces {
+		readOrigin, pushOrigin := workspace.GitInstanceOrigins(namespace)
+		readPattern, pushPattern := workspace.GitInstanceSecretPatterns(namespace)
+		if read && rule.Origin == readOrigin && rule.SecretNamePattern == readPattern {
+			return true
+		}
+		if !read && rule.Origin == pushOrigin && rule.SecretNamePattern == pushPattern {
+			return true
+		}
+	}
+	return false
 }
 
 // validCleartextMCPOrigin accepts only canonical, exact in-cluster HTTP origins.
