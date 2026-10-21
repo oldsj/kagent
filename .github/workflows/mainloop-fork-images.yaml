@@ -25,6 +25,9 @@ jobs:
           - image: kagent-controller
             file: go/Dockerfile
             build-args: BUILD_PACKAGE=core/cmd/controller/main.go
+          - image: kagent-controller-dev
+            file: go/Dockerfile.dev
+            build-args: BUILD_PACKAGE=core/cmd/controller/main.go
           - image: kagent-claude-harness
             file: go/harness/claude/Dockerfile
             build-args: ''

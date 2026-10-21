@@ -47,9 +47,16 @@ When making changes to `kagent`, the most important thing is to figure out which
 
 In `oldsj/kagent`, `.github/workflows/mainloop-fork-ci.yaml` runs the
 `chatgptrefresh` package's fixture tests (`-count=1 -timeout=180s`) and `go vet`
-on a standard GitHub-hosted runner. It runs for pull requests targeting
-`mainloop-substrate-0-4`, pushes to that branch, and manual dispatches, without
-path filters. The upstream CI workflow is unchanged.
+on a standard GitHub-hosted runner. It also runs two jobs that validate the
+`kagent-controller-dev` image (see `docs/mainloop-dev-target.md`):
+`controller-dev-entrypoint` runs `go/scripts/controller-dev-entrypoint_test.sh`
+against a throwaway Go package to prove the entrypoint builds, starts, and
+rebuilds+restarts on a source edit; `controller-dev-image` builds
+`go/Dockerfile.dev` with `docker buildx` (no push) and starts a container from
+it to prove the entrypoint builds and starts the real controller binary. All
+jobs run for pull requests targeting `mainloop-substrate-0-4`, pushes to that
+branch, and manual dispatches, without path filters. The upstream CI workflow
+is unchanged.
 
 PR runs test GitHub's merge candidate; push and manual runs test the event's
 commit. The run summary records the ref, event SHA, checkout SHA, and PR head
@@ -72,20 +79,27 @@ gate does not prove image CI, live credential refresh, or deployment readiness.
 ## Mainloop fork images
 
 In `oldsj/kagent`, `.github/workflows/mainloop-fork-images.yaml` publishes
-`kagent-controller`, `kagent-claude-harness`, and `kagent-codex-harness` to
-`ghcr.io/oldsj` on pushes to `mainloop-substrate-0-4` and manual dispatches.
-It uses the native `ubuntu-24.04-arm` runner and builds only `linux/arm64`,
-with tags `0.0.0-<7-character-source-SHA>`. It does not run on pull requests.
-OCI labels record the source repository and full commit SHA; each job summary
+`kagent-controller`, `kagent-controller-dev`, `kagent-claude-harness`, and
+`kagent-codex-harness` to `ghcr.io/oldsj` on pushes to
+`mainloop-substrate-0-4` and manual dispatches. It uses the native
+`ubuntu-24.04-arm` runner and builds only `linux/arm64`, with tags
+`0.0.0-<7-character-source-SHA>`. It does not run on pull requests. OCI
+labels record the source repository and full commit SHA; each job summary
 records its platform, tag, and immutable `name@digest` for deployment pins.
 Update pins through a separately reviewed infrastructure PR. This workflow
 does not build the infrastructure-owned workspace harness.
 
+`kagent-controller-dev` (built from `go/Dockerfile.dev`) is not a production
+image: it ships a Go toolchain and the controller's source instead of a
+stripped binary, so Mainloop's `dev_sync` can rebuild it in place inside the
+kv vcluster staging target. See `docs/mainloop-dev-target.md`.
+
 The package owner must grant `oldsj/kagent` **write** access under **Manage
 Actions access** in each existing GHCR package's settings:
-`kagent-controller`, `kagent-claude-harness`, and `kagent-codex-harness`.
-Publication uses the job's `GITHUB_TOKEN` with `packages: write` and
-`contents: read`; no separate registry secret is needed.
+`kagent-controller`, `kagent-controller-dev`, `kagent-claude-harness`, and
+`kagent-codex-harness`. Publication uses the job's `GITHUB_TOKEN` with
+`packages: write` and `contents: read`; no separate registry secret is
+needed.
 
 Once every image in the matrix has published, the workflow's `publish-charts`
 job packages `helm/kagent-crds` and `helm/kagent` with `version` and
