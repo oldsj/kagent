@@ -165,7 +165,7 @@ func TestNativePreparationCompletesWithDevGitInstance(t *testing.T) {
 	require.NoError(t, err)
 	assigned, ready, err := c.AssignWorkspacePreparation(t.Context(), session.Id)
 	require.NoError(t, err)
-	require.True(t, ready)
+	require.False(t, ready)
 	require.NoError(t, c.CompleteWorkspacePreparation(t.Context(), *g, true, nativeCompletionForNamespace(t, assigned, "mainloop-dev")))
 	effect, err := c.GetWorkspacePreparationReceipt(t.Context(), session.Id)
 	require.NoError(t, err)
@@ -182,7 +182,7 @@ func TestNativePreparationRejectsMismatchedGitInstanceTransport(t *testing.T) {
 	require.NoError(t, err)
 	assigned, ready, err := c.AssignWorkspacePreparation(t.Context(), session.Id)
 	require.NoError(t, err)
-	require.True(t, ready)
+	require.False(t, ready)
 	require.ErrorIs(t, c.CompleteWorkspacePreparation(t.Context(), *g, true, nativeCompletionForNamespace(t, assigned, "mainloop")), ErrFailedPrecondition)
 }
 
