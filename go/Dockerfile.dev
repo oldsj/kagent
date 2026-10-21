@@ -1,0 +1,67 @@
+### Dev image for the kagent controller.
+#
+# Used only as Mainloop's dev_sync staging target inside the kv vcluster
+# (see docs/mainloop-dev-target.md). The production image (go/Dockerfile) is
+# a stripped Alpine image with no Go toolchain, so synced source cannot be
+# rebuilt inside it. This image instead ships a Go toolchain, the
+# repository's go/ source at a fixed path, and an entrypoint that builds and
+# runs the controller, rebuilding and restarting it whenever dev_sync copies
+# in changed source.
+ARG BASE_IMAGE_REGISTRY=cgr.dev
+ARG BUILDPLATFORM
+FROM --platform=$BUILDPLATFORM $BASE_IMAGE_REGISTRY/chainguard/go:latest
+ARG TARGETARCH
+ARG VERSION
+ARG LDFLAGS
+
+# Which package the entrypoint builds and runs. Matches go/Dockerfile's
+# BUILD_PACKAGE convention and must stay core/cmd/controller/main.go for
+# this image to behave like the production controller.
+ARG BUILD_PACKAGE=core/cmd/controller/main.go
+
+ENV HOME=/home/nonroot \
+    GOPATH=/home/nonroot/go \
+    GOCACHE=/home/nonroot/.cache/go-build \
+    GOMODCACHE=/home/nonroot/go/pkg/mod \
+    GOTOOLCHAIN=local \
+    CGO_ENABLED=0 \
+    SRC_DIR=/src/go \
+    BUILD_PACKAGE=${BUILD_PACKAGE} \
+    OUT_BIN=/home/nonroot/bin/controller \
+    LDFLAGS=${LDFLAGS}
+
+WORKDIR /src/go
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Same source set as go/Dockerfile's production build, plus scripts/ for
+# this image's own entrypoint and healthcheck helper.
+COPY api/ api/
+COPY core/ core/
+COPY adk/ adk/
+COPY harness/ harness/
+COPY pkg/ pkg/
+COPY scripts/ scripts/
+
+# Warm the build/module cache at image build time so the first rebuild after
+# a dev_sync is fast, and prove the baked-in source builds before shipping.
+# kagent-healthcheck backs the dev_sync health/smoke commands documented in
+# docs/mainloop-dev-target.md without depending on curl/wget being present.
+RUN mkdir -p "$(dirname "$OUT_BIN")" && \
+    GOARCH=${TARGETARCH} go build -ldflags "$LDFLAGS" -o "$OUT_BIN" "$BUILD_PACKAGE" && \
+    GOARCH=${TARGETARCH} go build -o /usr/local/bin/kagent-healthcheck ./scripts/healthcheck
+
+COPY scripts/controller-dev-entrypoint.sh /usr/local/bin/controller-dev-entrypoint.sh
+
+RUN chmod +x /usr/local/bin/controller-dev-entrypoint.sh && \
+    chown -R 65532:65532 /src/go /home/nonroot
+
+USER 65532:65532
+WORKDIR /src/go
+EXPOSE 8083
+
+LABEL org.opencontainers.image.source="https://github.com/kagent-dev/kagent"
+LABEL org.opencontainers.image.description="Dev build of the kagent controller: rebuilds and restarts on synced source changes. Mainloop dev_sync staging target only; do not use in production."
+LABEL org.opencontainers.image.version="$VERSION"
+
+ENTRYPOINT ["/usr/local/bin/controller-dev-entrypoint.sh"]

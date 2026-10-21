@@ -76,3 +76,69 @@ jobs:
           ./harness/runtime/workspace ./harness/claude/... ./harness/codex/...
       - name: Build controller and native consumers
         run: go build ./core/pkg/app ./harness/claude/cmd ./harness/codex/cmd
+
+  controller-dev-entrypoint:
+    name: controller-dev-entrypoint.sh rebuild-on-change
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go/go.mod
+          cache: false
+      - name: Run rebuild-on-change smoke test
+        # Exercises the dev image's entrypoint against a throwaway Go
+        # package (not the real controller, so no Docker/database/kv needed)
+        # to prove it builds, starts, and rebuilds+restarts on a source edit.
+        run: sh go/scripts/controller-dev-entrypoint_test.sh
+
+  controller-dev-image:
+    name: Build and smoke-test kagent-controller-dev
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build controller dev image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: go
+          file: go/Dockerfile.dev
+          load: true
+          tags: kagent-controller-dev:ci
+          build-args: |
+            BUILD_PACKAGE=core/cmd/controller/main.go
+          cache-from: type=gha,scope=controller-dev-image
+          cache-to: type=gha,mode=max,scope=controller-dev-image
+      - name: Smoke-test that the entrypoint builds and starts the controller
+        run: |
+          set -euo pipefail
+          container_id="$(docker run -d --rm \
+            -e KAGENT_AUTH_MODE=insecure \
+            -e KAGENT_POSTGRES_DATABASE_URL='postgres://kagent:kagent@127.0.0.1:5999/kagent?sslmode=disable' \
+            kagent-controller-dev:ci)"
+          trap 'docker logs "$container_id" || true; docker stop "$container_id" >/dev/null 2>&1 || true' EXIT
+          for _ in $(seq 1 30); do
+            if docker logs "$container_id" 2>&1 | grep -q 'controller started pid='; then
+              echo "controller-dev-entrypoint.sh built and started the controller binary"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo '::error::controller-dev-entrypoint.sh never reported a started controller'
+          exit 1
