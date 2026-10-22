@@ -87,6 +87,7 @@ func TestPreparationSetupHasNoNativeHistory(t *testing.T) {
 			data := t.TempDir()
 			cfg := config.Production("fixture-model", "original instructions")
 
+			cfg.Git = &apiworkspace.Git{Origins: []string{"github.com"}, ReadProxyOrigin: new(apiworkspace.ReadProxyOrigin), PushProxyOrigin: new(apiworkspace.PushProxyOrigin)}
 			cfg.MCPServers = map[string]config.MCPServer{"mainloop": {Type: "http", URL: "http://mainloop-mcp.mainloop.svc.cluster.local/mcp"}}
 			raw, err := json.Marshal(cfg)
 			require.NoError(t, err)
@@ -143,6 +144,7 @@ func TestPreparationRuntimeRecoveryPreservesApprovalAndHistory(t *testing.T) {
 					cfg.ClaudeExecutable = filepath.Join(data, "fake-claude")
 					log := filepath.Join(data, "native-calls")
 					require.NoError(t, os.WriteFile(cfg.ClaudeExecutable, []byte("#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf '%s\\n' '"+cfg.ExpectedClaudeVersion+" (Claude Code)'; exit 0; fi\nprintf 'native call\\n' >> '"+log+"'\nexit 42\n"), 0700))
+					cfg.Git = &apiworkspace.Git{Origins: []string{"github.com"}, ReadProxyOrigin: new(apiworkspace.ReadProxyOrigin), PushProxyOrigin: new(apiworkspace.PushProxyOrigin)}
 					cfg.MCPServers = map[string]config.MCPServer{"mainloop": {Type: "http", URL: "http://mainloop-mcp.mainloop.svc.cluster.local/mcp", Headers: map[string]string{"Authorization": "${MAINLOOP_MCP_AUTHORIZATION}"}, RequireApproval: protected}}
 					raw, err := json.Marshal(cfg)
 					require.NoError(t, err)
@@ -212,7 +214,7 @@ func TestPreparationRuntimeRecoveryPreservesApprovalAndHistory(t *testing.T) {
 					_, _, err = observer.Setup(t.Context(), assignment, true)
 					require.Error(t, err, "read-only observation cannot reinstall absent files")
 					require.NoFileExists(t, filepath.Join(input.EphemeralDir, "mcp.json"))
-					_, closer, err := New(t.Context(), Config{ConfigJSON: raw, DataDir: data, Environment: input.Environment})
+					_, closer, err := New(t.Context(), Config{ConfigJSON: raw, DataDir: data, Environment: input.Environment, Workspace: &startupWorkspace{}})
 					require.NoError(t, err)
 					t.Cleanup(func() { _ = closer.Close() })
 					readMCP()
@@ -234,7 +236,7 @@ func TestPreparationRuntimeRecoveryPreservesApprovalAndHistory(t *testing.T) {
 						require.NoError(t, err)
 						tampered := []byte("changed native setup")
 						require.NoError(t, os.WriteFile(path, tampered, 0600))
-						_, _, err = New(t.Context(), Config{ConfigJSON: raw, DataDir: data, Environment: input.Environment})
+						_, _, err = New(t.Context(), Config{ConfigJSON: raw, DataDir: data, Environment: input.Environment, Workspace: &startupWorkspace{}})
 						require.Error(t, err, "startup cannot overwrite tampered present files")
 						actual, err := os.ReadFile(path)
 						require.NoError(t, err)
