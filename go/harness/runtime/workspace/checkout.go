@@ -410,7 +410,7 @@ func (b *Bootstrapper) observe(ctx context.Context, request Request) (string, st
 	}
 	read, push, err := b.policy.Transport(request.Repo)
 	headers, ok, headersErr := proxyExtraHeaders(b.policy)
-	if err != nil || headersErr != nil || !ok {
+	if err != nil || headersErr != nil || !ok || b.policy.PushProxyOrigin == nil {
 		return "", "", "", errors.New("preparation requires fixed proxy transport")
 	}
 	head, err := b.git.git(ctx, b.dir, "observe HEAD", "rev-parse", "--verify", "HEAD")

@@ -139,6 +139,28 @@ func TestPreparationActualCheckoutAndReadOnlyChallenge(t *testing.T) {
 	}
 }
 
+// Preparation is only assigned to sessions that RequiresWorkspacePreparation,
+// which always pairs a read proxy with a push proxy. observe must keep
+// rejecting a read-only policy even though the checkout itself succeeds,
+// rather than silently confirming a session that can never push.
+func TestPreparationRejectsReadOnlyPolicy(t *testing.T) {
+	f := newGitProxyFixture(t)
+	f.available.Store(true)
+	request := &Request{Repo: "https://github.com/owner/repo.git", Ref: f.sha, Branch: "feature-prepared", Depth: 1}
+	b, _, next := proxyBootstrapper(t, f, false, request)
+	installer := &fixtureInstaller{dir: b.stateDir, config: []byte(`{"mcp_servers":{"mainloop":{"url":"http://mainloop-mcp.mainloop.svc.cluster.local/mcp"}}}`)}
+	config, mcp, err := ConfigDigests(installer.config)
+	require.NoError(t, err)
+	digest, err := SetupDigest("supervisor")
+	require.NoError(t, err)
+	input := Preparation{SessionID: uuid.NewString(), ContextID: uuid.NewString(), CreateRequestID: "create", ActionID: "create:prepare", RequestDigest: Digest([]byte("request")), ExecutionID: uuid.NewString(), ChallengeID: uuid.NewString(), GenerationID: uuid.NewString(), ActorUID: "owned-uid", PreparedRevision: "original", Workspace: *request, Provider: "codex", Profile: "supervisor", SetupDigest: digest, ConfigDigest: config, MCPDigest: mcp}
+	_, err = b.Prepare(t.Context(), input, installer)
+	require.EqualError(t, err, "preparation requires fixed proxy transport")
+	require.Zero(t, installer.installs)
+	require.Zero(t, next.calls)
+	require.True(t, bootstrapped(b.stateDir), "the checkout itself must still succeed in read-only mode")
+}
+
 func TestPreparationRejectsChangedFilesystemAndIdentity(t *testing.T) {
 	for _, profile := range []string{"supervisor", "child", "agent"} {
 		t.Run(profile, func(t *testing.T) {
