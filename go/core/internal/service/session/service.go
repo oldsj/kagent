@@ -84,6 +84,7 @@ type Service struct {
 	shareMaxTTL         time.Duration
 	environmentPreparer EnvironmentPreparer
 	environmentPolicy   EnvironmentPolicy
+	preparationFailures preparationFailureLog
 }
 
 type Option func(*Service)

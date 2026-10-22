@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 
 	"buf.build/go/protovalidate"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -17,9 +18,38 @@ import (
 	codexconfig "github.com/kagent-dev/kagent/go/harness/codex/config"
 	"github.com/kagent-dev/kagent/go/harness/runtime/payload"
 	"github.com/kagent-dev/kagent/go/harness/runtime/workspace"
+	"github.com/kagent-dev/kagent/go/pkg/logging"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
+
+// preparationFailureLog logs each distinct reason PrepareWorkspace found no
+// matching prepared runtime identity once per session/generation, since
+// Mainloop retries every 10s and a persistent rejection would otherwise flood
+// warn logs forever. The gRPC caller still only ever sees the generic
+// FailedPrecondition; this is operator-facing diagnosis only.
+type preparationFailureLog struct {
+	mu   sync.Mutex
+	seen map[string]string
+}
+
+func (l *preparationFailureLog) warn(ctx context.Context, sessionID, generationID, reason string) {
+	key := sessionID + "\x00" + generationID
+	l.mu.Lock()
+	last, logged := l.seen[key]
+	if !logged || last != reason {
+		if l.seen == nil {
+			l.seen = map[string]string{}
+		}
+		l.seen[key] = reason
+	}
+	l.mu.Unlock()
+	if logged && last == reason {
+		return
+	}
+	logging.FromContext(ctx).WarnContext(ctx, "workspace preparation found no matching prepared runtime identity",
+		"session_id", sessionID, "generation_id", generationID, "reason", reason)
+}
 
 type nativePreparationStore interface {
 	BeginWorkspacePreparation(context.Context, *api.PrepareSessionWorkspaceRequest, *api.NativeWorkspacePreparation, *api.Session) (*api.WorkspacePreparationReceipt, error)
@@ -64,6 +94,7 @@ func (s *Service) PrepareWorkspace(ctx context.Context, input *api.PrepareSessio
 	}
 	assignment, err := reader.InspectPreparation(ctx, session)
 	if err != nil || assignment == nil || assignment.GetGenerationId() != input.GetGenerationId() || assignment.GetActorUid() != input.GetActorUid() {
+		s.preparationFailures.warn(ctx, input.GetSessionId(), input.GetGenerationId(), preparationRejectionReason(err, assignment))
 		return nil, serviceerrors.NewFailedPrecondition("Current prepared runtime identity is unavailable", nil)
 	}
 	receipt, err := store.BeginWorkspacePreparation(ctx, input, assignment, session)
@@ -76,6 +107,23 @@ func (s *Service) PrepareWorkspace(ctx context.Context, input *api.PrepareSessio
 		return nil, serviceerrors.NewInternal("Failed to assign workspace preparation", nil)
 	}
 	return receipt, nil
+}
+
+// preparationRejectionReason reports a non-secret explanation for why
+// PrepareWorkspace found no matching prepared runtime identity: an error from
+// InspectRuntime or CheckPreparationRuntime (which check failed: actor identity
+// or state, template, D/R snapshot, image, platform, payload, Git policy, CLI
+// version, or Git references), or, with no error, the identity comparison
+// itself finding no active runtime or a generation/Actor mismatch.
+func preparationRejectionReason(err error, assignment *api.NativeWorkspacePreparation) string {
+	switch {
+	case err != nil:
+		return err.Error()
+	case assignment == nil:
+		return "no active prepared runtime for this session"
+	default:
+		return "prepared runtime generation or Actor no longer matches the request"
+	}
 }
 
 func hasUnknownPreparation(input proto.Message) bool {
@@ -93,8 +141,11 @@ func hasUnknownPreparation(input proto.Message) bool {
 // CheckPreparationRuntime compares trusted original preparation, the exact fresh
 // Actor and its immutable template. Runtime-reported D/R never supplies defaults.
 func CheckPreparationRuntime(session *api.Session, revision *database.RuntimeRevision, actor *ateapipb.Actor, template *ateapipb.ActorTemplate) (*api.NativeWorkspacePreparation, error) {
-	if !database.RequiresWorkspacePreparation(session) || revision == nil || !validActorIdentity(actor, revision, actor.GetMetadata().GetName()) || actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING || template.GetMetadata().GetUid() != revision.ActorTemplateUID || template.GetMetadata().GetAtespace() != revision.ActorTemplateAtespace || template.GetMetadata().GetName() != revision.ActorTemplateName || len(template.GetContainers()) != 1 {
-		return nil, fmt.Errorf("prepared Actor identity differs")
+	if !database.RequiresWorkspacePreparation(session) || revision == nil || !validActorIdentity(actor, revision, actor.GetMetadata().GetName()) || actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		return nil, fmt.Errorf("prepared Actor identity or state differs")
+	}
+	if template.GetMetadata().GetUid() != revision.ActorTemplateUID || template.GetMetadata().GetAtespace() != revision.ActorTemplateAtespace || template.GetMetadata().GetName() != revision.ActorTemplateName || len(template.GetContainers()) != 1 {
+		return nil, fmt.Errorf("prepared Actor template differs")
 	}
 	var original database.EnvironmentRevisionSnapshot
 	if err := json.Unmarshal(revision.SourceSnapshot, &original); err != nil || original.BaseRevision == "" || !proto.Equal(original.Environment, session.GetDevelopmentEnvironment()) || !proto.Equal(original.Composition, session.GetRuntimeComposition()) {
@@ -148,11 +199,14 @@ func CheckPreparationRuntime(session *api.Session, revision *database.RuntimeRev
 	default:
 		return nil, fmt.Errorf("unsupported native provider")
 	}
-	if policy == nil || policy.ReadProxyOrigin == nil || policy.PushProxyOrigin == nil || policy.Validate() != nil || cliVersion != composition.GetCliVersion() {
-		return nil, fmt.Errorf("original enforcing Git/native configuration differs")
+	if policy == nil || policy.ReadProxyOrigin == nil || policy.PushProxyOrigin == nil || policy.Validate() != nil {
+		return nil, fmt.Errorf("original enforcing Git policy differs")
+	}
+	if cliVersion != composition.GetCliVersion() {
+		return nil, fmt.Errorf("original CLI version differs")
 	}
 	if _, _, err := policy.Transport(session.GetWorkspace().GetRepo()); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("original Git policy rejects the workspace repository: %w", err)
 	}
 	read, push := 0, 0
 	for _, credential := range session.GetCredentials() {
