@@ -8,8 +8,14 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	apiworkspace "github.com/kagent-dev/kagent/go/api/workspace"
 	"github.com/stretchr/testify/require"
 )
+
+// defaultGitBlock is the compiled Git policy JSON for the default "mainloop"
+// Mainloop instance, the shape ConfigDigests requires to resolve a config's
+// Mainloop instance namespace.
+const defaultGitBlock = `"git":{"origins":["github.com"],"readProxyOrigin":"http://mainloop-git-read.mainloop.svc.cluster.local","pushProxyOrigin":"http://mainloop-git-push.mainloop.svc.cluster.local"}`
 
 func TestStandingSetupDigests(t *testing.T) {
 	for _, test := range []struct {
@@ -36,7 +42,7 @@ func TestStandingSetupDigests(t *testing.T) {
 func TestRestoreSetupProfilesAndFencing(t *testing.T) {
 	for _, profile := range []string{"supervisor", "child", "agent"} {
 		t.Run(profile, func(t *testing.T) {
-			raw := []byte(`{"mcp_servers":{"mainloop":{"url":"http://mainloop-mcp.mainloop.svc.cluster.local/mcp"}}}`)
+			raw := []byte(`{"mcp_servers":{"mainloop":{"url":"http://mainloop-mcp.mainloop.svc.cluster.local/mcp"}},` + defaultGitBlock + `}`)
 			stateDir := t.TempDir()
 			config, mcp, err := ConfigDigests(raw)
 			require.NoError(t, err)
@@ -98,7 +104,7 @@ func preparationFixture(t *testing.T, profile string) (*gitProxyFixture, *Bootst
 	f.available.Store(true)
 	request := &Request{Repo: "https://github.com/owner/repo.git", Ref: f.sha, Branch: "feature-prepared", Depth: 1}
 	b, _, next := proxyBootstrapper(t, f, true, request)
-	installer := &fixtureInstaller{dir: b.stateDir, config: []byte(`{"mcp_servers":{"mainloop":{"url":"http://mainloop-mcp.mainloop.svc.cluster.local/mcp"}}}`)}
+	installer := &fixtureInstaller{dir: b.stateDir, config: []byte(`{"mcp_servers":{"mainloop":{"url":"http://mainloop-mcp.mainloop.svc.cluster.local/mcp"}},` + defaultGitBlock + `}`)}
 	config, mcp, err := ConfigDigests(installer.config)
 	require.NoError(t, err)
 	digest, err := SetupDigest(profile)
@@ -148,7 +154,7 @@ func TestPreparationRejectsReadOnlyPolicy(t *testing.T) {
 	f.available.Store(true)
 	request := &Request{Repo: "https://github.com/owner/repo.git", Ref: f.sha, Branch: "feature-prepared", Depth: 1}
 	b, _, next := proxyBootstrapper(t, f, false, request)
-	installer := &fixtureInstaller{dir: b.stateDir, config: []byte(`{"mcp_servers":{"mainloop":{"url":"http://mainloop-mcp.mainloop.svc.cluster.local/mcp"}}}`)}
+	installer := &fixtureInstaller{dir: b.stateDir, config: []byte(`{"mcp_servers":{"mainloop":{"url":"http://mainloop-mcp.mainloop.svc.cluster.local/mcp"}},` + defaultGitBlock + `}`)}
 	config, mcp, err := ConfigDigests(installer.config)
 	require.NoError(t, err)
 	digest, err := SetupDigest("supervisor")
@@ -283,4 +289,59 @@ func TestPreparationLostCallbackRestartRetainsOriginalResult(t *testing.T) {
 			require.Len(t, source.replies, 2)
 		})
 	}
+}
+
+// gitBlock builds the compiled Git policy JSON for a Mainloop instance
+// namespace, in the shape ConfigDigests parses to resolve that instance.
+func gitBlock(namespace string) string {
+	read, push := apiworkspace.GitInstanceOrigins(namespace)
+	return `"git":{"origins":["github.com"],"readProxyOrigin":"` + read + `","pushProxyOrigin":"` + push + `"}`
+}
+
+// mcpServerBlock builds a single compiled MCP server entry under key,
+// deliberately independent of namespace: ConfigDigests binds a server to a
+// Mainloop instance by URL origin, never by its map key.
+func mcpServerBlock(key, namespace string) string {
+	return `"mcp_servers":{"` + key + `":{"url":"` + apiworkspace.MCPInstanceOrigin(namespace) + `/mcp"}}`
+}
+
+// ConfigDigests must bind a config's MCP server to the same Mainloop instance
+// as its compiled Git policy, by URL origin, mirroring #46's Git transport
+// binding and failing closed on any other pairing.
+func TestConfigDigestsBindsMCPServerToGitInstance(t *testing.T) {
+	for _, test := range []struct {
+		name                       string
+		gitNamespace, mcpNamespace string
+		wantErr                    bool
+	}{
+		{"default instance accepted", "mainloop", "mainloop", false},
+		{"second instance accepted with its own server", "mainloop-dev", "mainloop-dev", false},
+		{"second instance rejects the default instance's server", "mainloop-dev", "mainloop", true},
+		{"default instance rejects the second instance's server", "mainloop", "mainloop-dev", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			raw := []byte(`{` + mcpServerBlock("mainloop", test.mcpNamespace) + `,` + gitBlock(test.gitNamespace) + `}`)
+			_, _, err := ConfigDigests(raw)
+			if test.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestConfigDigestsRejectsMissingMCPServer(t *testing.T) {
+	_, _, err := ConfigDigests([]byte(`{` + gitBlock("mainloop") + `}`))
+	require.Error(t, err)
+}
+
+// The default instance's digests must stay byte-identical, since already
+// installed setups pin this exact value.
+func TestConfigDigestsDefaultInstancePinned(t *testing.T) {
+	raw := []byte(`{"mcp_servers":{"mainloop":{"url":"http://mainloop-mcp.mainloop.svc.cluster.local/mcp"}},` + defaultGitBlock + `}`)
+	config, mcp, err := ConfigDigests(raw)
+	require.NoError(t, err)
+	require.Equal(t, "ae54f9fb2ab9f111008b18a746489ce8c999e11f00ee9e4d9e3db7835d7f299c", config)
+	require.Equal(t, "0970deaef31746ebd17de132aac54eb5dc11a43652530a9057de8e2e7c065dc4", mcp)
 }

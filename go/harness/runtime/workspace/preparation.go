@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
 
+	apiworkspace "github.com/kagent-dev/kagent/go/api/workspace"
 	"github.com/kagent-dev/kagent/go/harness/internal/utils"
 )
 
@@ -306,7 +308,12 @@ func (b *Bootstrapper) preparationAdmission(ctx context.Context) error {
 }
 
 // ConfigDigests fingerprints the original compiler document and its immutable
-// MCP configuration, without exposing either document in a receipt.
+// MCP configuration, without exposing either document in a receipt. The MCP
+// server must belong to the same Mainloop instance as the compiled Git
+// policy's read proxy (identified by its URL origin, not its map key, since a
+// compiler is free to name the entry anything): a session can never be issued
+// one instance's MCP identity while its Git policy proxies through another,
+// the same binding #46 established for Git transport.
 func ConfigDigests(raw []byte) (string, string, error) {
 	var config map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &config); err != nil {
@@ -320,11 +327,40 @@ func ConfigDigests(raw []byte) (string, string, error) {
 	if err := json.Unmarshal(config["mcp_servers"], &servers); err != nil {
 		return "", "", errors.New("preparation requires compiled MCP setup")
 	}
-	if servers["mainloop"] == nil {
-		return "", "", errors.New("preparation requires the mainloop MCP server")
+	var policy apiworkspace.Git
+	if err := json.Unmarshal(config["git"], &policy); err != nil || policy.ReadProxyOrigin == nil {
+		return "", "", errors.New("preparation requires a compiled Git policy")
+	}
+	namespace, ok := apiworkspace.ParseGitProxyOrigin(*policy.ReadProxyOrigin, true)
+	if !ok {
+		return "", "", errors.New("preparation requires a compiled Git policy")
+	}
+	if !hasMCPServerOrigin(servers, apiworkspace.MCPInstanceOrigin(namespace)) {
+		return "", "", errors.New("preparation requires the mainloop MCP server for this Mainloop instance")
 	}
 	mcp, err := json.Marshal(servers)
 	return Digest(canonical), Digest(mcp), err
+}
+
+// hasMCPServerOrigin reports whether any of servers has a URL whose origin is
+// exactly origin, regardless of the server's map key.
+func hasMCPServerOrigin(servers map[string]json.RawMessage, origin string) bool {
+	for _, raw := range servers {
+		var server struct {
+			URL string `json:"url"`
+		}
+		if json.Unmarshal(raw, &server) != nil {
+			continue
+		}
+		u, err := url.Parse(server.URL)
+		if err != nil {
+			continue
+		}
+		if u.Scheme+"://"+u.Host == origin {
+			return true
+		}
+	}
+	return false
 }
 
 type installedSetup struct {

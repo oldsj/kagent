@@ -48,6 +48,15 @@ func GitInstanceSecretPatterns(namespace string) (readPattern, pushPattern strin
 	return namespace + "-git-read-*", namespace + "-git-push-*"
 }
 
+// MCPInstanceOrigin returns the canonical origin of a Mainloop Git instance's
+// companion MCP server. A session's compiled MCP server must be bound to this
+// origin for the same namespace as its Git policy's proxies, so a session can
+// never be issued one instance's Git credentials paired with another
+// instance's MCP identity.
+func MCPInstanceOrigin(namespace string) string {
+	return "http://mainloop-mcp." + namespace + ".svc.cluster.local"
+}
+
 // ParseGitProxyOrigin reports the Mainloop Git instance namespace encoded in a
 // canonical read (or, with read=false, push) proxy origin produced by
 // GitInstanceOrigins, or ok=false if origin is not of that exact shape.

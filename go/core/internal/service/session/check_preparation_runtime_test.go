@@ -26,13 +26,23 @@ import (
 // production code the controller uses to build these for the default instance.
 func checkPreparationRuntimeFixture(t *testing.T, namespace string) (*api.Session, *database.RuntimeRevision, *ateapipb.Actor, *ateapipb.ActorTemplate) {
 	t.Helper()
+	servers := map[string]claudeconfig.MCPServer{"mainloop": {Type: "http", URL: "http://mainloop-mcp." + namespace + ".svc.cluster.local/mcp"}}
+	return checkPreparationRuntimeFixtureWithMCPServers(t, namespace, servers)
+}
+
+// checkPreparationRuntimeFixtureWithMCPServers is checkPreparationRuntimeFixture
+// with the compiled MCP servers given explicitly, so a caller can build a
+// config whose Git policy and MCP server disagree on the Mainloop instance, or
+// that carries no MCP server at all.
+func checkPreparationRuntimeFixtureWithMCPServers(t *testing.T, namespace string, servers map[string]claudeconfig.MCPServer) (*api.Session, *database.RuntimeRevision, *ateapipb.Actor, *ateapipb.ActorTemplate) {
+	t.Helper()
 	readOrigin, pushOrigin := apiworkspace.GitInstanceOrigins(namespace)
 	gitPolicy, _, err := translator.CompileGit(&v1alpha3.HarnessGit{Origins: []string{"github.com"}, ReadProxyOrigin: &readOrigin, PushProxyOrigin: &pushOrigin})
 	require.NoError(t, err)
 
 	base := claudeconfig.Production("fixture-model", "original instructions")
 	base.Git = gitPolicy
-	base.MCPServers = map[string]claudeconfig.MCPServer{"mainloop": {Type: "http", URL: "http://mainloop-mcp." + namespace + ".svc.cluster.local/mcp"}}
+	base.MCPServers = servers
 	baseJSON, err := json.Marshal(base)
 	require.NoError(t, err)
 
@@ -98,4 +108,31 @@ func TestCheckPreparationRuntimeAcceptsSecondGitInstance(t *testing.T) {
 			require.NoError(t, err)
 		})
 	}
+}
+
+// A Harness whose Git policy proxies through one Mainloop instance but whose
+// compiled MCP server belongs to another must be rejected in both directions:
+// a session can never be issued one instance's Git identity paired with
+// another's MCP identity.
+func TestCheckPreparationRuntimeRejectsMismatchedMCPInstance(t *testing.T) {
+	for _, test := range []struct {
+		name, gitNamespace, mcpNamespace string
+	}{
+		{"mainloop-dev Git policy with the default instance's MCP server", "mainloop-dev", "mainloop"},
+		{"default Git policy with the mainloop-dev instance's MCP server", "mainloop", "mainloop-dev"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			servers := map[string]claudeconfig.MCPServer{"mainloop": {Type: "http", URL: "http://mainloop-mcp." + test.mcpNamespace + ".svc.cluster.local/mcp"}}
+			session, revision, actor, template := checkPreparationRuntimeFixtureWithMCPServers(t, test.gitNamespace, servers)
+			_, err := CheckPreparationRuntime(session, revision, actor, template)
+			require.Error(t, err)
+		})
+	}
+}
+
+// A Harness with no compiled MCP server at all must be rejected.
+func TestCheckPreparationRuntimeRejectsMissingMCPServer(t *testing.T) {
+	session, revision, actor, template := checkPreparationRuntimeFixtureWithMCPServers(t, "mainloop", nil)
+	_, err := CheckPreparationRuntime(session, revision, actor, template)
+	require.Error(t, err)
 }

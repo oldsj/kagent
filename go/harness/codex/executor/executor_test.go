@@ -79,6 +79,7 @@ func TestPreparationSetupHasNoNativeHistory(t *testing.T) {
 			nativeLog := filepath.Join(data, "native-calls")
 			require.NoError(t, os.WriteFile(cfg.CodexExecutable, []byte("#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf '%s\\n' 'codex-cli "+cfg.ExpectedCodexVersion+"'; exit 0; fi\nprintf 'native call\\n' >> '"+nativeLog+"'\nexit 42\n"), 0700))
 			cfg.Provider = config.Provider{Name: "openai"}
+			cfg.Git = &apiworkspace.Git{Origins: []string{"github.com"}, ReadProxyOrigin: new(apiworkspace.ReadProxyOrigin), PushProxyOrigin: new(apiworkspace.PushProxyOrigin)}
 			cfg.MCPServers = map[string]config.MCPServer{"mainloop": {URL: "http://mainloop-mcp.mainloop.svc.cluster.local/mcp"}}
 			raw, err := json.Marshal(cfg)
 			require.NoError(t, err)
@@ -113,7 +114,7 @@ func TestPreparationSetupHasNoNativeHistory(t *testing.T) {
 			require.NoError(t, os.WriteFile(path, []byte("changed native setup"), 0600))
 			_, _, err = installer.Setup(t.Context(), assignment, true)
 			require.Error(t, err)
-			_, err = New(t.Context(), Config{ConfigJSON: raw, DataDir: data})
+			_, err = New(t.Context(), Config{ConfigJSON: raw, DataDir: data, Workspace: &startupWorkspace{}})
 			require.ErrorContains(t, err, "installed Codex configuration differs")
 			actual, err := os.ReadFile(path)
 			require.NoError(t, err)
@@ -125,7 +126,7 @@ func TestPreparationSetupHasNoNativeHistory(t *testing.T) {
 			setupPath := filepath.Join(stateDir, "native-setup.json")
 			originalSetup, err := os.ReadFile(setupPath)
 			require.NoError(t, err)
-			_, err = New(t.Context(), Config{ConfigJSON: raw, DataDir: data})
+			_, err = New(t.Context(), Config{ConfigJSON: raw, DataDir: data, Workspace: &startupWorkspace{}})
 			require.NoError(t, err)
 			actualHistory, err := os.ReadFile(filepath.Join(data, "adapter", "state.json"))
 			require.NoError(t, err)
