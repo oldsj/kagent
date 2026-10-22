@@ -69,7 +69,12 @@ func nativeActionFixtureWithEgress(t *testing.T, destinations []string) (*Client
 
 func nativeCompletion(t *testing.T, assignment *api.NativeWorkspacePreparation) *api.TaskStoreServiceCompleteWorkspacePreparationRequest {
 	t.Helper()
-	digest, err := workspace.TransportDigest(workspaceProxyPolicy(), assignment.Workspace.Repo)
+	return nativeCompletionForNamespace(t, assignment, "mainloop")
+}
+
+func nativeCompletionForNamespace(t *testing.T, assignment *api.NativeWorkspacePreparation, namespace string) *api.TaskStoreServiceCompleteWorkspacePreparationRequest {
+	t.Helper()
+	digest, err := workspace.TransportDigest(gitInstancePolicy(namespace), assignment.Workspace.Repo)
 	require.NoError(t, err)
 	return &api.TaskStoreServiceCompleteWorkspacePreparationRequest{SessionId: assignment.SessionId, Assignment: proto.CloneOf(assignment), Head: assignment.Workspace.Ref, Branch: assignment.Workspace.Branch, TransportDigest: digest, NativeHook: "developer_instruction", ObservedAt: timestamppb.Now(), Confirmed: true}
 }
@@ -148,6 +153,37 @@ func TestNativePreparationIssueCASAndAdmission(t *testing.T) {
 	require.Equal(t, assigned.ExecutionId, observed.ExecutionId)
 	require.NoError(t, c.CompleteWorkspacePreparation(t.Context(), *g, true, nativeCompletion(t, observed)))
 	require.NoError(t, c.ReserveSessionDispatch(t.Context(), session.Id, uuid.New(), ""))
+}
+
+// A second Mainloop instance's sessions use its own proxy pair end to end: the
+// controller must confirm a workspace whose reported transport matches the
+// dev instance, exactly as it does for the default "mainloop" instance.
+func TestNativePreparationCompletesWithDevGitInstance(t *testing.T) {
+	devRead, devPush := apiworkspace.GitInstanceOrigins("mainloop-dev")
+	c, _, session, g, input, prepared := nativeActionFixtureWithEgress(t, []string{devRead + ":80", devPush + ":80"})
+	_, err := c.BeginWorkspacePreparation(t.Context(), input, prepared, session)
+	require.NoError(t, err)
+	assigned, ready, err := c.AssignWorkspacePreparation(t.Context(), session.Id)
+	require.NoError(t, err)
+	require.False(t, ready)
+	require.NoError(t, c.CompleteWorkspacePreparation(t.Context(), *g, true, nativeCompletionForNamespace(t, assigned, "mainloop-dev")))
+	effect, err := c.GetWorkspacePreparationReceipt(t.Context(), session.Id)
+	require.NoError(t, err)
+	require.Equal(t, "confirmed", effect.Classification)
+}
+
+// A transport digest computed for the wrong instance must never confirm
+// preparation: a session must never be accepted as using one instance's
+// proxies when its revision's egress pins a different instance's pair.
+func TestNativePreparationRejectsMismatchedGitInstanceTransport(t *testing.T) {
+	devRead, devPush := apiworkspace.GitInstanceOrigins("mainloop-dev")
+	c, _, session, g, input, prepared := nativeActionFixtureWithEgress(t, []string{devRead + ":80", devPush + ":80"})
+	_, err := c.BeginWorkspacePreparation(t.Context(), input, prepared, session)
+	require.NoError(t, err)
+	assigned, ready, err := c.AssignWorkspacePreparation(t.Context(), session.Id)
+	require.NoError(t, err)
+	require.False(t, ready)
+	require.ErrorIs(t, c.CompleteWorkspacePreparation(t.Context(), *g, true, nativeCompletionForNamespace(t, assigned, "mainloop")), ErrFailedPrecondition)
 }
 
 func TestNativePreparationLateReceiptIsHistorical(t *testing.T) {
@@ -380,16 +416,20 @@ func TestNativePreparationMigrationReplay(t *testing.T) {
 
 func TestUsesEnforcingGitProxies(t *testing.T) {
 	read, push := apiworkspace.ReadProxyOrigin+":80", apiworkspace.PushProxyOrigin+":80"
+	devRead, devPush := apiworkspace.GitInstanceOrigins("mainloop-dev")
 	for name, tc := range map[string]struct {
 		destinations []string
 		want         bool
 	}{
-		"none":         {nil, false},
-		"direct Git":   {[]string{"https://github.com:443"}, false},
-		"read only":    {[]string{read}, false},
-		"push only":    {[]string{push}, false},
-		"both proxies": {[]string{"http://mainloop-mcp.mainloop.svc.cluster.local:80", read, push}, true},
-		"bare proxies": {[]string{apiworkspace.ReadProxyOrigin, apiworkspace.PushProxyOrigin}, false},
+		"none":             {nil, false},
+		"direct Git":       {[]string{"https://github.com:443"}, false},
+		"read only":        {[]string{read}, false},
+		"push only":        {[]string{push}, false},
+		"both proxies":     {[]string{"http://mainloop-mcp.mainloop.svc.cluster.local:80", read, push}, true},
+		"bare proxies":     {[]string{apiworkspace.ReadProxyOrigin, apiworkspace.PushProxyOrigin}, false},
+		"dev instance":     {[]string{devRead + ":80", devPush + ":80"}, true},
+		"cross-instance":   {[]string{read, devPush + ":80"}, false},
+		"unknown instance": {[]string{"http://mainloop-git-read.other.svc.cluster.local:80", "http://mainloop-git-push.other.svc.cluster.local:80"}, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			require.Equal(t, tc.want, UsesEnforcingGitProxies(tc.destinations))

@@ -108,7 +108,7 @@ This reference covers user-configurable settings for the controller, CLI, standa
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `KAGENT_AUTH_MODE` | String | `insecure` | Controller authentication mode: insecure, trusted-proxy, or service-token. trusted-proxy requires an upstream credential-validating proxy and network isolation preventing bypass. |
-| `KAGENT_AUTH_SERVICE_POLICY` | String | `(none)` | JSON Mainloop Agent and credential allowlist; required in service-token mode. |
+| `KAGENT_AUTH_SERVICE_POLICY` | String | `(none)` | JSON Mainloop Agent and credential allowlist; required in service-token mode. Its `gitInstanceNamespaces` field lists the Mainloop Git instances (by namespace) this controller approves Git credential tuples for; empty/omitted defaults to `["mainloop"]`. |
 | `KAGENT_AUTH_SERVICE_TOKEN_CURRENT_FILE` | String | `(none)` | Current service bearer file, read on each request. |
 | `KAGENT_AUTH_SERVICE_TOKEN_NEXT_FILE` | String | `(none)` | Optional overlapping service bearer file, read on each request. |
 | `KAGENT_AUTH_USER_ID_CLAIM` | String | `(none)` | JWT claim used for the caller identity in trusted-proxy mode. Empty uses sub; a missing or empty custom claim falls back to sub. |

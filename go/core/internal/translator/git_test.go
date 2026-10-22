@@ -40,6 +40,20 @@ func TestCompileGitProxy(t *testing.T) {
 	require.Nil(t, policy)
 	require.Nil(t, destinations)
 }
+
+func TestCompileGitProxyDevInstance(t *testing.T) {
+	devRead, devPush := workspace.GitInstanceOrigins("mainloop-dev")
+	spec := &v1alpha3.HarnessGit{Origins: []string{"github.com"}, ReadProxyOrigin: &devRead, PushProxyOrigin: &devPush}
+	policy, destinations, err := v2translator.CompileGit(spec)
+	require.NoError(t, err)
+	require.Equal(t, []string{devRead + ":80", devPush + ":80"}, destinations)
+	require.NoError(t, v2translator.ValidateGitEgress(policy, destinations, nil))
+	// A session must never be issued one instance's read origin paired with
+	// another instance's push origin.
+	mismatched := &v1alpha3.HarnessGit{Origins: []string{"github.com"}, ReadProxyOrigin: &devRead, PushProxyOrigin: new(workspace.PushProxyOrigin)}
+	_, _, err = v2translator.CompileGit(mismatched)
+	require.Error(t, err)
+}
 func TestEffectiveGitEgress(t *testing.T) {
 	for _, origin := range []string{"https://*.example.com:443", "https://127.0.0.1:443", "http://[::1]:80", "tcp://github.com:22"} {
 		_, err := substrate.ActorEgressPolicy("mainloop", []string{origin}, nil)
@@ -57,6 +71,15 @@ func TestEffectiveGitEgress(t *testing.T) {
 		require.Error(t, v2translator.ValidateGitEgress(nil, []string{origin}, nil))
 	}
 	require.Error(t, v2translator.ValidateGitEgress(&workspace.Git{Origins: []string{"github.com"}, ReadProxyOrigin: new(workspace.ReadProxyOrigin)}, []string{workspace.PushProxyOrigin + ":80"}, nil))
+
+	devRead, devPush := workspace.GitInstanceOrigins("mainloop-dev")
+	devPolicy := &workspace.Git{Origins: []string{"github.com"}, ReadProxyOrigin: &devRead, PushProxyOrigin: &devPush}
+	require.NoError(t, v2translator.ValidateGitEgress(devPolicy, []string{devRead + ":80", devPush + ":80"}, nil))
+	// The mainloop policy must never accept the dev instance's destinations, and
+	// vice versa: each harness's origin is paired only with its own tuple.
+	require.Error(t, v2translator.ValidateGitEgress(policy, []string{devRead + ":80", workspace.PushProxyOrigin + ":80"}, nil))
+	require.Error(t, v2translator.ValidateGitEgress(devPolicy, []string{workspace.ReadProxyOrigin + ":80", devPush + ":80"}, nil))
+	require.Error(t, v2translator.ValidateGitEgress(nil, []string{devRead + ":80"}, nil))
 	for _, binding := range []egress.Credential{
 		{Hostname: "api.openai.com", Header: "authorization", URI: "ate-secret://k8s.io/default/kagent/mainloop-git-auth/authorization"},
 		{Hostname: "mainloop-git-read.mainloop.svc.cluster.local", Header: "x-extra", URI: "ate-secret://k8s.io/default/kagent/binding/key"},

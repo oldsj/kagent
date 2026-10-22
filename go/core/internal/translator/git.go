@@ -50,10 +50,6 @@ func mustProxyURL(origin string) *url.URL {
 	return u
 }
 
-func gitProxyHost(host string) bool {
-	return host == mustProxyURL(workspace.ReadProxyOrigin).Hostname() || host == mustProxyURL(workspace.PushProxyOrigin).Hostname()
-}
-
 func directGitHubHost(host string) bool {
 	for _, domain := range []string{"github.com", "githubusercontent.com", "githubassets.com", "github.io"} {
 		if host == domain || strings.HasSuffix(host, "."+domain) {
@@ -84,8 +80,8 @@ func ValidateGitEgress(policy *workspace.Git, destinations []string, credentials
 		if directGitHubHost(host) {
 			return NewValidationError("effective egress contains direct GitHub authority")
 		}
-		if gitProxyHost(host) {
-			allowed := policy != nil && (egress.Origin(u) == workspace.ReadProxyOrigin+":80" || (policy.PushProxyOrigin != nil && egress.Origin(u) == workspace.PushProxyOrigin+":80"))
+		if workspace.IsGitProxyHost(host) {
+			allowed := policy != nil && policy.ReadProxyOrigin != nil && (egress.Origin(u) == *policy.ReadProxyOrigin+":80" || (policy.PushProxyOrigin != nil && egress.Origin(u) == *policy.PushProxyOrigin+":80"))
 			if !allowed {
 				return NewValidationError("effective egress contains an unapproved Git proxy origin")
 			}
@@ -98,7 +94,7 @@ func ValidateGitEgress(policy *workspace.Git, destinations []string, credentials
 		}
 		parts := strings.Split(strings.TrimPrefix(u.Path, "/"), "/")
 		host := workspace.NormalizeHost(credential.Hostname)
-		if directGitHubHost(host) || gitProxyHost(host) || (len(parts) == 4 && parts[2] == "mainloop-git-auth") {
+		if directGitHubHost(host) || workspace.IsGitProxyHost(host) || (len(parts) == 4 && parts[2] == "mainloop-git-auth") {
 			return NewValidationError("effective revision contains a reserved Git credential; Git proxies require per-Session references")
 		}
 	}

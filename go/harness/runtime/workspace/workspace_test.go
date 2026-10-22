@@ -665,3 +665,36 @@ func TestRunLeftoverStartedDoesNotLetLaterDoneRemovalResetAgentGit(t *testing.T)
 		t.Fatalf("HEAD = %s, want %s with the agent's file kept", got, head)
 	}
 }
+
+// The pre-PR TransportDigest always hardcoded both the read and push origin
+// extraheader keys, even for a read-only policy (no PushProxyOrigin), so a
+// session confirmed under that code must see the identical digest today. The
+// values below were computed by that code (one read/push origin pair, no
+// per-instance derivation) at mainloop-substrate-0-4 for the "mainloop"
+// instance and https://github.com/owner/repo.
+func TestTransportDigestPinnedForDefaultInstance(t *testing.T) {
+	const repo = "https://github.com/owner/repo"
+	for _, test := range []struct {
+		name   string
+		policy apiworkspace.Git
+		digest string
+	}{
+		{
+			name:   "read-write",
+			policy: apiworkspace.Git{Origins: []string{"github.com"}, ReadProxyOrigin: new(apiworkspace.ReadProxyOrigin), PushProxyOrigin: new(apiworkspace.PushProxyOrigin)},
+			digest: "a2fd4cdc7af06f69431c6176116d1ab4a82dfb4cc673cb34492399baf955c212",
+		},
+		{
+			name:   "read-only",
+			policy: apiworkspace.Git{Origins: []string{"github.com"}, ReadProxyOrigin: new(apiworkspace.ReadProxyOrigin)},
+			digest: "6fb336f0c9072796a4462b63537760a8d2cfc88cfd3c27d4d74589e89290ee41",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			digest, err := TransportDigest(test.policy, repo)
+			if err != nil || digest != test.digest {
+				t.Fatalf("TransportDigest() = %q, %v; want %q, nil", digest, err, test.digest)
+			}
+		})
+	}
+}

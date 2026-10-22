@@ -24,11 +24,27 @@ func RequiresWorkspacePreparation(session *api.Session) bool {
 }
 
 // UsesEnforcingGitProxies reports whether a revision's effective egress reaches
-// Git through both Mainloop proxies, the only configuration preparation accepts.
-// The compiler adds both origins only for a proxy-mode Git policy; extra proxy
-// destinations on a direct-Git revision fail closed into enforcement.
+// Git through both proxies of a single known Mainloop Git instance, the only
+// configuration preparation accepts. The compiler adds both origins only for a
+// proxy-mode Git policy; extra proxy destinations on a direct-Git revision
+// fail closed into enforcement.
 func UsesEnforcingGitProxies(destinations []string) bool {
-	return slices.Contains(destinations, apiworkspace.ReadProxyOrigin+":80") && slices.Contains(destinations, apiworkspace.PushProxyOrigin+":80")
+	_, ok := matchedGitInstanceNamespace(destinations)
+	return ok
+}
+
+// matchedGitInstanceNamespace reports the known Mainloop Git instance whose
+// enforcing proxy pair the revision's effective egress destinations reach, if
+// any. A revision's destinations are compiler output pinned at RecordRuntimeRevision
+// time, so at most one known instance's pair can be present.
+func matchedGitInstanceNamespace(destinations []string) (string, bool) {
+	for _, namespace := range apiworkspace.KnownGitInstanceNamespaces {
+		readOrigin, pushOrigin := apiworkspace.GitInstanceOrigins(namespace)
+		if slices.Contains(destinations, readOrigin+":80") && slices.Contains(destinations, pushOrigin+":80") {
+			return namespace, true
+		}
+	}
+	return "", false
 }
 
 // RequiresPreparedAdmission gates task admission on a confirmed preparation.
@@ -393,9 +409,15 @@ func (c *Client) CompleteWorkspacePreparation(ctx context.Context, binding Runti
 			if assignment.GetProvider() == "claude" {
 				expectedHook = "append_system_prompt"
 			}
-			policy := workspaceProxyPolicy()
-			expectedTransport, err := workspace.TransportDigest(policy, assignment.GetWorkspace().GetRepo())
-			if err != nil || input.GetHead() != assignment.GetWorkspace().GetRef() || input.GetBranch() != assignment.GetWorkspace().GetBranch() || input.GetTransportDigest() != expectedTransport || input.GetNativeHook() != expectedHook {
+			destinations, err := queryOne(ctx, tx, `SELECT egress_destinations FROM runtime_revision WHERE revision = $1`, pgx.RowTo[[]string], receipt.GetOriginal().GetPreparedRevision())
+			if err != nil {
+				return notFoundOr(err)
+			}
+			namespace, ok := matchedGitInstanceNamespace(destinations)
+			if !ok {
+				return ErrFailedPrecondition
+			}
+			if input.GetHead() != assignment.GetWorkspace().GetRef() || input.GetBranch() != assignment.GetWorkspace().GetBranch() || input.GetNativeHook() != expectedHook || !matchesGitInstanceTransport(input.GetTransportDigest(), assignment.GetWorkspace().GetRepo(), namespace) {
 				return ErrFailedPrecondition
 			}
 			receipt.Classification = "confirmed"
@@ -454,6 +476,17 @@ func requireNativeTaskAdmission(ctx context.Context, tx pgx.Tx, row sessionRow) 
 	return nil
 }
 
-func workspaceProxyPolicy() apiworkspace.Git {
-	return apiworkspace.Git{Origins: []string{"github.com"}, ReadProxyOrigin: new(apiworkspace.ReadProxyOrigin), PushProxyOrigin: new(apiworkspace.PushProxyOrigin)}
+// matchesGitInstanceTransport reports whether digest is the TransportDigest of
+// repo under namespace's enforcing proxy pair specifically. Checking only the
+// session's own instance, rather than every known one, is what stops a
+// transport digest computed for a different Mainloop instance's proxies from
+// confirming a session whose revision pins a different instance's pair.
+func matchesGitInstanceTransport(digest, repo, namespace string) bool {
+	expected, err := workspace.TransportDigest(gitInstancePolicy(namespace), repo)
+	return err == nil && digest == expected
+}
+
+func gitInstancePolicy(namespace string) apiworkspace.Git {
+	readOrigin, pushOrigin := apiworkspace.GitInstanceOrigins(namespace)
+	return apiworkspace.Git{Origins: []string{"github.com"}, ReadProxyOrigin: &readOrigin, PushProxyOrigin: &pushOrigin}
 }

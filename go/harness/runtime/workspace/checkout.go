@@ -99,15 +99,23 @@ func (g *gitRunner) checkout(ctx context.Context, c checkout) error {
 		if c.Credential || c.ReadURL == "" || c.PushURL == "" {
 			return errors.New("invalid Git proxy transport")
 		}
+		var proxyNamespace string
 		for i, rawURL := range []string{c.ReadURL, c.PushURL} {
 			u, err := url.Parse(rawURL)
 			if err != nil || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 				return errors.New("invalid Git proxy transport")
 			}
 			origin := u.Scheme + "://" + u.Host
-			if origin != apiworkspace.ReadProxyOrigin && (i == 0 || origin != apiworkspace.PushProxyOrigin) {
+			namespace, ok := apiworkspace.ParseGitProxyOrigin(origin, i == 0)
+			if i == 1 && !ok {
+				// Read-only mode (no push proxy) puts the push URL on the same
+				// instance's read origin.
+				namespace, ok = apiworkspace.ParseGitProxyOrigin(origin, true)
+			}
+			if !ok || (i == 1 && namespace != proxyNamespace) {
 				return errors.New("invalid Git proxy transport")
 			}
+			proxyNamespace = namespace
 			proxyOrigins = append(proxyOrigins, origin)
 		}
 	}
@@ -356,6 +364,26 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// proxyExtraHeaders returns the fixed http.<origin>/.extraheader entries for
+// policy's Mainloop Git instance, keyed by both that instance's read and push
+// origin even when the policy publishes no push proxy (read-only mode), so the
+// transport fingerprint does not depend on whether the session can push.
+// ok is false when policy has no proxy transport at all.
+func proxyExtraHeaders(policy apiworkspace.Git) (headers map[string]string, ok bool, err error) {
+	if policy.ReadProxyOrigin == nil {
+		return nil, false, nil
+	}
+	namespace, valid := apiworkspace.ParseGitProxyOrigin(*policy.ReadProxyOrigin, true)
+	if !valid {
+		return nil, false, errors.New("invalid Git proxy transport")
+	}
+	readOrigin, pushOrigin := apiworkspace.GitInstanceOrigins(namespace)
+	return map[string]string{
+		"http." + readOrigin + "/.extraheader": placeholderHeader,
+		"http." + pushOrigin + "/.extraheader": placeholderHeader,
+	}, true, nil
+}
+
 // TransportDigest measures the fixed repository-local transport configuration.
 // It contains only canonical URLs and inert placeholders, never credential values.
 func TransportDigest(policy apiworkspace.Git, repo string) (string, error) {
@@ -363,7 +391,14 @@ func TransportDigest(policy apiworkspace.Git, repo string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	expected := map[string]string{"remote.origin.url": read, "remote.origin.pushurl": push, "http.followredirects": "false", "http." + apiworkspace.ReadProxyOrigin + "/.extraheader": placeholderHeader, "http." + apiworkspace.PushProxyOrigin + "/.extraheader": placeholderHeader}
+	expected := map[string]string{"remote.origin.url": read, "remote.origin.pushurl": push, "http.followredirects": "false"}
+	headers, _, err := proxyExtraHeaders(policy)
+	if err != nil {
+		return "", err
+	}
+	for key, value := range headers {
+		expected[key] = value
+	}
 	data, err := json.Marshal(expected)
 	return Digest(data), err
 }
@@ -374,7 +409,8 @@ func (b *Bootstrapper) observe(ctx context.Context, request Request) (string, st
 		return "", "", "", errors.New("workspace Git directory is not owned")
 	}
 	read, push, err := b.policy.Transport(request.Repo)
-	if err != nil || b.policy.ReadProxyOrigin == nil || b.policy.PushProxyOrigin == nil {
+	headers, ok, headersErr := proxyExtraHeaders(b.policy)
+	if err != nil || headersErr != nil || !ok || b.policy.PushProxyOrigin == nil {
 		return "", "", "", errors.New("preparation requires fixed proxy transport")
 	}
 	head, err := b.git.git(ctx, b.dir, "observe HEAD", "rev-parse", "--verify", "HEAD")
@@ -389,7 +425,10 @@ func (b *Bootstrapper) observe(ctx context.Context, request Request) (string, st
 	if err != nil {
 		return "", "", "", err
 	}
-	required := map[string]string{"remote.origin.url": read, "remote.origin.pushurl": push, "http.followredirects": "false", "http." + apiworkspace.ReadProxyOrigin + "/.extraheader": placeholderHeader, "http." + apiworkspace.PushProxyOrigin + "/.extraheader": placeholderHeader}
+	required := map[string]string{"remote.origin.url": read, "remote.origin.pushurl": push, "http.followredirects": "false"}
+	for key, value := range headers {
+		required[key] = value
+	}
 	allowed := map[string]string{"core.repositoryformatversion": "0", "core.filemode": "true", "core.bare": "false", "core.logallrefupdates": "true", "remote.origin.fetch": "+refs/heads/*:refs/remotes/origin/*"}
 	seen := map[string]bool{}
 	for item := range strings.SplitSeq(strings.TrimSuffix(config, "\x00"), "\x00") {

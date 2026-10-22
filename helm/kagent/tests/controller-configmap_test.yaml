@@ -180,6 +180,27 @@ tests:
           path: data.KAGENT_AUTH_SERVICE_POLICY
           pattern: '"cleartextMCPOrigins":\["http://mainloop-mcp.mainloop.svc.cluster.local"\]'
 
+  - it: renders no explicit Git instance allowlist by default
+    set:
+      controller.auth.mode: service-token
+      controller.auth.serviceToken.secretName: mainloop-control
+    asserts:
+      - matchRegex:
+          path: data.KAGENT_AUTH_SERVICE_POLICY
+          pattern: '"gitInstanceNamespaces":\[\]'
+
+  - it: renders an explicit Git instance allowlist enabling a second Mainloop instance
+    set:
+      controller.auth.mode: service-token
+      controller.auth.serviceToken.secretName: mainloop-control
+      controller.auth.serviceToken.gitInstanceNamespaces:
+        - mainloop
+        - mainloop-dev
+    asserts:
+      - matchRegex:
+          path: data.KAGENT_AUTH_SERVICE_POLICY
+          pattern: '"gitInstanceNamespaces":\["mainloop","mainloop-dev"\]'
+
   - it: keeps short Substrate calls and a snapshot-sized lifecycle deadline by default
     set:
       controller.substrate.enabled: true

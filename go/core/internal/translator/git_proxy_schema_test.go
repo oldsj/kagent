@@ -56,12 +56,17 @@ func TestGitProxyGeneratedSchemasAndCEL(t *testing.T) {
 				{"port", map[string]any{"origins": []any{"github.com"}, "readProxyOrigin": workspace.ReadProxyOrigin + ":80"}, false},
 				{"swapped", map[string]any{"origins": []any{"github.com"}, "readProxyOrigin": workspace.PushProxyOrigin}, false},
 				{"loopback", map[string]any{"origins": []any{"github.com"}, "readProxyOrigin": "http://127.0.0.1"}, false},
+				{"dev both", map[string]any{"origins": []any{"github.com"}, "readProxyOrigin": "http://mainloop-git-read.mainloop-dev.svc.cluster.local", "pushProxyOrigin": "http://mainloop-git-push.mainloop-dev.svc.cluster.local"}, true},
+				{"cross-instance dev read prod push", map[string]any{"origins": []any{"github.com"}, "readProxyOrigin": "http://mainloop-git-read.mainloop-dev.svc.cluster.local", "pushProxyOrigin": workspace.PushProxyOrigin}, false},
+				{"cross-instance prod read dev push", map[string]any{"origins": []any{"github.com"}, "readProxyOrigin": workspace.ReadProxyOrigin, "pushProxyOrigin": "http://mainloop-git-push.mainloop-dev.svc.cluster.local"}, false},
+				{"unknown instance", map[string]any{"origins": []any{"github.com"}, "readProxyOrigin": "http://mainloop-git-read.other.svc.cluster.local"}, false},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
 					errs := schemavalidation.ValidateCustomResource(field.NewPath("git"), tc.value, validator)
 					celErrs, _ := cel.Validate(t.Context(), field.NewPath("git"), structural, tc.value, nil, 10000000)
 					require.Equal(t, tc.valid, len(errs) == 0 && len(celErrs) == 0, "schema=%v CEL=%v", errs, celErrs)
-					if tc.name == "push alone" || tc.name == "other identity" || tc.name == "two identities" || tc.name == "PAT" {
+					if tc.name == "push alone" || tc.name == "other identity" || tc.name == "two identities" || tc.name == "PAT" ||
+						tc.name == "cross-instance dev read prod push" || tc.name == "cross-instance prod read dev push" {
 						require.NotEmpty(t, celErrs, "must actually evaluate CEL")
 					}
 				})

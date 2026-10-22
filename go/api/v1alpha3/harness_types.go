@@ -122,6 +122,7 @@ type ClaudeHarness struct{}
 // +kubebuilder:validation:XValidation:rule="!has(self.pushProxyOrigin) || has(self.readProxyOrigin)",message="pushProxyOrigin requires readProxyOrigin"
 // +kubebuilder:validation:XValidation:rule="!has(self.readProxyOrigin) || (self.origins.size() == 1 && self.origins[0] == 'github.com')",message="Git proxies require the single canonical github.com origin"
 // +kubebuilder:validation:XValidation:rule="!has(self.readProxyOrigin) || !has(self.credentialSecretRef)",message="Git proxies cannot use credentialSecretRef"
+// +kubebuilder:validation:XValidation:rule="!has(self.readProxyOrigin) || !has(self.pushProxyOrigin) || (self.readProxyOrigin == 'http://mainloop-git-read.mainloop.svc.cluster.local' && self.pushProxyOrigin == 'http://mainloop-git-push.mainloop.svc.cluster.local') || (self.readProxyOrigin == 'http://mainloop-git-read.mainloop-dev.svc.cluster.local' && self.pushProxyOrigin == 'http://mainloop-git-push.mainloop-dev.svc.cluster.local')",message="readProxyOrigin and pushProxyOrigin must belong to the same Mainloop Git instance"
 type HarnessGit struct {
 	// Origins lists the HTTPS Git hosts sessions may clone from, for example
 	// github.com. Each is an exact DNS name without scheme, port, or path.
@@ -134,16 +135,18 @@ type HarnessGit struct {
 	Origins []string `json:"origins"`
 
 	// ReadProxyOrigin routes canonical GitHub checkouts through the trusted read
-	// listener. Authorization comes from per-Session references, never a GitHub
-	// credential. Omitted retains standalone direct Git behavior.
-	// +kubebuilder:validation:Enum="http://mainloop-git-read.mainloop.svc.cluster.local"
+	// listener of a known Mainloop Git instance. Authorization comes from
+	// per-Session references, never a GitHub credential. Omitted retains
+	// standalone direct Git behavior.
+	// +kubebuilder:validation:Enum="http://mainloop-git-read.mainloop.svc.cluster.local";"http://mainloop-git-read.mainloop-dev.svc.cluster.local"
 	// +optional
 	ReadProxyOrigin *string `json:"readProxyOrigin,omitempty"`
 
 	// PushProxyOrigin routes publication through the separate trusted push
-	// listener. Omitted leaves receive-pack on the read listener, which denies it.
-	// A transport origin does not grant publication authority.
-	// +kubebuilder:validation:Enum="http://mainloop-git-push.mainloop.svc.cluster.local"
+	// listener of the same Mainloop Git instance as ReadProxyOrigin. Omitted
+	// leaves receive-pack on the read listener, which denies it. A transport
+	// origin does not grant publication authority.
+	// +kubebuilder:validation:Enum="http://mainloop-git-push.mainloop.svc.cluster.local";"http://mainloop-git-push.mainloop-dev.svc.cluster.local"
 	// +optional
 	PushProxyOrigin *string `json:"pushProxyOrigin,omitempty"`
 
