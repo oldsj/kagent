@@ -17,6 +17,7 @@ import (
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -36,11 +37,16 @@ type testStore struct {
 	tagUID      string
 	snapshotErr error
 	forked      *apiv1alpha1.Session
-	failed      string
-	deleted     bool
-	finalizeErr error
-	reserveErr  error
-	scope       string
+	// forkCredentials is what the most recent ForkSession call received.
+	forkCredentials []*apiv1alpha1.SessionCredential
+	// forkErr, if set, is returned by ForkSession instead of creating a fork.
+	forkErr        error
+	failed         string
+	deleted        bool
+	finalizeErr    error
+	reserveErr     error
+	beginDeleteErr error
+	scope          string
 	// agent is the Agent the checkpoint's source Session runs; nil means the
 	// allowlisted one the Mainloop fixtures use.
 	agent *apiv1alpha1.ResourceReference
@@ -119,6 +125,9 @@ func (s *testStore) ListSessionCheckpoints(context.Context, string, string, stri
 }
 
 func (s *testStore) BeginDeleteSessionCheckpoint(context.Context, string, string) (*database.SessionTaskSnapshot, string, error) {
+	if s.beginDeleteErr != nil {
+		return nil, "", s.beginDeleteErr
+	}
 	if s.prepared == nil {
 		return nil, "", database.ErrNotFound
 	}
@@ -139,10 +148,14 @@ func (s *testStore) UpdateCheckpointName(_ context.Context, _, _, name string) (
 	return s.prepared, nil
 }
 
-func (s *testStore) ForkSession(_ context.Context, _ string, userID, _ string, sessionID string, fresh bool) (*apiv1alpha1.Session, bool, error) {
+func (s *testStore) ForkSession(_ context.Context, _ string, userID, _ string, sessionID string, fresh bool, credentials ...*apiv1alpha1.SessionCredential) (*apiv1alpha1.Session, bool, error) {
+	s.forkCredentials = credentials
+	if s.forkErr != nil {
+		return nil, false, s.forkErr
+	}
 	if s.forked == nil {
 		s.forked = &apiv1alpha1.Session{
-			Id: sessionID, Creator: userID, FreshConversation: fresh,
+			Id: sessionID, Creator: userID, FreshConversation: fresh, Credentials: credentials,
 			State: apiv1alpha1.RuntimeState_RUNTIME_STATE_CREATING,
 		}
 		return s.forked, true, nil
@@ -374,6 +387,20 @@ func TestDeleteFailedCheckpointSkipsTagDeletion(t *testing.T) {
 	require.Zero(t, tags.deleteCalls, "a checkpoint that never retained a tag must not attempt to delete one")
 }
 
+// TestDeletePinnedByForkIsFailedPrecondition confirms a checkpoint a fork
+// pins reports FailedPrecondition, distinct from the NotFound a missing or
+// unowned checkpoint reports.
+func TestDeletePinnedByForkIsFailedPrecondition(t *testing.T) {
+	checkpoint := &apiv1alpha1.Checkpoint{Id: "018f47a2-4efb-7c21-a848-123456789abc", State: apiv1alpha1.CheckpointState_CHECKPOINT_STATE_READY}
+	store := &testStore{prepared: checkpoint, beginDeleteErr: database.ErrFailedPrecondition}
+	service := NewService(store, testAuthorizer{}, &testTags{}, nil)
+	ctx := auth.AuthSessionTo(t.Context(), testSession{userID: "alice"})
+
+	err := service.Delete(ctx, checkpoint.GetId())
+	require.Equal(t, serviceerrors.CodeFailedPrecondition, serviceerrors.CodeOf(err))
+	require.False(t, store.deleted)
+}
+
 func TestDeleteRejectsUnownedTagWhenNoTagWasEverRetained(t *testing.T) {
 	checkpoint := &apiv1alpha1.Checkpoint{Id: "018f47a2-4efb-7c21-a848-123456789abc", State: apiv1alpha1.CheckpointState_CHECKPOINT_STATE_FAILED}
 	store := &testStore{prepared: checkpoint, snapshot: &database.SessionTaskSnapshot{Atespace: "team-a", URI: "s3://snapshots/snapshot-1"}}
@@ -435,6 +462,44 @@ func TestForkCreatesSessionFromCheckpoint(t *testing.T) {
 		workflow.session != store.forked || store.forked.GetId() == "" {
 		t.Fatalf("fork = %+v, checkpoint = %+v", session, checkpoint)
 	}
+}
+
+// TestForkPassesCredentialsToStore confirms Fork forwards exactly the
+// credentials it was given to the store, and that an invalid reference is
+// rejected before it ever reaches the store.
+func TestForkPassesCredentialsToStore(t *testing.T) {
+	checkpoint := &apiv1alpha1.Checkpoint{Id: "018f47a2-4efb-7c21-a848-123456789abc", State: apiv1alpha1.CheckpointState_CHECKPOINT_STATE_READY}
+	store := &testStore{prepared: checkpoint, snapshot: &database.SessionTaskSnapshot{Atespace: "team-a", URI: "s3://snapshots/snapshot-1", ContentScope: "DATA"}, tagUID: "tag-uid"}
+	tags := &testTags{created: &ateapipb.Tag{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: tagName(checkpoint.Id), Uid: store.tagUID}, Status: &ateapipb.TagStatus{Snapshot: &ateapipb.ExternalSnapshot{SnapshotUri: store.snapshot.URI, ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA}}}}
+	service := NewService(store, testAuthorizer{}, tags, &testWorkflow{})
+	ctx := auth.AuthSessionTo(t.Context(), testSession{userID: "alice"})
+	credentials := []*apiv1alpha1.SessionCredential{{Origin: "https://api.example.com", Header: "Authorization", SecretRef: &apiv1alpha1.SecretKeyReference{Name: "tokens", Key: "one"}}}
+
+	session, err := service.Fork(ctx, checkpoint.GetId(), "fork-request", false, credentials...)
+	require.NoError(t, err)
+	require.Len(t, store.forkCredentials, 1)
+	require.True(t, proto.Equal(credentials[0], store.forkCredentials[0]))
+	require.True(t, proto.Equal(credentials[0], session.GetCredentials()[0]))
+
+	store.forked, store.forkCredentials = nil, nil
+	invalid := []*apiv1alpha1.SessionCredential{{Origin: "not a URL", Header: "Authorization", SecretRef: &apiv1alpha1.SecretKeyReference{Name: "tokens", Key: "one"}}}
+	_, err = service.Fork(ctx, checkpoint.GetId(), "fork-request-2", false, invalid...)
+	require.Equal(t, serviceerrors.CodeInvalidArgument, serviceerrors.CodeOf(err))
+	require.Nil(t, store.forkCredentials, "an invalid reference must never reach the store")
+}
+
+// TestForkCredentialErrorsMapToServiceCodes confirms the store's
+// credential-specific errors surface with the same codes CreateSession uses.
+func TestForkCredentialErrorsMapToServiceCodes(t *testing.T) {
+	checkpoint := &apiv1alpha1.Checkpoint{Id: "018f47a2-4efb-7c21-a848-123456789abc", State: apiv1alpha1.CheckpointState_CHECKPOINT_STATE_READY}
+	store := &testStore{prepared: checkpoint, snapshot: &database.SessionTaskSnapshot{Atespace: "team-a", URI: "s3://snapshots/snapshot-1", ContentScope: "DATA"}, tagUID: "tag-uid"}
+	tags := &testTags{created: &ateapipb.Tag{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: tagName(checkpoint.Id), Uid: store.tagUID}, Status: &ateapipb.TagStatus{Snapshot: &ateapipb.ExternalSnapshot{SnapshotUri: store.snapshot.URI, ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA}}}}
+	store.forkErr = fmt.Errorf("origin not allowed by revision: %w", database.ErrSessionCredentialNotAllowed)
+	service := NewService(store, testAuthorizer{}, tags, &testWorkflow{})
+	ctx := auth.AuthSessionTo(t.Context(), testSession{userID: "alice"})
+
+	_, err := service.Fork(ctx, checkpoint.GetId(), "fork-request", false)
+	require.Equal(t, serviceerrors.CodeInvalidArgument, serviceerrors.CodeOf(err))
 }
 
 func TestCreateRetriesRetainedTagAfterPublishFailure(t *testing.T) {

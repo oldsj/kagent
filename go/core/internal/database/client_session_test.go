@@ -483,8 +483,8 @@ func TestForkSessionCopiesBoundedHistory(t *testing.T) {
 	if _, _, err := client.ForkSession(ctx, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "alice", "fork-request-1", "ignored", false); !errors.Is(err, ErrIdempotencyConflict) {
 		t.Fatalf("conflicting fork request error = %v", err)
 	}
-	if _, _, err := client.BeginDeleteSessionCheckpoint(ctx, checkpoint.GetId(), "alice"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("delete referenced checkpoint error = %v", err)
+	if _, _, err := client.BeginDeleteSessionCheckpoint(ctx, checkpoint.GetId(), "alice"); !errors.Is(err, ErrFailedPrecondition) {
+		t.Fatalf("delete checkpoint pinned by a fork error = %v", err)
 	}
 
 	if _, err := markSessionReady(ctx, client, fork.GetId(), "fork.example"); err != nil {

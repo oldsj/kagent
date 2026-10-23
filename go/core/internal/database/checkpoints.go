@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
+	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -25,7 +26,7 @@ var (
 // ForkSession atomically creates a session and independent history from an owned
 // READY checkpoint, replaying only events through its saved boundary. The fork retains the
 // source revision and snapshot, with fresh context and task IDs. A repeated owner/requestID returns
-// the existing fork for the same checkpoint and conversation mode, or
+// the existing fork for the same checkpoint, conversation mode and credentials, or
 // ErrIdempotencyConflict otherwise. The boolean reports creation; callers
 // provision the runtime separately. A deleted fork returns ErrFailedPrecondition
 // and retains its request identity.
@@ -33,7 +34,11 @@ var (
 // A fresh fork keeps the checkpoint's snapshot, and so its workspace, but copies
 // no A2A history. It is marked so the runtime discards the native agent
 // conversation that the snapshot also carries.
-func (c *Client) ForkSession(ctx context.Context, checkpointID, userID, requestID, sessionID string, fresh bool) (*apiv1alpha1.Session, bool, error) {
+//
+// credentials are Secret references applied only to the new Session; the source
+// Session's own credential bindings are never inherited. Each origin must already
+// be allowed by the forked revision, the same check CreateSession applies.
+func (c *Client) ForkSession(ctx context.Context, checkpointID, userID, requestID, sessionID string, fresh bool, credentials ...*apiv1alpha1.SessionCredential) (*apiv1alpha1.Session, bool, error) {
 	checkpointUUID, err := uuid.Parse(checkpointID)
 	if err != nil {
 		return nil, false, fmt.Errorf("invalid checkpoint ID: %w", err)
@@ -41,7 +46,7 @@ func (c *Client) ForkSession(ctx context.Context, checkpointID, userID, requestI
 
 	existing, err := readSessionRequest(ctx, c.db, userID, requestID)
 	if err == nil {
-		return replayedFork(existing, checkpointUUID, fresh)
+		return replayedFork(existing, checkpointUUID, fresh, credentials)
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return nil, false, fmt.Errorf("get fork request: %w", err)
@@ -68,6 +73,9 @@ func (c *Client) ForkSession(ctx context.Context, checkpointID, userID, requestI
 		if err != nil {
 			return fmt.Errorf("get checkpoint runtime revision: %w", err)
 		}
+		if _, err := egress.SessionCredentials(revision.Namespace, credentials, revision.EgressDestinations, revision.Credentials); err != nil {
+			return fmt.Errorf("%w: %v", ErrSessionCredentialNotAllowed, err)
+		}
 		sourceContextID, err := queryOne(ctx, tx, `
 			SELECT context_id FROM a2a_context WHERE id = $1
 		`, pgx.RowTo[uuid.UUID], checkpoint.SourceHistoryID)
@@ -76,7 +84,8 @@ func (c *Client) ForkSession(ctx context.Context, checkpointID, userID, requestI
 		}
 		historyID := uuid.New()
 		now := timestamppb.Now()
-		// Session credentials identify the source binding and must not be inherited.
+		// The source Session's own credential bindings are never inherited; only
+		// the caller-supplied references above apply to the fork.
 		session := &apiv1alpha1.Session{
 			Id: sessionID, Creator: userID, ContextId: sessionID,
 			Name:              source.GetName(),
@@ -85,6 +94,7 @@ func (c *Client) ForkSession(ctx context.Context, checkpointID, userID, requestI
 			State:             apiv1alpha1.RuntimeState_RUNTIME_STATE_CREATING,
 			Operation:         apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_CREATE,
 			FreshConversation: fresh,
+			Credentials:       credentials,
 			CreatedAt:         now, UpdatedAt: now,
 		}
 		if err := inheritEnvironmentRevision(revision.SourceSnapshot, session); err != nil {
@@ -164,7 +174,7 @@ func (c *Client) ForkSession(ctx context.Context, checkpointID, userID, requestI
 		if err != nil {
 			return nil, false, fmt.Errorf("get concurrent fork request: %w", err)
 		}
-		return replayedFork(existing, checkpointUUID, fresh)
+		return replayedFork(existing, checkpointUUID, fresh, credentials)
 	}
 	if err != nil {
 		return nil, false, fmt.Errorf("fork Session: %w", err)
@@ -173,9 +183,10 @@ func (c *Client) ForkSession(ctx context.Context, checkpointID, userID, requestI
 	return session, err == nil, err
 }
 
-// replayedFork resolves a repeated fork request: the same checkpoint and
-// conversation mode returns the existing fork, anything else is a conflict.
-func replayedFork(existing sessionRow, checkpointID uuid.UUID, fresh bool) (*apiv1alpha1.Session, bool, error) {
+// replayedFork resolves a repeated fork request: the same checkpoint,
+// conversation mode and credentials returns the existing fork, anything else
+// is a conflict.
+func replayedFork(existing sessionRow, checkpointID uuid.UUID, fresh bool, credentials []*apiv1alpha1.SessionCredential) (*apiv1alpha1.Session, bool, error) {
 	if existing.SourceCheckpointID == nil || *existing.SourceCheckpointID != checkpointID {
 		return nil, false, ErrIdempotencyConflict
 	}
@@ -183,13 +194,19 @@ func replayedFork(existing sessionRow, checkpointID uuid.UUID, fresh bool) (*api
 	if err != nil {
 		return nil, false, err
 	}
-	if session.GetFreshConversation() != fresh {
+	if session.GetFreshConversation() != fresh || !sameCredentials(session.GetCredentials(), credentials) {
 		return nil, false, ErrIdempotencyConflict
 	}
 	if session.State == apiv1alpha1.RuntimeState_RUNTIME_STATE_DELETED {
 		return nil, false, ErrFailedPrecondition
 	}
 	return session, false, nil
+}
+
+// sameCredentials compares two credential reference lists for retry identity,
+// the same comparison SameSessionSelection applies to CreateSession retries.
+func sameCredentials(a, b []*apiv1alpha1.SessionCredential) bool {
+	return proto.Equal(&apiv1alpha1.Session{Credentials: a}, &apiv1alpha1.Session{Credentials: b})
 }
 
 // ReserveSessionCheckpoint captures the terminal task named by HeadTaskId,
@@ -487,8 +504,9 @@ func (c *Client) ListSessionCheckpoints(ctx context.Context, sessionID, userID, 
 
 // BeginDeleteSessionCheckpoint marks an owned READY or FAILED checkpoint DELETING and returns
 // the snapshot and tag identity for external cleanup. Retrying a DELETING checkpoint is
-// allowed. A fork reference, another lifecycle state, or a missing/unowned checkpoint
-// returns ErrNotFound.
+// allowed. Another lifecycle state or a missing/unowned checkpoint returns ErrNotFound.
+// A checkpoint a fork pins returns ErrFailedPrecondition; deleting the fork releases the
+// pin.
 func (c *Client) BeginDeleteSessionCheckpoint(ctx context.Context, id, userID string) (*SessionTaskSnapshot, string, error) {
 	var snapshot *SessionTaskSnapshot
 	var tagUID string
@@ -496,6 +514,20 @@ func (c *Client) BeginDeleteSessionCheckpoint(ctx context.Context, id, userID st
 		row, err := lockCheckpoint(ctx, tx, id, false, userID, nil)
 		if err != nil {
 			return notFoundOr(err)
+		}
+		if row.State != "READY" && row.State != "FAILED" && row.State != "DELETING" {
+			return ErrNotFound
+		}
+		// The row lock above serializes against a concurrent ForkSession, which
+		// also locks the checkpoint before pinning it.
+		pinned, err := queryOne(ctx, tx, `
+			SELECT EXISTS (SELECT 1 FROM session i WHERE i.pinned_checkpoint_id = $1)
+		`, pgx.RowTo[bool], row.ID)
+		if err != nil {
+			return err
+		}
+		if pinned {
+			return ErrFailedPrecondition
 		}
 		checkpoint, err := toSessionCheckpoint(row)
 		if err != nil {
@@ -507,14 +539,8 @@ func (c *Client) BeginDeleteSessionCheckpoint(ctx context.Context, id, userID st
 			return fmt.Errorf("encode checkpoint: %w", err)
 		}
 		tag, err := tx.Exec(ctx, `
-			UPDATE session_checkpoint
-			SET state = 'DELETING', data = $3
-			WHERE session_checkpoint.id = $1 AND session_checkpoint.user_id = $2
-			  AND session_checkpoint.state IN ('READY', 'FAILED', 'DELETING')
-			  AND NOT EXISTS (
-			      SELECT 1 FROM session i WHERE i.pinned_checkpoint_id = session_checkpoint.id
-			  )
-		`, row.ID, userID, data)
+			UPDATE session_checkpoint SET state = 'DELETING', data = $2 WHERE id = $1
+		`, row.ID, data)
 		if err != nil {
 			return err
 		}

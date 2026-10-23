@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"buf.build/go/protovalidate"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
@@ -33,7 +34,7 @@ type store interface {
 	GetSessionCheckpointSnapshot(context.Context, string, string) (*database.SessionTaskSnapshot, string, error)
 	BeginDeleteSessionCheckpoint(context.Context, string, string) (*database.SessionTaskSnapshot, string, error)
 	DeleteSessionCheckpoint(context.Context, string, string) error
-	ForkSession(ctx context.Context, checkpointID, userID, requestID, sessionID string, freshConversation bool) (*apiv1alpha1.Session, bool, error)
+	ForkSession(ctx context.Context, checkpointID, userID, requestID, sessionID string, freshConversation bool, credentials ...*apiv1alpha1.SessionCredential) (*apiv1alpha1.Session, bool, error)
 	UpdateCheckpointName(context.Context, string, string, string) (*apiv1alpha1.Checkpoint, error)
 	GetSession(ctx context.Context, id, userID string) (*apiv1alpha1.Session, error)
 	GetCheckpointSource(ctx context.Context, checkpointID, userID string) (*apiv1alpha1.Session, error)
@@ -44,6 +45,14 @@ type store interface {
 // apply it before any effect; checkpoints are Session state and must too.
 type sessionPolicy interface {
 	CheckSession(context.Context, *apiv1alpha1.Session) error
+}
+
+// createSessionPolicy validates credential references against the Mainloop
+// operator's approved allowlist, the same check session.Service.create applies
+// to CreateSession. Fork resolves the Agent from the checkpoint's source, since
+// unlike CreateSession it has no caller-supplied Agent reference.
+type createSessionPolicy interface {
+	CheckCreateSession(context.Context, *apiv1alpha1.ResourceReference, []*apiv1alpha1.SessionCredential) error
 }
 
 type workflow interface {
@@ -235,7 +244,7 @@ func (s *Service) Get(ctx context.Context, checkpointID string) (*apiv1alpha1.Ch
 	if err != nil {
 		return nil, err
 	}
-	if err := s.checkCheckpointSource(ctx, checkpointID, userID); err != nil {
+	if _, err := s.checkCheckpointSource(ctx, checkpointID, userID); err != nil {
 		return nil, err
 	}
 	checkpoint, err := s.store.GetSessionCheckpoint(ctx, checkpointID, userID)
@@ -273,7 +282,7 @@ func (s *Service) List(ctx context.Context, request ListRequest) (ListResult, er
 	}
 	// Every row belongs to one source Session, so the first row stands for all.
 	if len(rows) > 0 {
-		if err := s.checkCheckpointSource(ctx, rows[0].GetId(), userID); err != nil {
+		if _, err := s.checkCheckpointSource(ctx, rows[0].GetId(), userID); err != nil {
 			return ListResult{}, err
 		}
 	}
@@ -292,12 +301,15 @@ func (s *Service) Delete(ctx context.Context, checkpointID string) error {
 	if err != nil {
 		return err
 	}
-	if err := s.checkCheckpointSource(ctx, checkpointID, userID); err != nil {
+	if _, err := s.checkCheckpointSource(ctx, checkpointID, userID); err != nil {
 		return err
 	}
 	snapshot, tagUID, err := s.store.BeginDeleteSessionCheckpoint(ctx, checkpointID, userID)
 	if errors.Is(err, database.ErrNotFound) {
 		return serviceerrors.NewNotFound("Checkpoint not found", err)
+	}
+	if errors.Is(err, database.ErrFailedPrecondition) {
+		return serviceerrors.NewFailedPrecondition("Checkpoint is pinned by a fork", err)
 	}
 	if err != nil {
 		return serviceerrors.NewInternal("Failed to begin checkpoint deletion", err)
@@ -344,16 +356,25 @@ func (s *Service) Rename(ctx context.Context, checkpointID, name string) (*apiv1
 	return checkpoint, nil
 }
 
-func (s *Service) Fork(ctx context.Context, checkpointID, requestID string, freshConversation bool) (*apiv1alpha1.Session, error) {
+func (s *Service) Fork(ctx context.Context, checkpointID, requestID string, freshConversation bool, credentials ...*apiv1alpha1.SessionCredential) (*apiv1alpha1.Session, error) {
 	if err := validateCreate(checkpointID, requestID); err != nil {
 		return nil, err
+	}
+	if err := protovalidate.Validate(&apiv1alpha1.ForkSessionRequest{CheckpointId: checkpointID, RequestId: requestID, FreshConversation: freshConversation, Credentials: credentials}); err != nil {
+		return nil, serviceerrors.NewInvalidArgument("Session credential references are invalid", err)
 	}
 	userID, err := s.authorize(ctx, auth.VerbCreate, "Session", "")
 	if err != nil {
 		return nil, err
 	}
-	if err := s.checkCheckpointSource(ctx, checkpointID, userID); err != nil {
+	source, err := s.checkCheckpointSource(ctx, checkpointID, userID)
+	if err != nil {
 		return nil, err
+	}
+	if policy, ok := s.authorizer.(createSessionPolicy); ok && source != nil {
+		if err := policy.CheckCreateSession(ctx, source.GetAgent(), credentials); err != nil {
+			return nil, serviceerrors.NewPermissionDenied("Session creation is not authorized", err)
+		}
 	}
 	snapshot, tagUID, err := s.store.GetSessionCheckpointSnapshot(ctx, checkpointID, userID)
 	if errors.Is(err, database.ErrNotFound) {
@@ -379,9 +400,12 @@ func (s *Service) Fork(ctx context.Context, checkpointID, requestID string, fres
 	if err != nil {
 		return nil, serviceerrors.NewInternal("Failed to generate Session identifier", err)
 	}
-	session, _, err := s.store.ForkSession(ctx, checkpointID, userID, requestID, id.String(), freshConversation)
+	session, _, err := s.store.ForkSession(ctx, checkpointID, userID, requestID, id.String(), freshConversation, credentials...)
 	if errors.Is(err, database.ErrIdempotencyConflict) {
 		return nil, serviceerrors.NewAlreadyExists("request_id was already used for a different Session", err)
+	}
+	if errors.Is(err, database.ErrSessionCredentialNotAllowed) {
+		return nil, serviceerrors.NewInvalidArgument("Session credential origin, header, or Secret reference is invalid or conflicts with the revision", err)
 	}
 	if errors.Is(err, database.ErrFailedPrecondition) {
 		return nil, serviceerrors.NewFailedPrecondition("request_id belongs to a deleted Session", err)
@@ -406,21 +430,25 @@ func (s *Service) Fork(ctx context.Context, checkpointID, requestID string, fres
 }
 
 // checkCheckpointSource applies the Session policy to the Session a checkpoint
-// was taken from. The Agent comes from the checkpoint's pinned revision, so the
-// check holds after the source Session is deleted.
-func (s *Service) checkCheckpointSource(ctx context.Context, checkpointID, userID string) error {
+// was taken from, and returns it so Fork can reuse its Agent for the
+// credentials check. The Agent comes from the checkpoint's pinned revision, so
+// the check holds after the source Session is deleted.
+func (s *Service) checkCheckpointSource(ctx context.Context, checkpointID, userID string) (*apiv1alpha1.Session, error) {
 	policy, ok := s.authorizer.(sessionPolicy)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	source, err := s.store.GetCheckpointSource(ctx, checkpointID, userID)
 	if errors.Is(err, database.ErrNotFound) {
-		return serviceerrors.NewNotFound("Checkpoint not found", err)
+		return nil, serviceerrors.NewNotFound("Checkpoint not found", err)
 	}
 	if err != nil {
-		return serviceerrors.NewInternal("Failed to get checkpoint source", err)
+		return nil, serviceerrors.NewInternal("Failed to get checkpoint source", err)
 	}
-	return checkSource(ctx, policy, source)
+	if err := checkSource(ctx, policy, source); err != nil {
+		return nil, err
+	}
+	return source, nil
 }
 
 func checkSource(ctx context.Context, policy sessionPolicy, source *apiv1alpha1.Session) error {

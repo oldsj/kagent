@@ -566,8 +566,12 @@ type ForkSessionRequest struct {
 	// Keep the workspace and caches but start with no A2A history and no native
 	// agent conversation. False keeps the full conversation up to the checkpoint.
 	FreshConversation bool `protobuf:"varint,3,opt,name=fresh_conversation,json=freshConversation,proto3" json:"fresh_conversation,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Per-session headers for origins already allowed by the Agent revision,
+	// applied to the new Session before its runtime accepts input. The source
+	// Session's credential bindings are never inherited.
+	Credentials   []*SessionCredential `protobuf:"bytes,4,rep,name=credentials,proto3" json:"credentials,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ForkSessionRequest) Reset() {
@@ -619,6 +623,13 @@ func (x *ForkSessionRequest) GetFreshConversation() bool {
 		return x.FreshConversation
 	}
 	return false
+}
+
+func (x *ForkSessionRequest) GetCredentials() []*SessionCredential {
+	if x != nil {
+		return x.Credentials
+	}
+	return nil
 }
 
 type ForkSessionResponse struct {
@@ -807,13 +818,14 @@ const file_kagent_api_v1alpha1_checkpoints_proto_rawDesc = "" +
 	"\x04page\x18\x02 \x01(\v2!.kagent.api.v1alpha1.PageResponseR\x04page\"H\n" +
 	"\x17DeleteCheckpointRequest\x12-\n" +
 	"\rcheckpoint_id\x18\x01 \x01(\tB\b\xbaH\x05r\x03\xb0\x01\x01R\fcheckpointId\"\x1a\n" +
-	"\x18DeleteCheckpointResponse\"\x9d\x01\n" +
+	"\x18DeleteCheckpointResponse\"\xf1\x01\n" +
 	"\x12ForkSessionRequest\x12-\n" +
 	"\rcheckpoint_id\x18\x01 \x01(\tB\b\xbaH\x05r\x03\xb0\x01\x01R\fcheckpointId\x12)\n" +
 	"\n" +
 	"request_id\x18\x02 \x01(\tB\n" +
 	"\xbaH\ar\x05\x10\x01\x18\x80\x01R\trequestId\x12-\n" +
-	"\x12fresh_conversation\x18\x03 \x01(\bR\x11freshConversation\"M\n" +
+	"\x12fresh_conversation\x18\x03 \x01(\bR\x11freshConversation\x12R\n" +
+	"\vcredentials\x18\x04 \x03(\v2&.kagent.api.v1alpha1.SessionCredentialB\b\xbaH\x05\x92\x01\x02\x10\x04R\vcredentials\"M\n" +
 	"\x13ForkSessionResponse\x126\n" +
 	"\asession\x18\x01 \x01(\v2\x1c.kagent.api.v1alpha1.SessionR\asession\"\x9f\x01\n" +
 	"\x1bUpdateCheckpointNameRequest\x12-\n" +
@@ -870,7 +882,8 @@ var file_kagent_api_v1alpha1_checkpoints_proto_goTypes = []any{
 	(*Failure)(nil),                      // 15: kagent.api.v1alpha1.Failure
 	(*PageRequest)(nil),                  // 16: kagent.api.v1alpha1.PageRequest
 	(*PageResponse)(nil),                 // 17: kagent.api.v1alpha1.PageResponse
-	(*Session)(nil),                      // 18: kagent.api.v1alpha1.Session
+	(*SessionCredential)(nil),            // 18: kagent.api.v1alpha1.SessionCredential
+	(*Session)(nil),                      // 19: kagent.api.v1alpha1.Session
 }
 var file_kagent_api_v1alpha1_checkpoints_proto_depIdxs = []int32{
 	0,  // 0: kagent.api.v1alpha1.Checkpoint.state:type_name -> kagent.api.v1alpha1.CheckpointState
@@ -881,25 +894,26 @@ var file_kagent_api_v1alpha1_checkpoints_proto_depIdxs = []int32{
 	16, // 5: kagent.api.v1alpha1.ListCheckpointsRequest.page:type_name -> kagent.api.v1alpha1.PageRequest
 	1,  // 6: kagent.api.v1alpha1.ListCheckpointsResponse.checkpoints:type_name -> kagent.api.v1alpha1.Checkpoint
 	17, // 7: kagent.api.v1alpha1.ListCheckpointsResponse.page:type_name -> kagent.api.v1alpha1.PageResponse
-	18, // 8: kagent.api.v1alpha1.ForkSessionResponse.session:type_name -> kagent.api.v1alpha1.Session
-	1,  // 9: kagent.api.v1alpha1.UpdateCheckpointNameResponse.checkpoint:type_name -> kagent.api.v1alpha1.Checkpoint
-	2,  // 10: kagent.api.v1alpha1.CheckpointService.CreateCheckpoint:input_type -> kagent.api.v1alpha1.CreateCheckpointRequest
-	4,  // 11: kagent.api.v1alpha1.CheckpointService.GetCheckpoint:input_type -> kagent.api.v1alpha1.GetCheckpointRequest
-	6,  // 12: kagent.api.v1alpha1.CheckpointService.ListCheckpoints:input_type -> kagent.api.v1alpha1.ListCheckpointsRequest
-	8,  // 13: kagent.api.v1alpha1.CheckpointService.DeleteCheckpoint:input_type -> kagent.api.v1alpha1.DeleteCheckpointRequest
-	10, // 14: kagent.api.v1alpha1.CheckpointService.ForkSession:input_type -> kagent.api.v1alpha1.ForkSessionRequest
-	12, // 15: kagent.api.v1alpha1.CheckpointService.UpdateCheckpointName:input_type -> kagent.api.v1alpha1.UpdateCheckpointNameRequest
-	3,  // 16: kagent.api.v1alpha1.CheckpointService.CreateCheckpoint:output_type -> kagent.api.v1alpha1.CreateCheckpointResponse
-	5,  // 17: kagent.api.v1alpha1.CheckpointService.GetCheckpoint:output_type -> kagent.api.v1alpha1.GetCheckpointResponse
-	7,  // 18: kagent.api.v1alpha1.CheckpointService.ListCheckpoints:output_type -> kagent.api.v1alpha1.ListCheckpointsResponse
-	9,  // 19: kagent.api.v1alpha1.CheckpointService.DeleteCheckpoint:output_type -> kagent.api.v1alpha1.DeleteCheckpointResponse
-	11, // 20: kagent.api.v1alpha1.CheckpointService.ForkSession:output_type -> kagent.api.v1alpha1.ForkSessionResponse
-	13, // 21: kagent.api.v1alpha1.CheckpointService.UpdateCheckpointName:output_type -> kagent.api.v1alpha1.UpdateCheckpointNameResponse
-	16, // [16:22] is the sub-list for method output_type
-	10, // [10:16] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	18, // 8: kagent.api.v1alpha1.ForkSessionRequest.credentials:type_name -> kagent.api.v1alpha1.SessionCredential
+	19, // 9: kagent.api.v1alpha1.ForkSessionResponse.session:type_name -> kagent.api.v1alpha1.Session
+	1,  // 10: kagent.api.v1alpha1.UpdateCheckpointNameResponse.checkpoint:type_name -> kagent.api.v1alpha1.Checkpoint
+	2,  // 11: kagent.api.v1alpha1.CheckpointService.CreateCheckpoint:input_type -> kagent.api.v1alpha1.CreateCheckpointRequest
+	4,  // 12: kagent.api.v1alpha1.CheckpointService.GetCheckpoint:input_type -> kagent.api.v1alpha1.GetCheckpointRequest
+	6,  // 13: kagent.api.v1alpha1.CheckpointService.ListCheckpoints:input_type -> kagent.api.v1alpha1.ListCheckpointsRequest
+	8,  // 14: kagent.api.v1alpha1.CheckpointService.DeleteCheckpoint:input_type -> kagent.api.v1alpha1.DeleteCheckpointRequest
+	10, // 15: kagent.api.v1alpha1.CheckpointService.ForkSession:input_type -> kagent.api.v1alpha1.ForkSessionRequest
+	12, // 16: kagent.api.v1alpha1.CheckpointService.UpdateCheckpointName:input_type -> kagent.api.v1alpha1.UpdateCheckpointNameRequest
+	3,  // 17: kagent.api.v1alpha1.CheckpointService.CreateCheckpoint:output_type -> kagent.api.v1alpha1.CreateCheckpointResponse
+	5,  // 18: kagent.api.v1alpha1.CheckpointService.GetCheckpoint:output_type -> kagent.api.v1alpha1.GetCheckpointResponse
+	7,  // 19: kagent.api.v1alpha1.CheckpointService.ListCheckpoints:output_type -> kagent.api.v1alpha1.ListCheckpointsResponse
+	9,  // 20: kagent.api.v1alpha1.CheckpointService.DeleteCheckpoint:output_type -> kagent.api.v1alpha1.DeleteCheckpointResponse
+	11, // 21: kagent.api.v1alpha1.CheckpointService.ForkSession:output_type -> kagent.api.v1alpha1.ForkSessionResponse
+	13, // 22: kagent.api.v1alpha1.CheckpointService.UpdateCheckpointName:output_type -> kagent.api.v1alpha1.UpdateCheckpointNameResponse
+	17, // [17:23] is the sub-list for method output_type
+	11, // [11:17] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_kagent_api_v1alpha1_checkpoints_proto_init() }
