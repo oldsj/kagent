@@ -14,9 +14,13 @@ import (
 	"testing"
 	"time"
 
+	apiworkspace "github.com/kagent-dev/kagent/go/api/workspace"
 	"github.com/kagent-dev/kagent/go/harness/codex/config"
+	"github.com/kagent-dev/kagent/go/harness/runtime/continuation"
+	"github.com/kagent-dev/kagent/go/harness/runtime/workspace"
 	"github.com/kagent-dev/kagent/go/pkg/tracing"
 	"github.com/pelletier/go-toml/v2"
+	"github.com/stretchr/testify/require"
 )
 
 func TestChatGPTMaterializesOnlySyntheticAuth(t *testing.T) {
@@ -85,7 +89,7 @@ func TestChatGPTMaterializesOnlySyntheticAuth(t *testing.T) {
 func TestChatGPTHTTPSKeepsSubscriptionAuth(t *testing.T) {
 	cfg := config.Production("gpt-6.1-sol", "Reply briefly")
 	cfg.Provider = config.Provider{Name: "chatgpt", AccountID: "test-account", ResponsesTransport: "https"}
-	contents, err := renderConfig(cfg, t.TempDir())
+	contents, err := renderConfig(cfg, t.TempDir(), filepath.Join(t.TempDir(), "workspace"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +110,7 @@ func TestChatGPTBaseURLOverridesBackend(t *testing.T) {
 	}{{"", true}, {"https", false}} {
 		cfg := config.Production("gpt-6.1", "Reply briefly")
 		cfg.Provider = config.Provider{Name: "chatgpt", AccountID: "test-account", BaseURL: "https://codex.example.com/backend-api/codex", ResponsesTransport: test.transport}
-		contents, err := renderConfig(cfg, t.TempDir())
+		contents, err := renderConfig(cfg, t.TempDir(), filepath.Join(t.TempDir(), "workspace"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -228,7 +232,7 @@ func TestRenderConfigOmitsDisabledSignalExporter(t *testing.T) {
 			cfg := config.Production("gpt-5.2-codex", "work carefully")
 			cfg.Provider = config.Provider{Name: "openai"}
 			cfg.Telemetry = test.telemetry
-			contents, err := renderConfig(cfg, t.TempDir())
+			contents, err := renderConfig(cfg, t.TempDir(), filepath.Join(t.TempDir(), "workspace"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -346,6 +350,114 @@ func assertPinnedCodexAcceptsConfig(t *testing.T, executable string, provider co
 	_ = command.Wait()
 }
 
+// TestPinnedCodexLeavesTrustedWorkspaceUnchanged drives the pinned Codex CLI's
+// own app-server through initialize and thread/start in the generated
+// workspace, the exact sequence ProcessDriver.Run makes on turn 1, and checks
+// that config.toml comes out byte-identical: proof, against the real binary
+// rather than a recorded fixture, that rendering the trust entry up front
+// matches what Codex itself would otherwise append.
+func TestPinnedCodexLeavesTrustedWorkspaceUnchanged(t *testing.T) {
+	executable, err := exec.LookPath("codex")
+	if err != nil {
+		t.Skip("pinned Codex CLI is not installed")
+	}
+	durable := filepath.Join(t.TempDir(), "data")
+	workspaceDir := filepath.Join(durable, "workspace")
+	cfg := config.Production("gpt-5.2-codex", "work carefully")
+	cfg.Provider = config.Provider{Name: "openai"}
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(context.Background(), Input{ConfigJSON: raw, Workspace: workspaceDir, DurableDir: durable, Environment: os.Environ()}); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(durable, "codex", "config.toml")
+	before, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, executable, "app-server", "--strict-config", "--stdio")
+	command.Dir = workspaceDir
+	command.Env = append(os.Environ(), "CODEX_HOME="+filepath.Join(durable, "codex"), "OPENAI_API_KEY=test")
+	stdin, err := command.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stderr strings.Builder
+	command.Stderr = &stderr
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	reader := bufio.NewReader(stdout)
+	readResponse := func(id int) json.RawMessage {
+		t.Helper()
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				t.Fatalf("read Codex app-server response for id %d: %v: %s", id, err, stderr.String())
+			}
+			var response struct {
+				ID     int             `json:"id"`
+				Result json.RawMessage `json:"result"`
+				Error  json.RawMessage `json:"error"`
+			}
+			if err := json.Unmarshal([]byte(line), &response); err != nil {
+				t.Fatalf("decode Codex app-server response: %v: %s", err, line)
+			}
+			if response.ID != id {
+				continue // an async notification such as remoteControl/status/changed
+			}
+			if len(response.Error) != 0 {
+				t.Fatalf("Codex app-server returned an error for id %d: %s", id, response.Error)
+			}
+			return response.Result
+		}
+	}
+	if _, err := stdin.Write([]byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"kagent-test","version":"1"},"capabilities":{"experimentalApi":true}}}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	readResponse(1)
+	if _, err := stdin.Write([]byte(`{"jsonrpc":"2.0","method":"initialized","params":{}}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	start, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0", "id": 2, "method": "thread/start",
+		"params": map[string]any{
+			"cwd": workspaceDir, "model": cfg.Model, "modelProvider": "kagent-openai",
+			"approvalPolicy": map[string]any{"granular": map[string]bool{
+				"sandbox_approval": false, "rules": false, "skill_approval": false, "request_permissions": false, "mcp_elicitations": true,
+			}},
+			"sandbox": "danger-full-access", "developerInstructions": cfg.DeveloperInstruction,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stdin.Write(append(start, '\n')); err != nil {
+		t.Fatal(err)
+	}
+	readResponse(2)
+	_ = stdin.Close()
+	_ = command.Process.Kill()
+	_ = command.Wait()
+
+	after, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("Codex changed config.toml after thread/start in an already-trusted workspace:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+}
+
 func featureEnabled(output []byte, name string) bool {
 	for line := range strings.Lines(string(output)) {
 		fields := strings.Fields(line)
@@ -384,7 +496,7 @@ func TestRenderConfigAutoCompactTokenLimit(t *testing.T) {
 			cfg := config.Production("gpt-5.2-codex", "work carefully")
 			cfg.Provider = config.Provider{Name: "openai"}
 			cfg.AutoCompactTokenLimit = tt.limit
-			contents, err := renderConfig(cfg, t.TempDir())
+			contents, err := renderConfig(cfg, t.TempDir(), filepath.Join(t.TempDir(), "workspace"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -400,4 +512,149 @@ func TestRenderConfigAutoCompactTokenLimit(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRenderConfigAppendsWorkspaceTrust pins the exact bytes the pinned Codex
+// CLI 0.148.0 was observed to append to config.toml the first time thread/start
+// runs in an untrusted cwd (verified by driving its app-server directly). The
+// comparison in SetupInstaller.Setup's observe path is byte-exact, so a
+// mismatch here, however small, reproduces mainloop#321.
+func TestRenderConfigAppendsWorkspaceTrust(t *testing.T) {
+	cfg := config.Production("gpt-5.2-codex", "work carefully")
+	cfg.Provider = config.Provider{Name: "openai"}
+	contents, err := renderConfig(cfg, t.TempDir(), "/data/workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "\n[projects.\"/data/workspace\"]\ntrust_level = \"trusted\"\n"
+	if !strings.HasSuffix(string(contents), want) {
+		t.Fatalf("generated Codex configuration does not end with Codex's workspace trust entry:\n%s", contents)
+	}
+}
+
+// codexGitEnabledConfig returns a compiler-owned config whose Git policy and
+// MCP server satisfy workspace.ConfigDigests, the shape every Preparation
+// Setup call requires regardless of this fix.
+func codexGitEnabledConfig(model string) config.Config {
+	cfg := config.Production(model, "work carefully")
+	cfg.Provider = config.Provider{Name: "openai"}
+	readOrigin, pushOrigin := apiworkspace.GitInstanceOrigins("mainloop")
+	cfg.Git = &apiworkspace.Git{Origins: []string{"github.com"}, ReadProxyOrigin: &readOrigin, PushProxyOrigin: &pushOrigin}
+	cfg.MCPServers = map[string]config.MCPServer{"mainloop": {URL: apiworkspace.MCPInstanceOrigin("mainloop") + "/mcp"}}
+	return cfg
+}
+
+// preparationFixture builds a SetupInstaller and a matching assignment for the
+// install/observe round trip the following tests drive directly, the same
+// calls executor.New and bootstrap.go's preparationAdmission make each turn.
+func preparationFixture(t *testing.T, workspaceDir string) (*SetupInstaller, workspace.Preparation, []byte) {
+	t.Helper()
+	durable := filepath.Dir(workspaceDir)
+	raw, err := json.Marshal(codexGitEnabledConfig("gpt-5.2-codex"))
+	require.NoError(t, err)
+	store, err := continuation.New(filepath.Join(durable, "adapter"), "codex", func(string) error { return nil })
+	require.NoError(t, err)
+	configDigest, mcpDigest, err := workspace.ConfigDigests(raw)
+	require.NoError(t, err)
+	setupDigest, err := workspace.SetupDigest("agent")
+	require.NoError(t, err)
+	assignment := workspace.Preparation{
+		Provider: "codex", Profile: "agent",
+		SetupDigest: setupDigest, ConfigDigest: configDigest, MCPDigest: mcpDigest,
+	}
+	installer := &SetupInstaller{Input: Input{ConfigJSON: raw, Workspace: workspaceDir, DurableDir: durable}, Store: store}
+	return installer, assignment, raw
+}
+
+// TestSetupObservePassesOnceCodexTrustsTheWorkspace reproduces mainloop#321's
+// turn 2: turn 1's install leaves config.toml already marking the workspace
+// trusted, Codex's own thread/start therefore leaves the file untouched (the
+// pinned CLI was observed to do exactly that), and the next observe - the same
+// call bootstrap.go's preparationAdmission and executor.New's restart path
+// make - must keep passing rather than reporting "Workspace preparation is
+// incomplete."
+func TestSetupObservePassesOnceCodexTrustsTheWorkspace(t *testing.T) {
+	workspaceDir := filepath.Join(t.TempDir(), "data", "workspace")
+	installer, assignment, _ := preparationFixture(t, workspaceDir)
+
+	_, _, err := installer.Setup(t.Context(), assignment, false)
+	require.NoError(t, err)
+
+	configPath := filepath.Join(installer.Input.DurableDir, "codex", "config.toml")
+	before, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+
+	// Turn 1's Codex process leaves an already-trusted project's config.toml
+	// byte-for-byte unchanged, so nothing touches configPath here.
+
+	_, _, err = installer.Setup(t.Context(), assignment, true)
+	require.NoError(t, err, "turn 2's observe must pass once Codex trusts the workspace")
+
+	after, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	require.Equal(t, before, after)
+
+	// executor.New's restart path runs this exact observe call before it
+	// re-renders config.toml; a second observe call models that restart.
+	_, _, err = installer.Setup(t.Context(), assignment, true)
+	require.NoError(t, err, "a restart's observe must also pass")
+}
+
+// TestSetupObservePassesOnSessionsStuckBeforeThisFix answers whether sessions
+// already stuck on today's harness self-heal once this fix rolls out and
+// restarts them. Today's installed config.toml holds the pre-fix render plus
+// whatever Codex's thread/start appended live; since that append is byte-for-
+// byte the literal TestRenderConfigAppendsWorkspaceTrust pins, a stuck
+// session's on-disk file already equals this fix's renderConfig output, and
+// its next observe passes with no migration step.
+func TestSetupObservePassesOnSessionsStuckBeforeThisFix(t *testing.T) {
+	workspaceDir := filepath.Join(t.TempDir(), "data", "workspace")
+	durable := filepath.Dir(workspaceDir)
+	raw, err := json.Marshal(codexGitEnabledConfig("gpt-5.2-codex"))
+	require.NoError(t, err)
+	parsed, err := config.Parse(raw)
+	require.NoError(t, err)
+
+	codexHome := filepath.Join(durable, "codex")
+	require.NoError(t, os.MkdirAll(codexHome, 0o700))
+	preFixRendered, err := renderConfig(parsed, codexHome, workspaceDir)
+	require.NoError(t, err)
+	preFixRendered = bytes.TrimSuffix(preFixRendered, workspaceTrustEntry(workspaceDir))
+	stuckOnDisk := append(append([]byte{}, preFixRendered...), workspaceTrustEntry(workspaceDir)...)
+	require.NoError(t, os.WriteFile(filepath.Join(codexHome, "config.toml"), stuckOnDisk, 0o600))
+
+	stateDir := filepath.Join(durable, ".kagent")
+	configDigest, mcpDigest, err := workspace.ConfigDigests(raw)
+	require.NoError(t, err)
+	setupDigest, err := workspace.SetupDigest("agent")
+	require.NoError(t, err)
+	assignment := workspace.Preparation{Provider: "codex", Profile: "agent", SetupDigest: setupDigest, ConfigDigest: configDigest, MCPDigest: mcpDigest}
+	// Records native-setup.json, the way the session's original, pre-fix
+	// install already did; unaffected by this fix.
+	require.NoError(t, workspace.CheckSetup(raw, stateDir, assignment, false))
+
+	installer := &SetupInstaller{Input: Input{ConfigJSON: raw, Workspace: workspaceDir, DurableDir: durable}}
+	_, _, err = installer.Setup(t.Context(), assignment, true)
+	require.NoError(t, err, "a session stuck on today's harness must pass observe once this fix is rolled out, with no migration")
+}
+
+// TestSetupObserveFailsOnDriftOutsideWorkspaceTrust guards against a
+// comparison loosened to tolerate the trust block also tolerating unrelated
+// drift: observe must still fail closed on any other installed-configuration
+// change.
+func TestSetupObserveFailsOnDriftOutsideWorkspaceTrust(t *testing.T) {
+	workspaceDir := filepath.Join(t.TempDir(), "data", "workspace")
+	installer, assignment, _ := preparationFixture(t, workspaceDir)
+
+	_, _, err := installer.Setup(t.Context(), assignment, false)
+	require.NoError(t, err)
+
+	configPath := filepath.Join(installer.Input.DurableDir, "codex", "config.toml")
+	original, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	drifted := append(append([]byte{}, original...), []byte("\nweb_search = \"disabled\"\n")...)
+	require.NoError(t, os.WriteFile(configPath, drifted, 0o600))
+
+	_, _, err = installer.Setup(t.Context(), assignment, true)
+	require.Error(t, err)
 }

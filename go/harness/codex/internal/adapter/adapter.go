@@ -79,7 +79,7 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 	if err := materializeAgents(codexHome, cfg.Agents); err != nil {
 		return nil, err
 	}
-	configTOML, err := renderConfig(cfg, codexHome)
+	configTOML, err := renderConfig(cfg, codexHome, input.Workspace)
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +200,7 @@ type nativeAgentConfig struct {
 
 // renderConfig translates the versioned Kagent contract into the pinned
 // Codex CLI's native TOML without copying credential values into durable state.
-func renderConfig(cfg config.Config, codexHome string) ([]byte, error) {
+func renderConfig(cfg config.Config, codexHome, workspaceDir string) ([]byte, error) {
 	native := nativeConfig{
 		Model: cfg.Model, ModelProvider: nativeProviderName(cfg.Provider),
 		AutoCompactLimit: cfg.AutoCompactTokenLimit,
@@ -263,7 +263,17 @@ func renderConfig(cfg config.Config, codexHome string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("encode Codex configuration: %w", err)
 	}
-	return contents, nil
+	return append(contents, workspaceTrustEntry(workspaceDir)...), nil
+}
+
+// workspaceTrustEntry is the exact bytes the pinned Codex CLI appends to
+// config.toml the first time thread/start runs in an untrusted cwd: a
+// [projects."<dir>"] table marking that directory trusted. Codex leaves an
+// already-trusted project's config.toml byte-for-byte unchanged, so rendering
+// this up front keeps every later observe comparison, including the one
+// executor.New runs on restart, matching what's on disk.
+func workspaceTrustEntry(workspaceDir string) []byte {
+	return fmt.Appendf(nil, "\n[projects.%q]\ntrust_level = \"trusted\"\n", workspaceDir)
 }
 
 func nativeExporter(exporterConfig *config.OTLPExporter) *nativeOtelExporter {
@@ -389,7 +399,7 @@ func (s *SetupInstaller) Setup(ctx context.Context, input workspace.Preparation,
 		if err != nil {
 			return nil, "", err
 		}
-		expected, err := renderConfig(cfg, filepath.Join(s.Input.DurableDir, "codex"))
+		expected, err := renderConfig(cfg, filepath.Join(s.Input.DurableDir, "codex"), s.Input.Workspace)
 		actual, readErr := os.ReadFile(filepath.Join(s.Input.DurableDir, "codex", "config.toml"))
 		if err != nil || readErr != nil || !bytes.Equal(expected, actual) {
 			return nil, "", fmt.Errorf("installed Codex configuration differs")
