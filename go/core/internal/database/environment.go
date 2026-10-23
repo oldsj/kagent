@@ -37,7 +37,7 @@ func (c *Client) LookupSessionCreation(ctx context.Context, creator, requestID s
 // and operator defaults. An existing request keeps its original resolved payload.
 func SameSessionSelection(session, request *apiv1alpha1.Session) bool {
 	return proto.Equal(session.GetAgent(), request.GetAgent()) && proto.Equal(session.GetWorkspace(), request.GetWorkspace()) && proto.Equal(session.GetDevelopmentEnvironment(), request.GetDevelopmentEnvironment()) &&
-		proto.Equal(&apiv1alpha1.Session{Credentials: session.GetCredentials()}, &apiv1alpha1.Session{Credentials: request.GetCredentials()})
+		sameCredentials(session.GetCredentials(), request.GetCredentials())
 }
 
 func validateEnvironmentRevision(pinned runtimeRevisionRow, request *apiv1alpha1.Session, baseRevision string) error {

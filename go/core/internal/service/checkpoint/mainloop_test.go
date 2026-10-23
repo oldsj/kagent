@@ -11,6 +11,7 @@ import (
 	"github.com/kagent-dev/kagent/go/core/internal/service/serviceerrors"
 	"github.com/kagent-dev/kagent/go/core/pkg/auth"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
 // ownedStore returns a checkpoint only to the user who owns it, as the database
@@ -73,11 +74,11 @@ func (s *ownedStore) GetSessionCheckpointSnapshot(ctx context.Context, id, userI
 	return s.testStore.GetSessionCheckpointSnapshot(ctx, id, userID)
 }
 
-func (s *ownedStore) ForkSession(ctx context.Context, id, userID, requestID, sessionID string, fresh bool) (*apiv1alpha1.Session, bool, error) {
+func (s *ownedStore) ForkSession(ctx context.Context, id, userID, requestID, sessionID string, fresh bool, credentials ...*apiv1alpha1.SessionCredential) (*apiv1alpha1.Session, bool, error) {
 	if err := s.visible(userID); err != nil {
 		return nil, false, err
 	}
-	return s.testStore.ForkSession(ctx, id, userID, requestID, sessionID, fresh)
+	return s.testStore.ForkSession(ctx, id, userID, requestID, sessionID, fresh, credentials...)
 }
 
 type mainloopSession struct{ userID string }
@@ -183,4 +184,40 @@ func TestMainloopCheckpointsFollowTheAgentAllowlist(t *testing.T) {
 	require.False(t, store.deleted)
 	require.Zero(t, tags.deleteCalls)
 	require.Equal(t, apiv1alpha1.CheckpointState_CHECKPOINT_STATE_READY, checkpoint.State)
+}
+
+// A fork's credentials follow the same operator-approved allowlist as
+// CreateSession's, checked against the checkpoint's source Agent since Fork
+// has no caller-supplied Agent reference of its own.
+func TestMainloopForkCredentialsFollowTheApprovedAllowlist(t *testing.T) {
+	policy, err := controlauth.New(controlauth.Config{
+		Namespace: "kagent", Agents: []string{"mainloop-main"},
+		Credentials: []controlauth.CredentialRule{{
+			Namespace: "kagent", SecretNamePattern: "mainloop-token", Key: "value",
+			Origin: "https://mcp.example.com", Header: "authorization", Purpose: "mcp",
+		}},
+	})
+	require.NoError(t, err)
+	checkpoint := &apiv1alpha1.Checkpoint{Id: "018f47a2-4efb-7c21-a848-123456789abc", State: apiv1alpha1.CheckpointState_CHECKPOINT_STATE_READY}
+	store := &ownedStore{owner: "mainloop", testStore: &testStore{
+		prepared: checkpoint, tagUID: "tag-uid",
+		snapshot: &database.SessionTaskSnapshot{Atespace: "team-a", URI: "s3://snapshots/snapshot-1", ContentScope: "DATA"},
+	}}
+	tags := &testTags{created: &ateapipb.Tag{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: tagName(checkpoint.Id), Uid: "tag-uid"},
+		Status:   &ateapipb.TagStatus{Snapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "s3://snapshots/snapshot-1", ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA}},
+	}}
+	service := NewService(store, policy, tags, &testWorkflow{})
+	ctx := auth.AuthSessionTo(t.Context(), mainloopSession{userID: "mainloop"})
+
+	denied := []*apiv1alpha1.SessionCredential{{Origin: "https://unapproved.example.com", Header: "Authorization", SecretRef: &apiv1alpha1.SecretKeyReference{Name: "mainloop-token", Key: "value"}}}
+	_, err = service.Fork(ctx, checkpoint.Id, "fork-request-denied", false, denied...)
+	require.Equal(t, serviceerrors.CodePermissionDenied, serviceerrors.CodeOf(err))
+	require.Nil(t, store.forked)
+
+	allowed := []*apiv1alpha1.SessionCredential{{Origin: "https://mcp.example.com", Header: "Authorization", SecretRef: &apiv1alpha1.SecretKeyReference{Name: "mainloop-token", Key: "value"}}}
+	fork, err := service.Fork(ctx, checkpoint.Id, "fork-request-allowed", false, allowed...)
+	require.NoError(t, err)
+	require.Len(t, fork.GetCredentials(), 1)
+	require.True(t, proto.Equal(allowed[0], fork.GetCredentials()[0]))
 }

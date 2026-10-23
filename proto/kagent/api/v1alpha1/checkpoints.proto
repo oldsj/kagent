@@ -88,6 +88,10 @@ message ForkSessionRequest {
   // Keep the workspace and caches but start with no A2A history and no native
   // agent conversation. False keeps the full conversation up to the checkpoint.
   bool fresh_conversation = 3;
+  // Per-session headers for origins already allowed by the Agent revision,
+  // applied to the new Session before its runtime accepts input. The source
+  // Session's credential bindings are never inherited.
+  repeated SessionCredential credentials = 4 [(buf.validate.field).repeated.max_items = 4];
 }
 
 message ForkSessionResponse {
