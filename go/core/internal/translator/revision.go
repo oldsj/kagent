@@ -69,6 +69,10 @@ type Revision struct {
 	// Data.
 	SnapshotOnQuiesce v1alpha3.RuntimeSnapshotScope
 
+	// Resources are the Harness's per-Session sandbox limits; nil leaves
+	// Substrate's defaults.
+	Resources *Resources
+
 	// Provenance identifies non-secret Kubernetes inputs. Gateway-fetched
 	// credential values are deliberately excluded from revision identity.
 	Provenance json.RawMessage
@@ -110,27 +114,29 @@ func (r *Revision) Digest() (RevisionID, error) {
 		capabilities = r.Composition.ContainerCapabilities()
 	}
 	raw, err := json.Marshal(struct {
-		Composition        *Composition                  `json:"composition,omitempty"`
-		Capabilities       []string                      `json:"containerCapabilities,omitempty"`
-		AgentName          string                        `json:"agentName"`
-		AgentUID           string                        `json:"agentUID"`
-		Namespace          string                        `json:"namespace"`
-		Image              string                        `json:"image"`
-		Command            []string                      `json:"command,omitempty"`
-		Args               []string                      `json:"args,omitempty"`
-		Environment        []corev1.EnvVar               `json:"environment"`
-		ConfigJSON         json.RawMessage               `json:"config"`
-		WorkerPoolName     string                        `json:"workerPoolName"`
-		SnapshotLocation   string                        `json:"snapshotLocation"`
-		SnapshotOnQuiesce  v1alpha3.RuntimeSnapshotScope `json:"snapshotOnQuiesce,omitempty"`
-		Provenance         json.RawMessage               `json:"provenance"`
-		Credentials        []egress.Credential           `json:"credentials,omitempty"`
-		EgressDestinations []string                      `json:"egressDestinations"`
-		SandboxClass       atev1alpha1.SandboxClass      `json:"sandboxClass"`
+		Composition       *Composition                  `json:"composition,omitempty"`
+		Capabilities      []string                      `json:"containerCapabilities,omitempty"`
+		AgentName         string                        `json:"agentName"`
+		AgentUID          string                        `json:"agentUID"`
+		Namespace         string                        `json:"namespace"`
+		Image             string                        `json:"image"`
+		Command           []string                      `json:"command,omitempty"`
+		Args              []string                      `json:"args,omitempty"`
+		Environment       []corev1.EnvVar               `json:"environment"`
+		ConfigJSON        json.RawMessage               `json:"config"`
+		WorkerPoolName    string                        `json:"workerPoolName"`
+		SnapshotLocation  string                        `json:"snapshotLocation"`
+		SnapshotOnQuiesce v1alpha3.RuntimeSnapshotScope `json:"snapshotOnQuiesce,omitempty"`
+		// omitempty keeps the digest of every revision without limits unchanged.
+		Resources          *Resources               `json:"resources,omitempty"`
+		Provenance         json.RawMessage          `json:"provenance"`
+		Credentials        []egress.Credential      `json:"credentials,omitempty"`
+		EgressDestinations []string                 `json:"egressDestinations"`
+		SandboxClass       atev1alpha1.SandboxClass `json:"sandboxClass"`
 	}{
 		Composition: r.Composition, Capabilities: capabilities, AgentName: r.AgentName, AgentUID: r.AgentUID, Namespace: r.Namespace,
 		Image: r.Image, Command: r.Command, Args: r.Args, Environment: r.Environment, ConfigJSON: r.ConfigJSON,
-		WorkerPoolName: r.WorkerPoolName, SnapshotLocation: r.SnapshotLocation, SnapshotOnQuiesce: r.SnapshotOnQuiesce, Provenance: r.Provenance,
+		WorkerPoolName: r.WorkerPoolName, SnapshotLocation: r.SnapshotLocation, SnapshotOnQuiesce: r.SnapshotOnQuiesce, Resources: r.Resources, Provenance: r.Provenance,
 		Credentials: r.Credentials, EgressDestinations: r.EgressDestinations,
 		SandboxClass: sandboxClass,
 	})
@@ -142,4 +148,26 @@ func (r *Revision) Digest() (RevisionID, error) {
 		return RevisionID{}, fmt.Errorf("marshal runtime revision Agent Card: %w", err)
 	}
 	return RevisionID(sha256.Sum256(append(raw, card...))), nil
+}
+
+// Resources are canonical sandbox limits, each empty when unset.
+type Resources struct {
+	CPU    string `json:"cpu,omitempty"`
+	Memory string `json:"memory,omitempty"`
+}
+
+// HarnessResources canonicalizes a Harness's limits, so equal quantities
+// written differently ("4" and "4000m") give the same revision.
+func HarnessResources(r *v1alpha3.HarnessResources) *Resources {
+	if r == nil || (r.CPU == nil && r.Memory == nil) {
+		return nil
+	}
+	out := &Resources{}
+	if r.CPU != nil {
+		out.CPU = r.CPU.String()
+	}
+	if r.Memory != nil {
+		out.Memory = r.Memory.String()
+	}
+	return out
 }

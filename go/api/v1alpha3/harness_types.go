@@ -18,6 +18,7 @@ package v1alpha3
 
 import (
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
@@ -230,6 +231,30 @@ type HarnessSpec struct {
 
 	// +required
 	Substrate RuntimeSubstratePolicy `json:"substrate"`
+
+	// Resources sizes each Session's sandbox. Omitted leaves Substrate's
+	// defaults: unlimited within the worker for gVisor, and 1 vCPU and 2 GiB
+	// for a micro-VM guest. Substrate books these limits against the worker
+	// pool's capacity when it places a Session, so a full pool refuses the
+	// next one rather than overcommitting.
+	// +optional
+	Resources *HarnessResources `json:"resources,omitempty"`
+}
+
+// HarnessResources are the per-Session sandbox limits of a Harness.
+//
+// +kubebuilder:validation:XValidation:rule="has(self.cpu) || has(self.memory)",message="resources must set cpu, memory or both"
+type HarnessResources struct {
+	// CPU is the Session's CPU limit; a micro-VM gets this many vCPUs, rounded up.
+	// +kubebuilder:validation:XValidation:rule="quantity(string(self)).isGreaterThan(quantity('0')) && quantity(string(self)).isLessThan(quantity('1000'))",message="cpu must be positive and below 1000"
+	// +optional
+	CPU *resource.Quantity `json:"cpu,omitempty"`
+
+	// Memory is the Session's memory limit; a micro-VM's guest gets this less
+	// the VMM's reserve.
+	// +kubebuilder:validation:XValidation:rule="quantity(string(self)).isGreaterThan(quantity('0'))",message="memory must be positive"
+	// +optional
+	Memory *resource.Quantity `json:"memory,omitempty"`
 }
 
 // HarnessCapabilities records behavior proven for a pinned adapter and runtime.

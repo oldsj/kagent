@@ -120,6 +120,7 @@ func ActorTemplateForRevision(spec *translator.Revision, revisionID translator.R
 			},
 		}},
 		WorkerSelector: workerSelectorForPool(workerKey),
+		Resources:      actorResources(spec.Resources),
 		SnapshotConfig: snapshotPolicy,
 		Volumes: []*ateapipb.Volume{
 			{Name: durableDataVolume, DurableDir: &ateapipb.DurableDirVolumeSource{}},
@@ -249,4 +250,24 @@ func sandboxConfigForClass(class atev1alpha1.SandboxClass) (*ateapipb.SandboxCon
 	default:
 		return nil, fmt.Errorf("unsupported sandbox class %q", class)
 	}
+}
+
+// actorResources declares the Harness's per-Session limits. Substrate sizes the
+// sandbox from them (a micro-VM's vCPUs and guest memory) and books them against
+// the worker's capacity; nil keeps its defaults.
+func actorResources(r *translator.Resources) *ateapipb.Resources {
+	if r == nil {
+		return nil
+	}
+	var limits []*ateapipb.Limits
+	if r.CPU != "" {
+		limits = append(limits, &ateapipb.Limits{Name: "cpu", Quantity: r.CPU})
+	}
+	if r.Memory != "" {
+		limits = append(limits, &ateapipb.Limits{Name: "memory", Quantity: r.Memory})
+	}
+	if len(limits) == 0 {
+		return nil
+	}
+	return &ateapipb.Resources{Limits: limits}
 }

@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -188,6 +189,29 @@ func TestConfigurationCRDValidation(t *testing.T) {
 				MCP: &MCPToolBinding{Server: corev1.TypedLocalObjectReference{Kind: "Service", Name: "tools"}},
 			}}),
 			wantReject: "kind must be RemoteMCPServer",
+		},
+		{
+			name:   "Harness accepts cpu and memory limits",
+			object: resourcesHarness(namespace, "resources-both", &HarnessResources{CPU: new(resource.MustParse("4")), Memory: new(resource.MustParse("8Gi"))}),
+		},
+		{
+			name:   "Harness accepts a memory limit alone",
+			object: resourcesHarness(namespace, "resources-memory", &HarnessResources{Memory: new(resource.MustParse("4Gi"))}),
+		},
+		{
+			name:       "Harness resources must set a limit",
+			object:     resourcesHarness(namespace, "resources-empty", &HarnessResources{}),
+			wantReject: "resources must set cpu, memory or both",
+		},
+		{
+			name:       "Harness cpu limit must be positive",
+			object:     resourcesHarness(namespace, "resources-zero-cpu", &HarnessResources{CPU: new(resource.MustParse("0"))}),
+			wantReject: "cpu must be positive and below 1000",
+		},
+		{
+			name:       "Harness memory limit must be positive",
+			object:     resourcesHarness(namespace, "resources-negative-memory", &HarnessResources{Memory: new(resource.MustParse("-1Gi"))}),
+			wantReject: "memory must be positive",
 		},
 		{
 			name: "Harness compaction requires a strategy",
@@ -538,4 +562,8 @@ func validAgentTemplate(namespace, name string, tools []ToolBinding) *AgentTempl
 
 func compactionHarness(namespace, name string, compaction KagentHarnessCompaction) *Harness {
 	return validHarness(namespace, name, HarnessSpec{Kagent: &KagentHarness{Compaction: &compaction}})
+}
+
+func resourcesHarness(namespace, name string, resources *HarnessResources) *Harness {
+	return validHarness(namespace, name, HarnessSpec{Kagent: &KagentHarness{}, Resources: resources})
 }
