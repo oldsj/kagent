@@ -77,6 +77,7 @@ func (c *Compiler) Compile(ctx context.Context, input *v2translator.HarnessInput
 		Environment: environment, ConfigJSON: configJSON, AgentCard: card,
 		WorkerPoolName: harness.Spec.Substrate.WorkerPoolRef.Name, SnapshotLocation: harness.Spec.Substrate.SnapshotPolicy.Location,
 		SnapshotOnQuiesce: harness.Spec.Substrate.SnapshotPolicy.OnQuiesce,
+		Resources:         v2translator.HarnessResources(harness.Spec.Resources),
 		Credentials:       credentials, Provenance: provenance, EgressDestinations: compiled.Egress,
 	}}, nil
 }

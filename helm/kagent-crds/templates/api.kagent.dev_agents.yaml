@@ -293,6 +293,42 @@ spec:
                         - message: modelConfigRef name must not be empty
                           rule: self.modelConfigRef.name.size() > 0
                     type: object
+                  resources:
+                    description: |-
+                      Resources sizes each Session's sandbox. Omitted leaves Substrate's
+                      defaults: unlimited within the worker for gVisor, and 1 vCPU and 2 GiB
+                      for a micro-VM guest. Substrate books these limits against the worker
+                      pool's capacity when it places a Session, so a full pool refuses the
+                      next one rather than overcommitting.
+                    properties:
+                      cpu:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: CPU is the Session's CPU limit; a micro-VM gets
+                          this many vCPUs, rounded up.
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                        x-kubernetes-validations:
+                        - message: cpu must be positive and below 1000
+                          rule: quantity(string(self)).isGreaterThan(quantity('0'))
+                            && quantity(string(self)).isLessThan(quantity('1000'))
+                      memory:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: |-
+                          Memory is the Session's memory limit; a micro-VM's guest gets this less
+                          the VMM's reserve.
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                        x-kubernetes-validations:
+                        - message: memory must be positive
+                          rule: quantity(string(self)).isGreaterThan(quantity('0'))
+                    type: object
+                    x-kubernetes-validations:
+                    - message: resources must set cpu, memory or both
+                      rule: has(self.cpu) || has(self.memory)
                   sessionIdleTTL:
                     description: |-
                       SessionIdleTTL overrides the controller default for all Sessions of this

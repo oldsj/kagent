@@ -174,6 +174,21 @@ class; both sandbox classes participate in the digest, so a prepared MicroVM run
 cannot be confused with a gVisor revision. Returning to gVisor restores the
 original digest. Existing Sessions remain pinned to their revisions.
 
+### Session resources
+
+`spec.resources` on a Harness (or inline on an Agent) sets each Session's `cpu`
+and `memory` limits; the controller copies them onto the ActorTemplate. Substrate
+places a Session only on a worker whose reported capacity (its container's
+limits, less what its other Actors declared) covers them, and a micro-VM guest
+gets that many vCPUs and that memory less the VMM's reserve. Without
+`spec.resources`, a micro-VM guest falls back to 1 vCPU and 2 GiB and a gVisor
+sandbox shares its worker unbounded; neither is counted against capacity.
+
+The limits are canonicalized (`4000m` and `4` are equal) and hashed into the
+revision, so changing them prepares a new revision for new Sessions while
+existing Sessions keep theirs. Omitting the field leaves every existing digest
+unchanged.
+
 Substrate and persistence failures during preparation report
 `Ready=False` with reason `RuntimePreparationFailed`, rather than remaining
 silently pending. Status includes a safe error code; a failed precondition also

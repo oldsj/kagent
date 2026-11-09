@@ -275,3 +275,37 @@ func TestComposedPlatformExecutionContract(t *testing.T) {
 	_, err = ActorTemplateForRevision(&spec, id)
 	require.ErrorContains(t, err, "conflicts with selected platform")
 }
+
+func TestActorTemplateForRevisionResources(t *testing.T) {
+	spec := &translator.Revision{
+		Namespace: "agents", AgentName: "helper",
+		Image:          "agent.example/image@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		WorkerPoolName: "default", SnapshotLocation: "snapshots",
+		ConfigJSON: []byte(`{}`), AgentCard: &a2apb.AgentCard{Name: "helper", Version: "v1", Capabilities: &a2apb.AgentCapabilities{},
+			SupportedInterfaces: []*a2apb.AgentInterface{{Url: "http://127.0.0.1:80", ProtocolBinding: "GRPC", ProtocolVersion: "1.0"}}, DefaultInputModes: []string{"text"}, DefaultOutputModes: []string{"text"}},
+	}
+	revisionID, err := spec.Digest()
+	require.NoError(t, err)
+	template, err := ActorTemplateForRevision(spec, revisionID)
+	require.NoError(t, err)
+	require.Nil(t, template.GetResources(), "no limits keeps Substrate's defaults")
+
+	spec.Resources = &translator.Resources{CPU: "4", Memory: "8Gi"}
+	revisionID, err = spec.Digest()
+	require.NoError(t, err)
+	template, err = ActorTemplateForRevision(spec, revisionID)
+	require.NoError(t, err)
+	require.Len(t, template.GetResources().GetLimits(), 2)
+	require.Equal(t, "cpu", template.GetResources().GetLimits()[0].GetName())
+	require.Equal(t, "4", template.GetResources().GetLimits()[0].GetQuantity())
+	require.Equal(t, "memory", template.GetResources().GetLimits()[1].GetName())
+	require.Equal(t, "8Gi", template.GetResources().GetLimits()[1].GetQuantity())
+
+	spec.Resources = &translator.Resources{Memory: "4Gi"}
+	revisionID, err = spec.Digest()
+	require.NoError(t, err)
+	template, err = ActorTemplateForRevision(spec, revisionID)
+	require.NoError(t, err)
+	require.Len(t, template.GetResources().GetLimits(), 1)
+	require.Equal(t, "memory", template.GetResources().GetLimits()[0].GetName())
+}

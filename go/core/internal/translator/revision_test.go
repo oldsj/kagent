@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 func TestRevisionDigestIncludesSandboxClass(t *testing.T) {
@@ -143,4 +144,27 @@ func TestRevisionDigestIncludesSnapshotOnQuiesce(t *testing.T) {
 	full, err := revision.Digest()
 	require.NoError(t, err)
 	require.NotEqual(t, unset, full, "changing the quiesce scope must create a new immutable revision")
+}
+
+func TestRevisionDigestIncludesResources(t *testing.T) {
+	revision := &Revision{Namespace: "agents", AgentName: "helper"}
+	unset, err := revision.Digest()
+	require.NoError(t, err)
+	revision.Resources = HarnessResources(nil)
+	stillUnset, err := revision.Digest()
+	require.NoError(t, err)
+	require.Equal(t, unset, stillUnset, "a Harness without limits keeps its revision")
+
+	cpu, memory := resource.MustParse("4"), resource.MustParse("8Gi")
+	revision.Resources = HarnessResources(&v1alpha3.HarnessResources{CPU: &cpu, Memory: &memory})
+	sized, err := revision.Digest()
+	require.NoError(t, err)
+	require.NotEqual(t, unset, sized, "changing limits must create a new immutable revision")
+
+	cpu, memory = resource.MustParse("4000m"), resource.MustParse("8192Mi")
+	revision.Resources = HarnessResources(&v1alpha3.HarnessResources{CPU: &cpu, Memory: &memory})
+	same, err := revision.Digest()
+	require.NoError(t, err)
+	require.Equal(t, sized, same, "equal quantities written differently share a revision")
+	require.Equal(t, &Resources{CPU: "4", Memory: "8Gi"}, revision.Resources)
 }
