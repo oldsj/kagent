@@ -123,8 +123,8 @@ jobs:
           tags: kagent-controller-dev:ci
           build-args: |
             BUILD_PACKAGE=core/cmd/controller/main.go
-          cache-from: type=gha,scope=controller-dev-image
-          cache-to: type=gha,mode=max,scope=controller-dev-image
+          # No GHA cache: the image bakes a ~1.3 GB Go module and build cache, and exporting
+          # it cost more than rebuilding.
       - name: Smoke-test that the entrypoint builds and starts the controller
         run: |
           set -euo pipefail
