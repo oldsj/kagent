@@ -153,10 +153,9 @@ func (d *ProcessDriver) Args(turn runtime.Turn) []string {
 	}
 	if d.config.Workspace != "" {
 		// With the adapter's CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD, this
-		// loads the checkout's CLAUDE.md and .claude/rules. Claude also reads
-		// the checkout's enabledPlugins and extraKnownMarketplaces, which can
-		// enable plugins already installed in the harness-owned user scope.
-		// The adapter supplies the checkout's skills as a plugin.
+		// loads the checkout's CLAUDE.md and .claude/rules. Its settings,
+		// including enabledPlugins, do not load (see settingSources). The
+		// adapter supplies the checkout's skills as a plugin.
 		args = append(args, "--add-dir", d.config.Workspace)
 	}
 	model := turn.Model
