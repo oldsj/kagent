@@ -20,7 +20,11 @@ import (
 
 // TestHarnessResourcesSizeEachHarness checks the reason spec.resources exists:
 // two Harnesses in one installation give their Agents differently sized
-// runtimes. It reads the limits back from Substrate, where they take effect.
+// runtimes. The inventory API does not expose an ActorTemplate's spec, so the
+// limits themselves are asserted where they are built, in the translator's
+// TestCompileAgentHarnessResources. This case checks the cluster path around
+// them: the API server admits the limits, and Substrate prepares one runtime
+// per size.
 func TestHarnessResourcesSizeEachHarness(t *testing.T) {
 	target := interactionTarget(t)
 	kube := interactionKubeClient(t)
@@ -28,18 +32,19 @@ func TestHarnessResourcesSizeEachHarness(t *testing.T) {
 	harness := testHarness{name: claudeE2EHarness, runtimeLabel: "claude"}
 	model := harness.createModel(t, kube, startInteractionMock(t), nil)
 
-	t.Run("Given two Harnesses with different CPU and memory limits, when an Agent becomes ready on each, assert that Substrate holds each Agent's own limits", func(t *testing.T) {
-		small := readyAgentOnSizedHarness(t, kube, harness, model.Name, "500m", "768Mi")
-		large := readyAgentOnSizedHarness(t, kube, harness, model.Name, "1500m", "1536Mi")
+	t.Run("Given two Harnesses with different CPU and memory limits, when an Agent becomes ready on each, assert that Substrate has prepared a separate runtime for each", func(t *testing.T) {
+		// Both fit together on the E2E worker pool, and neither is the default.
+		small := readyAgentOnSizedHarness(t, kube, harness, model.Name, "500m", "512Mi")
+		large := readyAgentOnSizedHarness(t, kube, harness, model.Name, "1250m", "1280Mi")
 
 		templates := actorTemplatesByAgent(t, system, small, large)
 
-		smallLimits := templates[small.Name].GetResources().GetLimits()
-		require.Equal(t, int64(500), smallLimits.GetCpuMillicores())
-		require.Equal(t, int64(768<<20), smallLimits.GetMemoryBytes())
-		largeLimits := templates[large.Name].GetResources().GetLimits()
-		require.Equal(t, int64(1500), largeLimits.GetCpuMillicores())
-		require.Equal(t, int64(1536<<20), largeLimits.GetMemoryBytes())
+		require.NotEqual(t, small.Status.LatestSuccessfulRevision, large.Status.LatestSuccessfulRevision)
+		for _, agent := range []*v1alpha3.Agent{small, large} {
+			template := templates[agent.Name]
+			require.NotEmpty(t, template.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag().GetName(), "Agent %s has no prepared runtime", agent.Name)
+		}
+		require.NotEqual(t, templates[small.Name].GetMetadata().GetUid(), templates[large.Name].GetMetadata().GetUid())
 	})
 }
 
