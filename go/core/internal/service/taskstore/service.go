@@ -201,5 +201,5 @@ func (s *Service) GetWorkspace(ctx context.Context, input *runtimev1.TaskStoreSe
 	if err != nil {
 		return nil, err
 	}
-	return &runtimev1.TaskStoreServiceGetWorkspaceResponse{Workspace: session.GetWorkspace()}, nil
+	return &runtimev1.TaskStoreServiceGetWorkspaceResponse{Workspace: session.GetWorkspace(), FreshConversation: session.GetFreshConversation()}, nil
 }
