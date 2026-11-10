@@ -52,6 +52,8 @@ func TestControllerAuthenticator(t *testing.T) {
 		{name: "non-string subject", mode: "trusted-proxy", payload: `{"sub":42}`, wantAuthError: true},
 		{name: "missing credentials", mode: "trusted-proxy", wantAuthError: true},
 		{name: "malformed credentials", mode: "trusted-proxy", payload: "invalid", wantAuthError: true},
+		{name: "service-account mode rejects a user id", mode: "service-account", wantAuthError: true},
+		{name: "service-account mode rejects a user JWT", mode: "service-account", payload: `{"sub":"subject"}`, wantAuthError: true},
 		{name: "unsupported mode", mode: "oidc", wantConfigError: true},
 		{name: "empty mode", mode: "", wantConfigError: true},
 	} {

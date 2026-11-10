@@ -60,6 +60,11 @@ func (p *ServiceAccountProvider) verify(ctx context.Context, token, audience str
 	if !time.Now().Before(entry.validUntil) {
 		return auth.Principal{}, ErrUnauthenticated
 	}
+	if p.allowed != nil {
+		if _, ok := p.allowed[entry.user.Username]; !ok {
+			return auth.Principal{}, ErrUnauthenticated
+		}
+	}
 	// Each caller owns its claims; mutating them must not affect cached identity.
 	// Claims use JSON-compatible values for protobuf Struct encoding.
 	groups := make([]any, len(entry.user.Groups))

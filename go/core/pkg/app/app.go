@@ -349,7 +349,7 @@ func Run(ctx context.Context, input *configv1.ControllerConfig, opts Options) er
 		if err != nil {
 			return fmt.Errorf("create service-account verifier: %w", err)
 		}
-		authenticator = authimpl.NewServiceAccountProvider(authenticator, reviewer.TokenReviews(), machine.GetAuthority())
+		authenticator = authimpl.NewServiceAccountProvider(authenticator, reviewer.TokenReviews(), machine.GetAuthority(), machine.GetAllowedSubjects()...)
 	}
 	authenticator = runtimeauth.NewProvider(authenticator, actorVerifier, store, cfg.GetSubstrate().GetActorJwtIssuer())
 	authorizer = runtimeauth.NewAuthorizer(authorizer, store)
