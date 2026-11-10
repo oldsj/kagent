@@ -87,6 +87,7 @@ func DefaultMethodPolicies() MethodPolicies {
 	// operation, and it must not inherit the read mode its neighbours carry.
 	policies[apiv1.SessionService_UpdateSessionName_FullMethodName] = auth.AccessUpdate
 	policies[apiv1.SessionService_RevertSession_FullMethodName] = auth.AccessUpdate
+	policies[apiv1.SessionService_PrepareSessionWorkspace_FullMethodName] = auth.AccessUpdate
 	policies[apiv1.SessionService_DeleteSession_FullMethodName] = auth.AccessDelete
 	policies[apiv1.SessionService_CreateSessionShare_FullMethodName] = auth.AccessCreate
 	policies[apiv1.SessionService_ListSessionShares_FullMethodName] = auth.AccessRead
@@ -138,14 +139,15 @@ func DefaultMethodPolicies() MethodPolicies {
 // Shared APIs accept either caller identity and authorize in their services.
 func runtimeMethodPolicies() MethodPolicies {
 	return MethodPolicies{
-		runtimev1.TaskStoreService_CreateTask_FullMethodName:   auth.AccessRuntime,
-		runtimev1.TaskStoreService_GetTask_FullMethodName:      auth.AccessRuntime,
-		runtimev1.TaskStoreService_UpdateTask_FullMethodName:   auth.AccessRuntime,
-		runtimev1.TaskStoreService_SettleTask_FullMethodName:   auth.AccessRuntime,
-		runtimev1.TaskStoreService_GetWorkspace_FullMethodName: auth.AccessRuntime,
-		runtimev1.TaskStoreService_ListTasks_FullMethodName:    auth.AccessRuntime,
-		runtimev1.MemoryService_AddSession_FullMethodName:      auth.AccessRuntime,
-		runtimev1.MemoryService_AddSessionBatch_FullMethodName: auth.AccessRuntime,
-		runtimev1.MemoryService_Search_FullMethodName:          auth.AccessRuntime,
+		runtimev1.TaskStoreService_CreateTask_FullMethodName:                   auth.AccessRuntime,
+		runtimev1.TaskStoreService_GetTask_FullMethodName:                      auth.AccessRuntime,
+		runtimev1.TaskStoreService_UpdateTask_FullMethodName:                   auth.AccessRuntime,
+		runtimev1.TaskStoreService_SettleTask_FullMethodName:                   auth.AccessRuntime,
+		runtimev1.TaskStoreService_GetWorkspace_FullMethodName:                 auth.AccessRuntime,
+		runtimev1.TaskStoreService_CompleteWorkspacePreparation_FullMethodName: auth.AccessRuntime,
+		runtimev1.TaskStoreService_ListTasks_FullMethodName:                    auth.AccessRuntime,
+		runtimev1.MemoryService_AddSession_FullMethodName:                      auth.AccessRuntime,
+		runtimev1.MemoryService_AddSessionBatch_FullMethodName:                 auth.AccessRuntime,
+		runtimev1.MemoryService_Search_FullMethodName:                          auth.AccessRuntime,
 	}
 }

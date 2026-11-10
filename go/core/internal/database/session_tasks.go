@@ -166,6 +166,13 @@ func (c *Client) writeRuntimeTask(ctx context.Context, sessionID string, expecte
 			if !errors.Is(err, pgx.ErrNoRows) {
 				return err
 			}
+			current, err := toSession(session)
+			if err != nil {
+				return err
+			}
+			if err := requirePreparedAdmission(ctx, tx, current); err != nil {
+				return err
+			}
 		} else {
 			if err != nil {
 				return notFoundOr(err)

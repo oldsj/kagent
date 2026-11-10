@@ -29,6 +29,8 @@ type Store interface {
 	GetVersionedSessionTask(context.Context, string, string) (*a2a.Task, int64, error)
 	UpdateSessionTask(context.Context, string, int64, []byte, *a2a.Task, a2a.Event, string) (int64, error)
 	ListSessionTasks(context.Context, string, string, a2a.TaskState, *time.Time, int, *int) ([]*a2a.Task, int, error)
+	IssueWorkspacePreparation(context.Context, *apiv1.Session, string) (*database.RuntimePreparation, error)
+	CompleteWorkspacePreparation(context.Context, string, *runtimev1.TaskStoreServiceCompleteWorkspacePreparationRequest) error
 }
 
 var _ Store = (*database.Client)(nil)
@@ -44,14 +46,19 @@ func NewService(store Store, quiescenceWake, pushWake chan<- struct{}) *Service 
 }
 
 func (s *Service) session(ctx context.Context, sessionID string) (*apiv1.Session, error) {
-	session, err := runtimeauth.Session(ctx, s.store)
+	session, _, err := s.sessionActor(ctx, sessionID)
+	return session, err
+}
+
+func (s *Service) sessionActor(ctx context.Context, sessionID string) (*apiv1.Session, string, error) {
+	session, actorUID, err := runtimeauth.SessionActor(ctx, s.store)
 	if err != nil {
-		return nil, storageError(err)
+		return nil, "", storageError(err)
 	}
 	if session.Id != sessionID {
-		return nil, status.Error(codes.PermissionDenied, "actor does not belong to this session")
+		return nil, "", status.Error(codes.PermissionDenied, "actor does not belong to this session")
 	}
-	return session, nil
+	return session, actorUID, nil
 }
 
 // CreateTask persists the SDK's first task snapshot. Runtime execution and
@@ -195,11 +202,34 @@ func storageError(err error) error {
 
 // GetWorkspace returns the repository checkout the Session asked for. An empty
 // response means none was requested. The Session row is authoritative: the runtime
-// never receives the workspace through its image, environment, or config.
+// never receives the workspace through its image, environment, or config. It also
+// reports whether turns wait for a workspace preparation, issuing a pending
+// assignment for the calling Actor.
 func (s *Service) GetWorkspace(ctx context.Context, input *runtimev1.TaskStoreServiceGetWorkspaceRequest) (*runtimev1.TaskStoreServiceGetWorkspaceResponse, error) {
-	session, err := s.session(ctx, input.SessionId)
+	session, actorUID, err := s.sessionActor(ctx, input.SessionId)
 	if err != nil {
 		return nil, err
 	}
-	return &runtimev1.TaskStoreServiceGetWorkspaceResponse{Workspace: session.GetWorkspace(), FreshConversation: session.GetFreshConversation()}, nil
+	response := &runtimev1.TaskStoreServiceGetWorkspaceResponse{Workspace: session.GetWorkspace(), FreshConversation: session.GetFreshConversation()}
+	preparation, err := s.store.IssueWorkspacePreparation(ctx, session, actorUID)
+	if err != nil {
+		return nil, storageError(err)
+	}
+	response.PreparationRequired, response.PreparationReady, response.Preparation = preparation.Required, preparation.Ready, preparation.Assignment
+	return response, nil
+}
+
+// CompleteWorkspacePreparation settles the calling Actor's issued assignment.
+func (s *Service) CompleteWorkspacePreparation(ctx context.Context, input *runtimev1.TaskStoreServiceCompleteWorkspacePreparationRequest) (*runtimev1.TaskStoreServiceCompleteWorkspacePreparationResponse, error) {
+	_, actorUID, err := s.sessionActor(ctx, input.SessionId)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.store.CompleteWorkspacePreparation(ctx, actorUID, input); err != nil {
+		if errors.Is(err, database.ErrFailedPrecondition) {
+			return nil, status.Error(codes.FailedPrecondition, "no issued workspace preparation matches this report")
+		}
+		return nil, storageError(err)
+	}
+	return &runtimev1.TaskStoreServiceCompleteWorkspacePreparationResponse{}, nil
 }
