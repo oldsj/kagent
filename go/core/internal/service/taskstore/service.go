@@ -23,7 +23,7 @@ import (
 )
 
 type Store interface {
-	SettleSessionTask(context.Context, string, string, int64) error
+	SettleSessionTask(context.Context, string, string, int64, time.Duration) error
 	GetSessionForRuntime(context.Context, string, string) (*apiv1.Session, error)
 	CreateRuntimeTask(context.Context, string, []byte, *a2a.Task, string) (int64, error)
 	GetVersionedSessionTask(context.Context, string, string) (*a2a.Task, int64, error)
@@ -37,10 +37,13 @@ type Service struct {
 	store          Store
 	quiescenceWake chan<- struct{}
 	pushWake       chan<- struct{}
+	quiesceDelay   time.Duration
 }
 
-func NewService(store Store, quiescenceWake, pushWake chan<- struct{}) *Service {
-	return &Service{store: store, quiescenceWake: quiescenceWake, pushWake: pushWake}
+// NewService serves runtime task storage. quiesceDelay is the configured
+// sessions.quiescenceDelay applied to each settled boundary.
+func NewService(store Store, quiescenceWake, pushWake chan<- struct{}, quiesceDelay time.Duration) *Service {
+	return &Service{store: store, quiescenceWake: quiescenceWake, pushWake: pushWake, quiesceDelay: quiesceDelay}
 }
 
 func (s *Service) session(ctx context.Context, sessionID string) (*apiv1.Session, error) {
@@ -162,7 +165,7 @@ func (s *Service) SettleTask(ctx context.Context, input *runtimev1.TaskStoreServ
 	if _, err := s.session(ctx, input.SessionId); err != nil {
 		return nil, err
 	}
-	if err := s.store.SettleSessionTask(ctx, input.SessionId, input.TaskId, input.Version); err != nil {
+	if err := s.store.SettleSessionTask(ctx, input.SessionId, input.TaskId, input.Version, s.quiesceDelay); err != nil {
 		return nil, storageError(err)
 	}
 	// Publication is committed before waking local workers. The durable claim

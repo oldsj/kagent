@@ -376,6 +376,14 @@ message SessionsConfig {
     gt: {}
     lte: {seconds: 9223372036}
   }];
+  // Delay after a turn settles before its idle runtime may be suspended, so
+  // background processes keep running. Zero (default) suspends immediately.
+  // A new turn supersedes the pending suspension. Due work is noticed within
+  // quiescence_recovery_interval.
+  google.protobuf.Duration quiescence_delay = 5 [(buf.validate.field).duration = {
+    gte: {}
+    lte: {seconds: 1800}
+  }];
 }
 
 message GatewayConfig {

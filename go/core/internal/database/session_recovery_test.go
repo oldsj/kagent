@@ -41,7 +41,7 @@ func TestCrashedRecoverySettlesTasksAtomically(t *testing.T) {
 			version, err := client.CreateRuntimeTask(t.Context(), session.Id, taskMutationHash("create"), task, "")
 			require.NoError(t, err)
 			if test.published {
-				require.NoError(t, client.SettleSessionTask(t.Context(), session.Id, string(task.ID), version))
+				require.NoError(t, client.SettleSessionTask(t.Context(), session.Id, string(task.ID), version, 0))
 			}
 			snapshot := SessionTaskSnapshot{}
 			if test.captured {
@@ -153,7 +153,7 @@ func TestCrashedRecoveryRetiresIssuedIdleSuspension(t *testing.T) {
 		version, err = client.UpdateSessionTask(t.Context(), session.Id, version, taskMutationHash(string(state)), task, task, "")
 		require.NoError(t, err)
 	}
-	require.NoError(t, client.SettleSessionTask(t.Context(), session.Id, string(task.ID), version))
+	require.NoError(t, client.SettleSessionTask(t.Context(), session.Id, string(task.ID), version, 0))
 	work, err := client.ClaimSessionQuiescence(t.Context())
 	require.NoError(t, err)
 	uid := "actor-" + session.Id
@@ -227,7 +227,7 @@ func TestCrashedRecoveryAdmissionRollsBackOnMalformedTask(t *testing.T) {
 		version, err = client.UpdateSessionTask(t.Context(), session.Id, version, taskMutationHash(string(state)), task, task, "")
 		require.NoError(t, err)
 	}
-	require.NoError(t, client.SettleSessionTask(t.Context(), session.Id, string(task.ID), version))
+	require.NoError(t, client.SettleSessionTask(t.Context(), session.Id, string(task.ID), version, 0))
 	row, err := readSession(t.Context(), client.db, session.Id)
 	require.NoError(t, err)
 	before, err := readSessionTask(t.Context(), client.db, row.HistoryID, string(task.ID))

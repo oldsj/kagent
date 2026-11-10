@@ -126,7 +126,7 @@ func TestRevertSessionThroughGRPC(t *testing.T) {
 				version, err := store.CreateRuntimeTask(t.Context(), session.Id, hash[:], task, "")
 				require.NoError(t, err)
 				if test.task == a2a.TaskStateInputRequired || test.task == a2a.TaskStateAuthRequired {
-					require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, string(task.ID), version))
+					require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, string(task.ID), version, 0))
 				}
 			}
 			request := &apiv1.RevertSessionRequest{SessionId: session.Id}

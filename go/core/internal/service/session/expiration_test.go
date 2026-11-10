@@ -86,7 +86,7 @@ func TestWaitingSessionExpirationDeletesRuntime(t *testing.T) {
 			session, err := workflow.Create(t.Context(), session)
 			require.NoError(t, err)
 			request := stageQuiescenceTask(t, store.Client, session, state)
-			require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, request.TaskId, request.Version))
+			require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, request.TaskId, request.Version, 0))
 			work, err := store.ClaimSessionQuiescence(t.Context())
 			require.NoError(t, err)
 			snapshot, err := workflow.Quiesce(t.Context(), session)
