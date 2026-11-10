@@ -400,7 +400,14 @@ selects the ActorTemplate's preferred snapshot fidelity:
 | onQuiesce | Preferred fidelity | On resume |
 | --- | --- | --- |
 | `Data` (default) | VOLUMES | Fresh containers from the OCI image with the saved durable directories |
-| `Full` | MEMORY | The same processes continue, so a workspace dev server survives suspension |
+| `Full` | MEMORY | Processes running at suspension continue where they stopped |
+
+Only processes that outlive a turn benefit. The Claude harness ends its whole
+native process tree at the end of every turn, including commands that Bash
+detached with `setsid`, so a dev server started from Claude's Bash tool does not
+survive a turn with either scope. The kagent bash tool likewise stops each
+command's process group when the call finishes. `Full` keeps standalone sandbox
+guest processes and any process the runtime itself keeps between turns.
 
 The template applies to every suspension of the Actor, whether the task is
 waiting for input or finished. Harnesses recover pending approvals and user
@@ -426,7 +433,10 @@ fall back to an older checkpoint. Suspension requires a durable snapshot at
 VOLUMES, ROOTFS or MEMORY fidelity. Only VOLUMES checkpoints can be forked, so
 a fork never carries the source session's process memory or runtime identity
 into the new session; checkpoints of a `Full` Session are retained but return
-`FAILED_PRECONDITION` from `ForkSession`.
+`FAILED_PRECONDITION` from `ForkSession`. Substrate restores an Actor created
+from a Tag at the Tag's fidelity under the same ActorTemplate, and offers no
+way to restore less, so a fork of a MEMORY checkpoint would resume the source
+Session's processes and identity.
 
 Codex and Claude record failed deferred continuations as `abandoned` in their
 existing input journals. Admission rejects abandoned or restored unfinished

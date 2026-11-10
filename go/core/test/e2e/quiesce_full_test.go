@@ -23,21 +23,15 @@ import (
 	"github.com/kagent-dev/kagent/go/core/internal/substrate"
 )
 
-const (
-	quiesceStartToolID = "toolu_kagent_quiesce_start"
-	quiesceCheckToolID = "toolu_kagent_quiesce_check"
-	// The pid file is durable, so the check distinguishes a resumed process
-	// from a cold start that kept only files.
-	quiesceStartCommand = `setsid sleep 86400 </dev/null >/dev/null 2>&1 & echo $! > /data/workspace/.quiesce-pid; ` +
-		`sleep 1; kill -0 "$(cat /data/workspace/.quiesce-pid)" && echo PROCESS_STARTED`
-	quiesceCheckCommand = `kill -0 "$(cat /data/workspace/.quiesce-pid)" 2>/dev/null && echo PROCESS_ALIVE || echo PROCESS_GONE`
-)
+// quiesceFullAgent is fixed so an installation with a session policy can list it.
+const quiesceFullAgent = "quiesce-full-e2e"
 
-// TestE2EClaudeFullQuiesceKeepsProcesses runs a Claude Harness with
-// snapshotPolicy.onQuiesce Full. A detached process started in the first turn
-// must still be running after the idle Actor suspends at MEMORY fidelity and
-// the next turn resumes it.
-func TestE2EClaudeFullQuiesceKeepsProcesses(t *testing.T) {
+// TestE2EClaudeFullQuiesceResumesFromMemory runs a Claude Harness with
+// snapshotPolicy.onQuiesce Full. The idle Actor must suspend with a MEMORY
+// snapshot, and the next turn must complete on the runtime resumed from it.
+// Processes started by Claude's Bash tool are not expected to survive: the
+// harness ends its native process tree at the end of every turn.
+func TestE2EClaudeFullQuiesceResumesFromMemory(t *testing.T) {
 	t.Parallel()
 	target := interactionTarget(t)
 	server := mockllm.NewServer(quiesceFullMock(t))
@@ -65,7 +59,7 @@ func TestE2EClaudeFullQuiesceKeepsProcesses(t *testing.T) {
 	harness := createFullQuiesceHarness(t, kube)
 	model := createClaudeMockModelNamed(t, kube, claudeTurnConfiguredModel, strings.TrimSuffix(reachableModelURL(t, recorder.URL), "/v1"))
 	template := &v1alpha3.AgentTemplate{
-		ObjectMeta: metav1.ObjectMeta{GenerateName: "quiesce-full-", Namespace: "kagent", Labels: testHarness{name: harness.Name, runtimeLabel: "claude"}.labels()},
+		ObjectMeta: metav1.ObjectMeta{Name: quiesceFullAgent, Namespace: "kagent", Labels: testHarness{name: harness.Name, runtimeLabel: "claude"}.labels()},
 		Spec: v1alpha3.AgentTemplateSpec{
 			ModelConfig:  &v1alpha3.ObjectReference{Name: model.Name},
 			Description:  "Full quiesce E2E fixture",
@@ -75,22 +69,14 @@ func TestE2EClaudeFullQuiesceKeepsProcesses(t *testing.T) {
 	createAndWaitInteractionTemplateForHarness(t, kube, template, harness.Name)
 	fixture := newInteractionFixtureForHarnessTemplate(t, target, harness.Name, template.Name)
 
-	task := sendClaudeTurn(t, fixture, "kagent-quiesce-proof start", "", "")
-	if task.Status.State != a2atype.TaskStateCompleted || !strings.Contains(taskText(task), "QUIESCE_STARTED") {
-		t.Fatalf("start task state = %s, text = %q", task.Status.State, taskText(task))
-	}
-	if output := recordedToolResult(recorder, quiesceStartToolID); !strings.Contains(output, "PROCESS_STARTED") {
-		t.Fatalf("start command output = %q, want PROCESS_STARTED", output)
-	}
-
-	waitActorSuspendedAt(t, fixture, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)
-
-	task = sendClaudeTurn(t, fixture, "kagent-quiesce-proof check", "", "")
-	if task.Status.State != a2atype.TaskStateCompleted || !strings.Contains(taskText(task), "QUIESCE_CHECKED") {
-		t.Fatalf("check task state = %s, text = %q", task.Status.State, taskText(task))
-	}
-	if output := recordedToolResult(recorder, quiesceCheckToolID); !strings.Contains(output, "PROCESS_ALIVE") {
-		t.Fatalf("check command output = %q, want PROCESS_ALIVE after a MEMORY resume", output)
+	for i, marker := range []string{"first", "second"} {
+		task := sendClaudeTurn(t, fixture, "kagent-quiesce-proof "+marker, "", "")
+		if task.Status.State != a2atype.TaskStateCompleted || !strings.Contains(taskText(task), "QUIESCE_DONE "+marker) {
+			t.Fatalf("%s task state = %s, text = %q", marker, task.Status.State, taskText(task))
+		}
+		if i == 0 {
+			waitActorSuspendedAt(t, fixture, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)
+		}
 	}
 }
 
@@ -142,69 +128,22 @@ func waitActorSuspendedAt(t *testing.T, fixture *interactionFixture, fidelity at
 	}
 }
 
-// recordedToolResult returns the text of the tool result with toolID from the
-// model requests the recorder saw.
-func recordedToolResult(recorder *modelRecorder, toolID string) string {
-	recorder.mu.Lock()
-	recorded := append([]recordedModelRequest(nil), recorder.requests...)
-	recorder.mu.Unlock()
-	for _, request := range recorded {
-		var body struct {
-			Messages []struct {
-				Content json.RawMessage `json:"content"`
-			} `json:"messages"`
-		}
-		if json.Unmarshal(request.Body, &body) != nil {
-			continue
-		}
-		for _, message := range body.Messages {
-			var blocks []struct {
-				Type      string          `json:"type"`
-				ToolUseID string          `json:"tool_use_id"`
-				Content   json.RawMessage `json:"content"`
-			}
-			if json.Unmarshal(message.Content, &blocks) != nil {
-				continue
-			}
-			for _, block := range blocks {
-				if block.Type == "tool_result" && block.ToolUseID == toolID {
-					return toolResultText(block.Content)
-				}
-			}
-		}
-	}
-	return ""
-}
-
 func quiesceFullMock(t *testing.T) mockllm.Config {
 	t.Helper()
-	textMatch := func(text string) map[string]any {
+	message := func(id, text string) map[string]any {
+		return map[string]any{"id": id, "type": "message", "role": "assistant",
+			"content": []any{map[string]any{"type": "text", "text": text}},
+			"model":   claudeTurnConfiguredModel, "stop_reason": "end_turn", "usage": map[string]int{"input_tokens": 10, "output_tokens": 4}}
+	}
+	match := func(text string) map[string]any {
 		return map[string]any{"match_type": "contains", "message": map[string]any{"role": "user", "content": []any{map[string]any{"type": "text", "text": text}}}}
 	}
-	resultMatch := func(toolID string) map[string]any {
-		return map[string]any{"match_type": "contains", "message": map[string]any{"role": "user", "content": []any{
-			map[string]any{"type": "tool_result", "tool_use_id": toolID},
-		}}}
+	mocks := []map[string]any{}
+	for _, marker := range []string{"first", "second"} {
+		mocks = append(mocks, map[string]any{"name": marker, "match": match("kagent-quiesce-proof " + marker), "response": message("msg_quiesce_"+marker, "QUIESCE_DONE "+marker)})
 	}
-	reply := func(id string, content map[string]any) map[string]any {
-		stop := "end_turn"
-		if content["type"] == "tool_use" {
-			stop = "tool_use"
-		}
-		return map[string]any{"id": id, "type": "message", "role": "assistant", "content": []any{content}, "model": claudeTurnConfiguredModel, "stop_reason": stop, "usage": map[string]int{"input_tokens": 10, "output_tokens": 4}}
-	}
-	bash := func(id, command string) map[string]any {
-		return map[string]any{"type": "tool_use", "id": id, "name": "Bash", "input": map[string]string{"command": command}}
-	}
-	text := func(value string) map[string]any { return map[string]any{"type": "text", "text": value} }
-	mocks := []map[string]any{
-		{"name": "start", "match": textMatch("kagent-quiesce-proof start"), "response": reply("msg_quiesce_start", bash(quiesceStartToolID, quiesceStartCommand))},
-		{"name": "started", "match": resultMatch(quiesceStartToolID), "response": reply("msg_quiesce_started", text("QUIESCE_STARTED"))},
-		{"name": "check", "match": textMatch("kagent-quiesce-proof check"), "response": reply("msg_quiesce_check", bash(quiesceCheckToolID, quiesceCheckCommand))},
-		{"name": "checked", "match": resultMatch(quiesceCheckToolID), "response": reply("msg_quiesce_checked", text("QUIESCE_CHECKED"))},
-		// Claude's auxiliary requests, such as title generation, match last.
-		{"name": "auxiliary", "match": textMatch(""), "response": reply("msg_auxiliary", text("ok"))},
-	}
+	// Claude's auxiliary requests, such as title generation, match last.
+	mocks = append(mocks, map[string]any{"name": "auxiliary", "match": match(""), "response": message("msg_auxiliary", "ok")})
 	raw, err := json.Marshal(map[string]any{"anthropic": mocks})
 	if err != nil {
 		t.Fatal(err)
