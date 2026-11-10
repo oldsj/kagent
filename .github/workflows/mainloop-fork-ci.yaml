@@ -22,10 +22,14 @@ jobs:
     env:
       GOFLAGS: -p=2
       GOMAXPROCS: "2"
-      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      # For a pull request this is GitHub's merge candidate (the head merged into
+      # the current base), the same tree the workflow file itself comes from.
+      # Testing the bare head would run this file's steps against a tree that
+      # may predate the packages they name.
+      SOURCE_SHA: ${{ github.sha }}
       KUBECONFIG: /dev/null
     steps:
-      - name: Checkout exact source
+      - name: Checkout tested source
         uses: actions/checkout@v6
         with:
           ref: ${{ env.SOURCE_SHA }}
@@ -39,7 +43,7 @@ jobs:
         run: |
           checkout_sha=$(git rev-parse --verify HEAD)
           test "$checkout_sha" = "$SOURCE_SHA"
-          printf 'Event: %s\nRef: %s\nSelected source SHA: %s\nCheckout SHA: %s\nEvent SHA: %s\nPR head SHA: %s\n' \
+          printf 'Event: %s\nRef: %s\nTested SHA (merge candidate on pull requests): %s\nCheckout SHA: %s\nEvent SHA: %s\nPR head SHA: %s\n' \
             "$EVENT_NAME" "$SOURCE_REF" "$SOURCE_SHA" "$checkout_sha" "$EVENT_SHA" "$PR_HEAD_SHA" \
             | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Set up Go
@@ -88,9 +92,9 @@ jobs:
     timeout-minutes: 15
     env:
       VERSION: v0.0.1-test
-      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      SOURCE_SHA: ${{ github.sha }}
     steps:
-      - name: Checkout exact source
+      - name: Checkout tested source
         uses: actions/checkout@v6
         with:
           ref: ${{ env.SOURCE_SHA }}
@@ -111,9 +115,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      SOURCE_SHA: ${{ github.sha }}
     steps:
-      - name: Checkout exact source
+      - name: Checkout tested source
         uses: actions/checkout@v6
         with:
           ref: ${{ env.SOURCE_SHA }}
@@ -134,9 +138,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      SOURCE_SHA: ${{ github.sha }}
     steps:
-      - name: Checkout exact source
+      - name: Checkout tested source
         uses: actions/checkout@v6
         with:
           ref: ${{ env.SOURCE_SHA }}
