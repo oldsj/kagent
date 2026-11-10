@@ -287,6 +287,11 @@ controller:
   # Mount rotating Substrate PodIdentity/ServiceDNS credentials.
   substrateClientCertificate:
     enabled: false
+  # Register the controller's /mcp endpoint as the RemoteMCPServer <fullname>-api.
+  # The controller discovers its tools without credentials, so disable this when
+  # the endpoint requires authentication and no AgentTemplate binds the server.
+  apiToolServer:
+    enabled: true
   push:
     signing:
       # Optional operator-managed Secret with an unencrypted PKCS#8 Ed25519 key
