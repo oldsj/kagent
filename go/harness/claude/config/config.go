@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"regexp"
 	"strings"
 	"time"
@@ -40,7 +41,15 @@ const (
 	VertexProjectEnvName                = "ANTHROPIC_VERTEX_PROJECT_ID"
 	VertexRegionEnvName                 = "CLOUD_ML_REGION"
 	SandboxEnvName                      = "IS_SANDBOX"
+	DisableBackgroundTasksEnvName       = "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"
+	DisableCronEnvName                  = "CLAUDE_CODE_DISABLE_CRON"
+	ProviderManagedByHostEnvName        = "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST"
+	AdditionalDirectoriesMemoryEnvName  = "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD"
 	MCPCredentialEnvPrefix              = "KAGENT_CLAUDE_MCP_CREDENTIAL_"
+	// DefaultPostResultGrace bounds native activity after a turn's first result.
+	DefaultPostResultGrace = 120 * time.Second
+	// DefaultTurnTimeout bounds one native Claude process.
+	DefaultTurnTimeout = 2 * time.Hour
 )
 
 // OwnsEnvironment reports whether the compiler or adapter reserves name for
@@ -54,7 +63,7 @@ func OwnsEnvironment(name string) bool {
 		GoogleCredentialsJSONEnvName, UseBedrockEnvName, UseVertexEnvName, AWSRegionEnvName,
 		AWSAccessKeyEnvName, AWSSecretKeyEnvName, AWSSessionTokenEnvName, AWSBedrockTokenEnvName,
 		AnthropicAPIKeyEnvName, ClaudeCodeOAuthTokenEnvName, AnthropicBaseURLEnvName, VertexProjectEnvName, VertexRegionEnvName,
-		SandboxEnvName, "CLAUDE_CODE_ENABLE_TELEMETRY",
+		SandboxEnvName, DisableBackgroundTasksEnvName, DisableCronEnvName, ProviderManagedByHostEnvName, AdditionalDirectoriesMemoryEnvName, "CLAUDE_CODE_ENABLE_TELEMETRY",
 		"CLAUDE_CODE_ENHANCED_TELEMETRY_BETA", env.OTELTraces.Exporter.Name(), env.OTELMetrics.Exporter.Name(),
 		env.OTELLogs.Exporter.Name(), env.OTELLogUserPrompts.Name(), env.OTELLogToolDetails.Name(), env.OTELLogToolContent.Name(),
 		env.OTELLogAssistantResponses.Name(), env.OTELLogRawAPIBodies.Name(), "TRACEPARENT", "TRACESTATE",
@@ -85,6 +94,25 @@ type Config struct {
 	MaxEventBytes        int                      `json:"max_event_bytes"`
 	MaxStderrBytes       int                      `json:"max_stderr_bytes"`
 	InterruptGraceMillis int                      `json:"interrupt_grace_millis"`
+	// PostResultGraceMillis and TurnTimeoutMillis override the driver's
+	// execution bounds. Zero selects DefaultPostResultGrace and DefaultTurnTimeout.
+	PostResultGraceMillis int `json:"post_result_grace_millis,omitempty"`
+	TurnTimeoutMillis     int `json:"turn_timeout_millis,omitempty"`
+	// AllowBackgroundTasks and AllowScheduledTasks opt a standalone
+	// configuration in to work that outlives a tool call. The compiler leaves
+	// both off; enabling one also needs its tools removed from DisallowedTools.
+	AllowBackgroundTasks bool `json:"allow_background_tasks,omitempty"`
+	AllowScheduledTasks  bool `json:"allow_scheduled_tasks,omitempty"`
+	// DisallowedTools replaces the default set of built-in tools Claude may
+	// not use. Empty selects DefaultDisallowedTools.
+	DisallowedTools []string `json:"disallowed_tools,omitempty"`
+}
+
+// DefaultDisallowedTools are built-in tools that schedule work beyond the
+// turn that called them. A headless turn ends with its process, so that work
+// would be lost without the caller knowing.
+func DefaultDisallowedTools() []string {
+	return []string{"ScheduleWakeup", "Monitor", "CronCreate", "CronList", "CronDelete", "RemoteTrigger"}
 }
 
 // MCPServer is one compiler-owned direct remote server. Claude's strict MCP
@@ -157,6 +185,22 @@ func (c Config) Validate() error {
 	if c.MaxEventBytes <= 0 || c.MaxStderrBytes <= 0 || c.InterruptGraceMillis <= 0 {
 		return fmt.Errorf("event, stderr, and interrupt grace limits must be positive")
 	}
+	for _, limit := range []struct {
+		name   string
+		millis int
+	}{
+		{"post_result_grace_millis", c.PostResultGraceMillis},
+		{"turn_timeout_millis", c.TurnTimeoutMillis},
+	} {
+		if limit.millis < 0 || int64(limit.millis) > math.MaxInt64/int64(time.Millisecond) {
+			return fmt.Errorf("%s must be a duration in milliseconds", limit.name)
+		}
+	}
+	for _, tool := range c.DisallowedTools {
+		if !agentNamePattern.MatchString(tool) {
+			return fmt.Errorf("disallowed tool %q must be a bare tool name", tool)
+		}
+	}
 	if err := c.RuntimeTelemetry.Validate(); err != nil {
 		return err
 	}
@@ -225,4 +269,28 @@ func (c Config) MCPConfigJSON() ([]byte, error) {
 
 func (c Config) InterruptGrace() time.Duration {
 	return time.Duration(c.InterruptGraceMillis) * time.Millisecond
+}
+
+// PostResultGrace bounds native activity after a turn's first result.
+func (c Config) PostResultGrace() time.Duration {
+	if c.PostResultGraceMillis == 0 {
+		return DefaultPostResultGrace
+	}
+	return time.Duration(c.PostResultGraceMillis) * time.Millisecond
+}
+
+// TurnTimeout bounds one native Claude process.
+func (c Config) TurnTimeout() time.Duration {
+	if c.TurnTimeoutMillis == 0 {
+		return DefaultTurnTimeout
+	}
+	return time.Duration(c.TurnTimeoutMillis) * time.Millisecond
+}
+
+// DisallowedBuiltinTools is the effective list of built-in tools Claude may not use.
+func (c Config) DisallowedBuiltinTools() []string {
+	if len(c.DisallowedTools) == 0 {
+		return DefaultDisallowedTools()
+	}
+	return c.DisallowedTools
 }

@@ -1,0 +1,12 @@
+{"type":"system","subtype":"init","session_id":"33333333-3333-4333-8333-333333333333"}
+{"type":"system","subtype":"status","status":"requesting","session_id":"33333333-3333-4333-8333-333333333333"}
+{"type":"assistant","message":{"id":"msg-1","role":"assistant","content":[{"type":"tool_use","id":"tool-1","name":"Agent","input":{"description":"inspect","subagent_type":"general-purpose","run_in_background":true}}]},"session_id":"33333333-3333-4333-8333-333333333333"}
+{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"task-1","task_type":"local_agent","description":"inspect"}],"session_id":"33333333-3333-4333-8333-333333333333"}
+{"type":"system","subtype":"task_started","task_id":"task-1","tool_use_id":"tool-1","description":"inspect","task_type":"local_agent","is_backgrounded":true,"session_id":"33333333-3333-4333-8333-333333333333"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-1","content":"background task launched"}]},"session_id":"33333333-3333-4333-8333-333333333333"}
+{"type":"system","subtype":"status","status":"requesting","session_id":"33333333-3333-4333-8333-333333333333"}
+{"type":"assistant","message":{"id":"msg-2","role":"assistant","content":[{"type":"text","text":"waiting for checks"}]},"session_id":"33333333-3333-4333-8333-333333333333"}
+{"type":"system","subtype":"background_tasks_changed","tasks":[],"session_id":"33333333-3333-4333-8333-333333333333"}
+{"type":"system","subtype":"task_updated","task_id":"task-1","patch":{"status":"killed"},"session_id":"33333333-3333-4333-8333-333333333333"}
+{"type":"system","subtype":"task_notification","status":"stopped","task_id":"task-1","tool_use_id":"tool-1","session_id":"33333333-3333-4333-8333-333333333333"}
+{"type":"result","subtype":"success","is_error":false,"result":"waiting for checks","session_id":"33333333-3333-4333-8333-333333333333"}

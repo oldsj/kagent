@@ -128,11 +128,13 @@ func TestParseJSONLBuiltInToolLifecycle(t *testing.T) {
 	}
 }
 
-func TestParseJSONLIgnoresSubagentTaskNotificationResult(t *testing.T) {
+// A task-notification result ends a follow-up iteration of the root
+// conversation, so it supersedes the earlier result instead of being dropped.
+func TestParseJSONLIncludesTaskNotificationTurnResult(t *testing.T) {
 	input := strings.Join([]string{
 		`{"type":"system","subtype":"init","session_id":"11111111-1111-4111-8111-111111111111"}`,
-		`{"type":"result","subtype":"success","is_error":false,"result":"parent done","session_id":"parent"}`,
-		`{"type":"result","subtype":"success","is_error":false,"result":"child done","session_id":"child","origin":{"kind":"task-notification"}}`,
+		`{"type":"result","subtype":"success","is_error":false,"result":"parent done","session_id":"first"}`,
+		`{"type":"result","subtype":"success","is_error":false,"result":"follow-up done","session_id":"follow-up","origin":{"kind":"task-notification"}}`,
 	}, "\n") + "\n"
 	var terminal []Event
 	if err := parseJSONL(t.Context(), strings.NewReader(input), 4096, map[string]modelUsage{}, nil, func(event Event) error {
@@ -143,8 +145,8 @@ func TestParseJSONLIgnoresSubagentTaskNotificationResult(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if len(terminal) != 1 || terminal[0].Kind != EventCompleted || terminal[0].SessionID != "parent" {
-		t.Fatalf("terminal events = %#v, want only the parent result", terminal)
+	if len(terminal) != 2 || terminal[0].SessionID != "first" || terminal[1].SessionID != "follow-up" {
+		t.Fatalf("terminal events = %#v, want both iteration results", terminal)
 	}
 }
 

@@ -12,6 +12,10 @@ const (
 	EventFailed         EventKind = "failed"
 	EventModelCall      EventKind = "model_call"
 	EventDeferred       EventKind = "deferred"
+	// EventBackgroundTasks reports a change in how many background tasks
+	// Claude has not yet reported to the conversation.
+	EventBackgroundTasks EventKind = "background_tasks"
+	EventHealth          EventKind = "health"
 )
 
 // Event is the Claude stream vocabulary consumed by ProcessDriver. Vendor
@@ -32,4 +36,8 @@ type Event struct {
 	SafeMessage  string
 	Deferred     *DeferredTool
 	ModelCall    *runtime.ModelCall
+	Health       runtime.HealthEvent
+	// BackgroundTasks is the unreported background task count for
+	// EventBackgroundTasks.
+	BackgroundTasks int
 }

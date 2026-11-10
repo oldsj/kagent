@@ -122,7 +122,16 @@ type executionSink struct {
 	compiled tracing.RuntimeTelemetry
 	// inferenceCalls and toolCalls count the agent's own calls in this segment.
 	inferenceCalls, toolCalls int64
+
+	// Health arrives from the runtime's observation goroutine. It is buffered
+	// here and published only from the execution goroutine that owns yield.
+	healthMu      sync.Mutex
+	health        []*a2atype.TaskArtifactUpdateEvent
+	healthDropped int
 }
+
+// healthBufferSize bounds health observations awaiting the execution goroutine.
+const healthBufferSize = 256
 
 var (
 	errBusy         = errors.New("runtime actor already has an active task")
@@ -328,6 +337,16 @@ func (e *Executor) Execute(ctx context.Context, reqCtx *a2asrv.ExecutorContext) 
 		if errors.As(runErr, &cancellationErr) {
 			active.cancelErr = cancellationErr
 		}
+		if runErr == nil || !errors.Is(runErr, context.Canceled) && !errors.Is(runErr, errYieldStopped) {
+			// Health precedes the status it describes. A consumer that stops here
+			// abandons the stream like any other refused event.
+			if err := sink.flushHealth(ctx); err != nil {
+				if outcome.Pending != nil {
+					_ = outcome.Pending.Cancel(context.Background(), sink)
+				}
+				outcome, runErr = runtime.Outcome{}, err
+			}
+		}
 		if errors.Is(runErr, errYieldStopped) {
 			// The A2A event consumer stopped accepting events before execution
 			// finished. That is not a cancellation the client requested, so it is
@@ -335,8 +354,9 @@ func (e *Executor) Execute(ctx context.Context, reqCtx *a2asrv.ExecutorContext) 
 			result.Disposition = tracing.DispositionAbandoned
 			return
 		}
-		if runCtx.Err() != nil && (errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded)) && !errors.Is(runErr, runtime.ErrSessionAbandoned) {
-			// A dependency timeout alone is a runtime failure.
+		if runCtx.Err() != nil && (errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) && !errors.Is(runCtx.Err(), context.DeadlineExceeded)) && !errors.Is(runErr, runtime.ErrSessionAbandoned) {
+			// A dependency timeout alone is a runtime failure, and so is this
+			// execution's own deadline: no cancel request will publish for it.
 			// Cancel yields the canceled event from its own request, so complete
 			// the invocation here rather than waiting for an event that this
 			// execution never produces.
@@ -354,8 +374,13 @@ func (e *Executor) Execute(ctx context.Context, reqCtx *a2asrv.ExecutorContext) 
 			result = tracing.Result{TaskState: string(a2atype.TaskStateFailed), Error: "runtime_error"}
 			endInvocation()
 			failureMessage := "Harness runtime execution failed"
+			var terminalFailure *runtime.TerminalFailure
 			if errors.Is(runErr, runtime.ErrSessionAbandoned) {
 				failureMessage = runtime.ErrSessionAbandoned.Error()
+			} else if errors.As(runErr, &terminalFailure) {
+				failureMessage = terminalFailure.PublicMessage()
+			} else if errors.Is(runErr, context.DeadlineExceeded) && errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+				failureMessage = "Harness execution deadline exceeded"
 			}
 			message := taskMessage(reqCtx, failureMessage)
 			apia2a.SetTimelinePosition(message, sink.nextTimelinePosition())
@@ -472,6 +497,9 @@ func (s *executionSink) TextDelta(event runtime.TextDelta) error {
 	if event.Text == "" {
 		return nil
 	}
+	if err := s.flushHealth(context.Background()); err != nil {
+		return err
+	}
 	// Capture keeps only the first bounded slice of this segment's text. Every
 	// delta still reaches the caller in full.
 	s.capture.Append(event.Text)
@@ -510,7 +538,63 @@ func (s *executionSink) ToolResult(event runtime.ToolResult) error {
 	return s.emitToolArtifact(part)
 }
 
+// Health buffers one orchestration health observation as an artifact named by
+// its schema. It may be called from another goroutine and never blocks.
+func (s *executionSink) Health(event runtime.HealthEvent) error {
+	if s.reqCtx == nil {
+		return nil // A cancellation sink publishes no artifacts.
+	}
+	if event.SchemaVersion != runtime.HealthSchema || event.EventID == "" || event.Sequence <= 0 {
+		return fmt.Errorf("runtime health event has invalid identity")
+	}
+	event.RuntimeSessionID, event.A2ATaskID = s.reqCtx.ContextID, string(s.reqCtx.TaskID)
+	// The task store clones data through gob; use the JSON object
+	// representation at this transport boundary rather than a Go concrete type.
+	encoded, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("encode health event: %w", err)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(encoded, &data); err != nil {
+		return fmt.Errorf("decode health data: %w", err)
+	}
+	update := a2atype.NewArtifactEvent(s.reqCtx, a2atype.NewDataPart(data))
+	update.Artifact.ID = a2atype.ArtifactID(event.EventID)
+	update.Artifact.Name = runtime.HealthSchema
+	update.LastChunk = true
+	s.healthMu.Lock()
+	defer s.healthMu.Unlock()
+	if len(s.health) >= healthBufferSize {
+		// The consumer sees the sequence gap and reports incomplete coverage.
+		s.healthDropped++
+		return nil
+	}
+	s.health = append(s.health, update)
+	return nil
+}
+
+// flushHealth publishes buffered health artifacts. Only the execution
+// goroutine calls it, before its own events and before any status update.
+func (s *executionSink) flushHealth(ctx context.Context) error {
+	s.healthMu.Lock()
+	pending, dropped := s.health, s.healthDropped
+	s.health, s.healthDropped = nil, 0
+	s.healthMu.Unlock()
+	if dropped != 0 {
+		a2alog.Warn(ctx, "dropped runtime health observations", "count", dropped)
+	}
+	for _, update := range pending {
+		if !s.yield(update, nil) {
+			return errYieldStopped
+		}
+	}
+	return nil
+}
+
 func (s *executionSink) emitToolArtifact(part *a2atype.Part) error {
+	if err := s.flushHealth(context.Background()); err != nil {
+		return err
+	}
 	// Append relates deltas within one contiguous text run. Tool activity closes
 	// that run and is an agent-produced artifact of its own, matching the Go ADK's
 	// OutputArtifactPerEvent representation.
@@ -881,4 +965,5 @@ func safeFailure(message string) string {
 }
 
 var _ runtime.EventSink = (*executionSink)(nil)
+var _ runtime.HealthSink = (*executionSink)(nil)
 var _ a2asrv.AgentExecutor = (*Executor)(nil)

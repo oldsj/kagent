@@ -39,6 +39,79 @@ Production runs retain Claude's native retry defaults. E2E fixtures opt into
 zero retries through an internal test switch while upstream denial handling
 still causes minutes of waiting.
 
+## Turn completion and process supervision
+
+Each native process is one `claude -p` run: the driver sends one user message
+and closes stdin. A later turn, or the answer to a deferred input, starts
+another process with `--resume`.
+
+**Settings and workspace context.** Claude loads only its user setting source,
+the adapter-owned `CLAUDE_CONFIG_DIR`. Project and local settings are not
+loaded, because settings can run commands outside any tool call. The checkout
+still supplies context: `--add-dir` with
+`CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1` loads its `CLAUDE.md` and
+`.claude/rules`, and its `.claude/skills` load as a harness-owned plugin
+(`workspace:<skill>`) that has no hooks or MCP servers.
+`CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1` keeps provider, credential, proxy and
+TLS variables in settings from redirecting model traffic. User-scope hooks are
+not disabled: the harness's own approval hooks arrive through `--settings`, and
+`disableAllHooks` would stop those too. The `--settings` ask rules still send
+protected tools to the permission prompt.
+
+**Headless defaults.** `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` and
+`CLAUDE_CODE_DISABLE_CRON=1` are set, and `--disallowedTools` removes
+`ScheduleWakeup`, `Monitor`, `CronCreate`, `CronList`, `CronDelete` and
+`RemoteTrigger`. A standalone configuration can opt in with
+`allow_background_tasks`, `allow_scheduled_tasks` and its own
+`disallowed_tools`. The compiler emits none of these, so the defaults apply.
+
+**Activity after a result.** A `result` ends one iteration, not necessarily the
+process: a finished background task starts a follow-up iteration, and its
+result (origin `task-notification`) supersedes the earlier one. The first
+result starts `post_result_grace_millis` (default 120 s). When the grace
+expires the driver stops remaining native work and returns the last result,
+keeping its success or failure. Later results do not reset the grace. A
+deferred-input result always ends its process.
+
+**Background tasks.** The driver tracks background tasks from Claude's
+`task_started`, `task_updated`, `task_notification` and
+`background_tasks_changed` events. A task is reported once a main-loop model
+request starts after it ends and that iteration produces a result. A turn
+succeeds only if every background task it started was reported; if Claude
+exits with one unreported, the turn fails with a count instead of the earlier
+result's success. The grace pauses while any task is unreported, so a long
+check and its follow-up finish in the same turn.
+
+**Execution budget.** `turn_timeout_millis` (default two hours) bounds each
+native process, including the wait for it to exit. Expiry is a terminal A2A
+failure with an execution-budget message. Time spent waiting for a deferred
+input is outside any process and is not counted.
+
+**Failures.** A failed Claude result reaches the A2A status as a vetted
+message: a diagnostic that might contain a credential is withheld whole, and
+long ones are bounded. Stderr stays in logs. Unexpected runtime errors keep the
+generic status.
+
+**Process ownership (Linux).** The harness is a child subreaper and owns one
+native tree at a time. Before launch it reaps exited orphans outside its own
+process group (for example detached Git maintenance) and refuses to start if
+it still has descendants. Launch keeps the leader's pidfd; cleanup signals the
+leader and every descendant found through `/proc` ancestry by pidfd, never by
+numeric PID or process group, so `setsid`, double-fork and an environment reset
+do not escape it. It interrupts, waits the interrupt grace, kills, and reaps
+adopted children with `waitid(P_PIDFD)`. A cleanup that cannot prove the tree
+is gone fails the turn and keeps the ownership slot, so no later turn starts
+over surviving processes; the Actor must then be replaced. Kernels or syscall
+filters without pidfd support reject execution. Outside Linux the driver
+signals the leader's process group only, which is for development.
+
+**Health artifacts.** When the sink accepts them, each process emits
+`kagent.dev/orchestration-health/v1` artifacts: turn start and finish, tool
+start and finish with a coarse class, action and workspace-relative path, and
+a turn-total usage sample. They carry no arguments, output or prompts. Health
+is observation only: a slow or failing consumer never delays, fails or blocks
+cancellation of the turn.
+
 ## Telemetry
 
 The driver passes each prompt to Claude Code on stdin as stream-JSON. When

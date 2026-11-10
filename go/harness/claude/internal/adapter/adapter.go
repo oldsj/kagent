@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -78,6 +79,11 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 		}
 		pluginDirs = append([]string{skillRoot}, materialized.ClaudeFormatPluginRoots()...)
 	}
+	workspaceSkills, err := materializeWorkspaceSkills(input.EphemeralDir, input.Workspace)
+	if err != nil {
+		return nil, err
+	}
+	pluginDirs = append(pluginDirs, workspaceSkills)
 	environment := setEnvironment(input.Environment, config.ClaudeConfigDirEnvName, claudeDir)
 	// The native runtime inherits the compiled identity through the standard
 	// resource variable, so no user-supplied marker is required.
@@ -85,6 +91,26 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 	// The image and compiler pin an exact Claude version. Prevent both automatic
 	// and manual update paths from changing that runtime after validation.
 	environment = setEnvironment(environment, config.DisableUpdatesEnvName, "1")
+	// The compiler owns the model provider, endpoint, and credentials. This
+	// makes Claude ignore provider, auth, proxy, and TLS variables from the
+	// env of user settings.
+	environment = setEnvironment(environment, config.ProviderManagedByHostEnvName, "1")
+	// The driver loads no project settings and adds the workspace with
+	// --add-dir. This loads that directory's CLAUDE.md and .claude/rules.
+	environment = setEnvironment(environment, config.AdditionalDirectoriesMemoryEnvName, "1")
+	for _, policy := range []struct {
+		name    string
+		allowed bool
+	}{
+		{config.DisableBackgroundTasksEnvName, cfg.AllowBackgroundTasks},
+		{config.DisableCronEnvName, cfg.AllowScheduledTasks},
+	} {
+		value := "1"
+		if policy.allowed {
+			value = "0"
+		}
+		environment = setEnvironment(environment, policy.name, value)
+	}
 	// TODO: REMOVE this test-only override and its reserved environment name once upstream
 	// denial handling permits bounded native retries: https://github.com/agent-substrate/substrate/issues/2663
 	// Alpha3 fixes musl DNS search fallback, but denied requests still retry for minutes.
@@ -148,10 +174,32 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 		StrictVersion: cfg.StrictVersion, Workspace: input.Workspace, Model: cfg.Model,
 		AppendSystemPromptFile: systemPromptPath, AgentsJSON: agentsJSON, MCPConfigPath: mcpConfigPath,
 		SettingsPath: settingsPath, PermissionPromptTool: permissionPromptTool, ApprovalBroker: approvalBroker,
-		PluginDirs: pluginDirs, Environment: environment,
+		PluginDirs: pluginDirs, DisallowedTools: cfg.DisallowedBuiltinTools(), Environment: environment,
 		MaxEventBytes: cfg.MaxEventBytes, MaxStderrBytes: cfg.MaxStderrBytes,
 		InterruptGrace: cfg.InterruptGrace(), AwaitTelemetry: awaitTelemetry,
+		PostResultGrace: cfg.PostResultGrace(), TurnTimeout: cfg.TurnTimeout(),
 	}), nil
+}
+
+// materializeWorkspaceSkills returns a harness-owned plugin root whose skills
+// directory links to the checkout's .claude/skills. Claude loads a checkout's
+// own skills only with the project setting source, whose settings can run
+// commands. The plugin has a name and nothing else: no hooks or MCP servers.
+// The link is read on each Claude start, so new checkout skills appear on the
+// next turn. Claude names them workspace:<skill>.
+func materializeWorkspaceSkills(ephemeralDir, workspace string) (string, error) {
+	root := filepath.Join(ephemeralDir, "workspace-skills")
+	if err := utils.ReplacePrivateFile(filepath.Join(root, ".claude-plugin", "plugin.json"), []byte(`{"name":"workspace"}`)); err != nil {
+		return "", fmt.Errorf("materialize Claude workspace skills plugin: %w", err)
+	}
+	link := filepath.Join(root, "skills")
+	if err := os.Remove(link); err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("replace Claude workspace skills link: %w", err)
+	}
+	if err := os.Symlink(filepath.Join(workspace, ".claude", "skills"), link); err != nil {
+		return "", fmt.Errorf("link Claude workspace skills: %w", err)
+	}
+	return root, nil
 }
 
 func approvalServerNames(servers map[string]config.MCPServer) (protected []string) {
