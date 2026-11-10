@@ -11,8 +11,11 @@ import (
 	"time"
 
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/kagent-dev/kagent/go/adk/pkg/activity"
 	"github.com/kagent-dev/kagent/go/adk/pkg/app"
 	"github.com/kagent-dev/kagent/go/adk/pkg/controllerclient"
+	"github.com/kagent-dev/kagent/go/adk/pkg/taskstore"
+	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	"github.com/kagent-dev/kagent/go/harness/claude/config"
 	"github.com/kagent-dev/kagent/go/harness/claude/executor"
 	"github.com/kagent-dev/kagent/go/harness/runtime/workspace"
@@ -94,8 +97,12 @@ func run(ctx context.Context, check bool, getenv func(string) string, environmen
 	}
 	execCfg := executor.Config{ConfigJSON: configJSON, DataDir: dataDir, Environment: environment, Workspace: source, Conversation: workspace.ConversationOf(source)}
 	if !check {
+		// The reporter sends nothing until the SDK runner's first busy/idle
+		// change, so the golden snapshot and boot never report activity.
+		reporter := activity.NewReporter(taskstore.New(controller, apia2a.RuntimeIdentityPath), logging.FromContext(ctx))
+		go reporter.Run(ctx)
 		execCfg.ClientAddr = executor.ClientAddr
-		execCfg.Activity = loggedActivity{ctx: ctx}
+		execCfg.Activity = reporter
 	}
 	exec, closer, err := executor.New(ctx, execCfg)
 	if err != nil {
@@ -122,12 +129,4 @@ func requiredEnvironment(getenv func(string) string, name string) ([]byte, error
 		return nil, fmt.Errorf("%s is required", name)
 	}
 	return []byte(value), nil
-}
-
-// loggedActivity records the SDK runner's busy/idle transitions. It stands in
-// for the TaskStore activity reporter until that client lands.
-type loggedActivity struct{ ctx context.Context }
-
-func (a loggedActivity) SetActive(active bool) {
-	logging.FromContext(a.ctx).InfoContext(a.ctx, "sdk runner activity", "active", active)
 }
