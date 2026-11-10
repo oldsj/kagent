@@ -278,7 +278,8 @@ func TestPreparationAdmissionHoldsTurnsUntilReady(t *testing.T) {
 	_, b, next, installer, input := preparationFixture(t, "agent")
 	source := &lostCallbackSource{fakeSource: &fakeSource{request: &input.Workspace}}
 	b.source = source
-	b.ServePreparations(t.Context(), nil)
+	// Poll by hand: a ServePreparations loop would race these steps for the
+	// assignment, and its ticks would move the read count.
 	b.setupInstaller = installer
 
 	outcome, err := b.Run(t.Context(), runtime.Turn{}, nil)
