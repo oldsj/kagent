@@ -188,3 +188,62 @@ func TestCheckDevelopmentEnvironment(t *testing.T) {
 		})
 	}
 }
+
+func gitInstanceRules(namespace string) []*configv1.SessionCredentialRule {
+	read, push := workspace.GitInstanceOrigins(namespace)
+	return []*configv1.SessionCredentialRule{
+		{SecretNamePattern: namespace + "-git-read-*", Key: "authorization", Origin: read, Header: "authorization", Purpose: "git-read"},
+		{SecretNamePattern: namespace + "-git-push-*", Key: "authorization", Origin: push, Header: "authorization", Purpose: "git-push"},
+	}
+}
+
+func TestNewAcceptsOnlyKnownGitInstanceTuples(t *testing.T) {
+	devRead, devPush := workspace.GitInstanceOrigins("mainloop-dev")
+	for _, test := range []struct {
+		name    string
+		rules   []*configv1.SessionCredentialRule
+		wantErr bool
+	}{
+		{"mainloop instance", gitInstanceRules("mainloop"), false},
+		{"mainloop-dev instance", gitInstanceRules("mainloop-dev"), false},
+		{"both instances", append(gitInstanceRules("mainloop"), gitInstanceRules("mainloop-dev")...), false},
+		{"unknown instance", gitInstanceRules("other"), true},
+		{"dev origin with the mainloop Secret pattern", []*configv1.SessionCredentialRule{
+			{SecretNamePattern: "mainloop-git-read-*", Key: "authorization", Origin: devRead, Header: "authorization", Purpose: "git-read"},
+		}, true},
+		{"mainloop origin with the dev Secret pattern", []*configv1.SessionCredentialRule{
+			{SecretNamePattern: "mainloop-dev-git-push-*", Key: "authorization", Origin: workspace.PushProxyOrigin, Header: "authorization", Purpose: "git-push"},
+		}, true},
+		{"dev read rule on the dev push proxy", []*configv1.SessionCredentialRule{
+			{SecretNamePattern: "mainloop-dev-git-read-*", Key: "authorization", Origin: devPush, Header: "authorization", Purpose: "git-read"},
+		}, true},
+		{"mcp rule on the dev Git proxy", []*configv1.SessionCredentialRule{
+			{SecretNamePattern: "mainloop-mcp-*", Key: "authorization", Origin: devRead, Header: "authorization", Purpose: "mcp"},
+		}, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := controlauth.New(&configv1.SessionPolicy{Namespace: "kagent", Agents: []string{"claude"}, Credentials: test.rules})
+			if test.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+	// Any instance's proxy host is reserved, approved or not.
+	otherRead, _ := workspace.GitInstanceOrigins("other")
+	_, err := controlauth.New(&configv1.SessionPolicy{Namespace: "kagent", Agents: []string{"claude"}, CleartextMcpOrigins: []string{otherRead}})
+	require.Error(t, err)
+}
+
+func TestCheckCreateSessionMatchesGitCredentialsToTheirInstance(t *testing.T) {
+	policy, err := controlauth.New(&configv1.SessionPolicy{Namespace: "kagent", Agents: []string{"claude"}, Credentials: append(gitInstanceRules("mainloop"), gitInstanceRules("mainloop-dev")...)})
+	require.NoError(t, err)
+	devRead, _ := workspace.GitInstanceOrigins("mainloop-dev")
+	check := func(credentials ...*apiv1.SessionCredential) error {
+		return policy.CheckCreateSession(caller(), &apiv1.ResourceReference{Namespace: "kagent", Name: "claude"}, credentials)
+	}
+	require.NoError(t, check(credential(devRead, "authorization", "mainloop-dev-git-read-abc", "authorization")))
+	require.Error(t, check(credential(devRead, "authorization", "mainloop-git-read-abc", "authorization")))
+	require.Error(t, check(credential(workspace.ReadProxyOrigin, "authorization", "mainloop-dev-git-read-abc", "authorization")))
+}

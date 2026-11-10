@@ -71,8 +71,10 @@ func ValidateGitEgress(policy *workspace.Git, destinations []string, credentials
 		if workspace.DirectGitHubHost(host) {
 			return NewValidationError("effective egress contains direct GitHub authority")
 		}
-		if workspace.GitProxyHost(host) {
-			allowed := policy != nil && (egress.Origin(u) == workspace.ReadProxyOrigin+":80" || (policy.PushProxyOrigin != nil && egress.Origin(u) == workspace.PushProxyOrigin+":80"))
+		// Any instance's proxy host is reserved; only this revision's own
+		// compiled read or push origin may reach one.
+		if workspace.IsGitProxyHost(host) {
+			allowed := policy != nil && policy.ReadProxyOrigin != nil && (egress.Origin(u) == *policy.ReadProxyOrigin+":80" || (policy.PushProxyOrigin != nil && egress.Origin(u) == *policy.PushProxyOrigin+":80"))
 			if !allowed {
 				return NewValidationError("effective egress contains an unapproved Git proxy origin")
 			}
@@ -89,7 +91,7 @@ func ValidateGitEgress(policy *workspace.Git, destinations []string, credentials
 			return NewValidationError("invalid effective credential origin")
 		}
 		host := workspace.NormalizeHost(origin.Hostname())
-		if workspace.DirectGitHubHost(host) || workspace.GitProxyHost(host) || (len(parts) == 4 && parts[2] == workspace.LegacyGitCredentialSecret) {
+		if workspace.DirectGitHubHost(host) || workspace.IsGitProxyHost(host) || (len(parts) == 4 && parts[2] == workspace.LegacyGitCredentialSecret) {
 			return NewValidationError("effective revision contains a reserved Git credential; Git proxies require per-Session references")
 		}
 	}

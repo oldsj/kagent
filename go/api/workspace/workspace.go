@@ -21,11 +21,71 @@ const (
 	DefaultDepth = 1
 	// MaxDepth bounds shallow clones so a typo cannot request unbounded history.
 	MaxDepth = 1000
-	// ReadProxyOrigin and PushProxyOrigin are the exact trusted Git listeners.
-	// Their method, repository and capability checks belong to Mainloop.
+	// ReadProxyOrigin and PushProxyOrigin are the exact trusted Git listeners of
+	// the default "mainloop" Git instance. Their method, repository and
+	// capability checks belong to Mainloop.
 	ReadProxyOrigin = "http://mainloop-git-read.mainloop.svc.cluster.local"
 	PushProxyOrigin = "http://mainloop-git-push.mainloop.svc.cluster.local"
 )
+
+// KnownGitInstanceNamespaces lists every Mainloop Git instance namespace this
+// build's Harness CRD schema accepts for HarnessGit.ReadProxyOrigin and
+// PushProxyOrigin. It mirrors that field's kubebuilder Enum exactly; extend
+// both together when a new Mainloop instance needs Git transport.
+var KnownGitInstanceNamespaces = []string{"mainloop", "mainloop-dev"}
+
+// GitInstanceOrigins returns the canonical read and push Git proxy origins for
+// a Mainloop Git instance namespace. For "mainloop" these are exactly
+// ReadProxyOrigin and PushProxyOrigin.
+func GitInstanceOrigins(namespace string) (readOrigin, pushOrigin string) {
+	return "http://mainloop-git-read." + namespace + ".svc.cluster.local",
+		"http://mainloop-git-push." + namespace + ".svc.cluster.local"
+}
+
+// GitInstanceSecretPatterns returns the Secret name glob patterns a Mainloop
+// Git instance's read and push credentials must match.
+func GitInstanceSecretPatterns(namespace string) (readPattern, pushPattern string) {
+	return namespace + "-git-read-*", namespace + "-git-push-*"
+}
+
+// MCPInstanceOrigin returns the canonical origin of a Mainloop Git instance's
+// companion MCP server. A session's compiled MCP server must be bound to this
+// origin for the same namespace as its Git policy's proxies, so a session can
+// never be issued one instance's Git credentials paired with another
+// instance's MCP identity.
+func MCPInstanceOrigin(namespace string) string {
+	return "http://mainloop-mcp." + namespace + ".svc.cluster.local"
+}
+
+// ParseGitProxyOrigin reports the Mainloop Git instance namespace encoded in a
+// canonical read (or, with read=false, push) proxy origin produced by
+// GitInstanceOrigins, or ok=false if origin is not of that exact shape.
+func ParseGitProxyOrigin(origin string, read bool) (namespace string, ok bool) {
+	kind := "push"
+	if read {
+		kind = "read"
+	}
+	prefix, suffix := "http://mainloop-git-"+kind+".", ".svc.cluster.local"
+	if !strings.HasPrefix(origin, prefix) || !strings.HasSuffix(origin, suffix) {
+		return "", false
+	}
+	namespace = origin[len(prefix) : len(origin)-len(suffix)]
+	if len(validation.IsDNS1123Label(namespace)) != 0 {
+		return "", false
+	}
+	return namespace, true
+}
+
+// IsGitProxyHost reports whether a normalized hostname has the canonical shape
+// of a Mainloop Git proxy listener, read or push, for any namespace. Such hosts
+// are reserved: only a revision's own compiled proxy origins may reach them,
+// whichever Git instances are currently approved.
+func IsGitProxyHost(host string) bool {
+	origin := "http://" + host
+	_, read := ParseGitProxyOrigin(origin, true)
+	_, push := ParseGitProxyOrigin(origin, false)
+	return read || push
+}
 
 // Git is the compiled, non-secret Git policy of a Harness revision. The runtime
 // refuses to clone from hosts outside Origins even if the control plane
@@ -57,8 +117,16 @@ func (g Git) Validate() error {
 		return fmt.Errorf("push proxy requires a read proxy")
 	}
 	if g.ReadProxyOrigin != nil {
-		if *g.ReadProxyOrigin != ReadProxyOrigin || (g.PushProxyOrigin != nil && *g.PushProxyOrigin != PushProxyOrigin) {
+		// The CRD schema bounds the instances; the compiled policy only has to
+		// name one instance's exact listeners, both on the same instance.
+		namespace, ok := ParseGitProxyOrigin(*g.ReadProxyOrigin, true)
+		if !ok {
 			return fmt.Errorf("git proxy origins must be the exact trusted listeners")
+		}
+		if g.PushProxyOrigin != nil {
+			if pushNamespace, ok := ParseGitProxyOrigin(*g.PushProxyOrigin, false); !ok || pushNamespace != namespace {
+				return fmt.Errorf("git proxy origins must be the exact trusted listeners")
+			}
 		}
 		if len(g.Origins) != 1 || g.Origins[0] != "github.com" || g.Credential {
 			return fmt.Errorf("git proxies require canonical github.com identity and no legacy credential")
@@ -163,17 +231,6 @@ func validateHost(host string) error {
 func DirectGitHubHost(host string) bool {
 	for _, domain := range []string{"github.com", "githubusercontent.com", "githubassets.com", "github.io"} {
 		if host == domain || strings.HasSuffix(host, "."+domain) {
-			return true
-		}
-	}
-	return false
-}
-
-// GitProxyHost reports whether a normalized hostname is one of the trusted Git
-// proxy listeners.
-func GitProxyHost(host string) bool {
-	for _, origin := range []string{ReadProxyOrigin, PushProxyOrigin} {
-		if u, err := url.Parse(origin); err == nil && host == u.Hostname() {
 			return true
 		}
 	}

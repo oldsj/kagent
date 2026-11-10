@@ -45,7 +45,7 @@ func gitRestrictedOrigin(origin string) bool {
 	}
 	// A leftmost-label wildcard covers every host under its suffix.
 	host := strings.TrimPrefix(workspace.NormalizeHost(u.Hostname()), "*.")
-	return workspace.DirectGitHubHost(host) || workspace.GitProxyHost(host)
+	return workspace.DirectGitHubHost(host) || workspace.IsGitProxyHost(host)
 }
 
 func legacyGitCredential(uri string) bool {

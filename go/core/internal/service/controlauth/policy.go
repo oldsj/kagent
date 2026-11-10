@@ -29,8 +29,6 @@ const (
 	purposeGitPush = "git-push"
 	purposeMCP     = "mcp"
 
-	gitReadSecretPattern = "mainloop-git-read-*"
-	gitPushSecretPattern = "mainloop-git-push-*"
 )
 
 type credentialRule struct {
@@ -47,8 +45,9 @@ type Policy struct {
 }
 
 // New validates the configured policy. A Git rule must be exactly the trusted
-// proxy tuple for its purpose, so a typo cannot widen which Secrets reach the
-// proxies; an mcp rule may not target a Git proxy at all.
+// proxy tuple for its purpose of one known Mainloop Git instance, so a typo
+// cannot widen which Secrets reach the proxies; an mcp rule may not target any
+// Git proxy at all. Listing an instance's tuples is what approves it.
 func New(config *configv1.SessionPolicy) (*Policy, error) {
 	if len(validation.IsDNS1123Label(config.GetNamespace())) != 0 || len(config.GetAgents()) == 0 {
 		return nil, errors.New("session policy requires a namespace and an Agent allowlist")
@@ -82,12 +81,12 @@ func New(config *configv1.SessionPolicy) (*Policy, error) {
 		}
 		switch rule.GetPurpose() {
 		case purposeGitRead:
-			if rule.GetOrigin() != workspace.ReadProxyOrigin || rule.GetSecretNamePattern() != gitReadSecretPattern || rule.GetKey() != "authorization" {
-				return nil, errors.New("session policy git-read rule must be the trusted read proxy tuple")
+			if !gitInstanceTuple(rule, true) {
+				return nil, errors.New("session policy git-read rule must be a known Git instance's trusted read proxy tuple")
 			}
 		case purposeGitPush:
-			if rule.GetOrigin() != workspace.PushProxyOrigin || rule.GetSecretNamePattern() != gitPushSecretPattern || rule.GetKey() != "authorization" {
-				return nil, errors.New("session policy git-push rule must be the trusted push proxy tuple")
+			if !gitInstanceTuple(rule, false) {
+				return nil, errors.New("session policy git-push rule must be a known Git instance's trusted push proxy tuple")
 			}
 		case purposeMCP:
 			if reservedGitOrigin(rule.GetOrigin()) || (origin.Scheme != "https" && (origin.Scheme != "http" || !slices.Contains(cleartext, rule.GetOrigin()))) {
@@ -108,7 +107,27 @@ func reservedGitOrigin(origin string) bool {
 	if err != nil {
 		return false
 	}
-	return workspace.GitProxyHost(workspace.NormalizeHost(u.Hostname()))
+	return workspace.IsGitProxyHost(workspace.NormalizeHost(u.Hostname()))
+}
+
+// gitInstanceTuple reports whether rule is exactly one known Git instance's
+// read (or push) proxy origin, Secret name pattern and key.
+func gitInstanceTuple(rule *configv1.SessionCredentialRule, read bool) bool {
+	if rule.GetKey() != "authorization" {
+		return false
+	}
+	for _, namespace := range workspace.KnownGitInstanceNamespaces {
+		readOrigin, pushOrigin := workspace.GitInstanceOrigins(namespace)
+		readPattern, pushPattern := workspace.GitInstanceSecretPatterns(namespace)
+		origin, pattern := pushOrigin, pushPattern
+		if read {
+			origin, pattern = readOrigin, readPattern
+		}
+		if rule.GetOrigin() == origin && rule.GetSecretNamePattern() == pattern {
+			return true
+		}
+	}
+	return false
 }
 
 // validCleartextMCPOrigin accepts only canonical, exact in-cluster HTTP origins.

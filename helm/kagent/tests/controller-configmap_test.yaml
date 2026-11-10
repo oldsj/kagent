@@ -91,6 +91,23 @@ tests:
           path: data["controller.yaml"]
           pattern: 'apiVersion:|kind:|KAGENT_|OTEL_'
 
+  - it: passes a second Git instance's session policy tuples through
+    template: controller-configmap.yaml
+    set:
+      config.server.auth.sessionPolicy:
+        namespace: kagent
+        agents: [claude]
+        credentials:
+          - {purpose: git-read, origin: "http://mainloop-git-read.mainloop-dev.svc.cluster.local", secretNamePattern: "mainloop-dev-git-read-*", key: authorization, header: authorization}
+          - {purpose: git-push, origin: "http://mainloop-git-push.mainloop-dev.svc.cluster.local", secretNamePattern: "mainloop-dev-git-push-*", key: authorization, header: authorization}
+    asserts:
+      - matchRegex:
+          path: data["controller.yaml"]
+          pattern: 'origin: http://mainloop-git-read\.mainloop-dev\.svc\.cluster\.local'
+      - matchRegex:
+          path: data["controller.yaml"]
+          pattern: 'secretNamePattern: mainloop-dev-git-push-\*'
+
   - it: preserves explicit false and zero duration
     template: controller-configmap.yaml
     set:
