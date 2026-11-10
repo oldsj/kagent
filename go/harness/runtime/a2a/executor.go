@@ -595,6 +595,11 @@ func (s *executionSink) flushHealth(ctx context.Context) error {
 		a2alog.Warn(ctx, "dropped runtime health observations", "count", dropped)
 	}
 	for _, update := range pending {
+		// Positions are assigned here, not in Health: only the execution
+		// goroutine may advance the timeline, and an artifact is ordered by
+		// when it is published. One artifact without a position leaves the
+		// whole task unordered for consumers.
+		apia2a.SetTimelinePosition(update.Artifact, s.nextTimelinePosition())
 		if !s.yield(update, nil) {
 			return errYieldStopped
 		}
