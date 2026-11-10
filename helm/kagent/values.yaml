@@ -155,6 +155,12 @@ config:
   # global.imageRegistry rewrites both packaged defaults and overrides set here.
   harnessImages: {}
   kubernetes: {}
+  # Scheduled refresh of ChatGPT subscription credentials referenced by
+  # ModelConfigs. Set chatgptImage to the Codex Harness image, pinned by digest,
+  # to enable it; that also grants the controller the credential-refresh role.
+  # Requires kubernetes.leaderElection.
+  # credentialRefresh:
+  #   chatgptImage: ghcr.io/oldsj/kagent-codex-harness@sha256:...
   server:
     auth:
       # insecure, trusted-proxy, or service-account. service-account accepts only

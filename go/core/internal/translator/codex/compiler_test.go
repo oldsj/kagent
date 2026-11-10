@@ -33,6 +33,7 @@ func TestCompileProviderCredentials(t *testing.T) {
 		model       v1alpha3.ModelConfigSpec
 		secret      map[string][]byte
 		provider    string
+		baseURL     string
 		environment map[string]string
 		egress      []string
 		wantErr     string
@@ -44,6 +45,18 @@ func TestCompileProviderCredentials(t *testing.T) {
 		{
 			name: "Actor JWT Bedrock", model: v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderBedrock, Model: "gpt-5.2", ActorJWT: &v1alpha3.ActorJWT{Audiences: []string{"model"}}, Bedrock: &v1alpha3.BedrockConfig{Region: "us-east-1"}},
 			wantErr: "Bedrock requires AWS credentials and does not support actorJwt",
+		},
+		{
+			name: "ChatGPT subscription", model: v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderOpenAI, Model: "gpt-6.1", APIKeySecret: "model-auth", APIKeySecretKey: "access-token", OpenAI: &v1alpha3.OpenAIConfig{APIFormat: &responses, AuthMethod: v1alpha3.OpenAIAuthMethod_ChatGPT, AccountID: "test-account"}},
+			secret: map[string][]byte{"access-token": []byte(credentialValue)}, provider: "chatgpt", egress: []string{"http://kagent-controller.kagent:8083", "https://chatgpt.com:443"},
+		},
+		{
+			name: "ChatGPT missing account", model: v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderOpenAI, Model: "gpt-6.1", APIKeySecret: "model-auth", APIKeySecretKey: "access-token", OpenAI: &v1alpha3.OpenAIConfig{APIFormat: &responses, AuthMethod: v1alpha3.OpenAIAuthMethod_ChatGPT}},
+			secret: map[string][]byte{"access-token": []byte(credentialValue)}, wantErr: "requires accountID",
+		},
+		{
+			name: "ChatGPT alternate backend", model: v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderOpenAI, Model: "gpt-6.1", APIKeySecret: "model-auth", APIKeySecretKey: "access-token", OpenAI: &v1alpha3.OpenAIConfig{APIFormat: &responses, AuthMethod: v1alpha3.OpenAIAuthMethod_ChatGPT, AccountID: "test-account", BaseURL: "https://codex.example.com/backend-api/codex"}},
+			secret: map[string][]byte{"access-token": []byte(credentialValue)}, provider: "chatgpt", baseURL: "https://codex.example.com/backend-api/codex", egress: []string{"http://kagent-controller.kagent:8083", "https://codex.example.com:443"},
 		},
 		{
 			name: "OpenAI", model: v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderOpenAI, Model: "gpt-5.2-codex", APIKeySecret: "model-auth", APIKeySecretKey: "api-key", OpenAI: &v1alpha3.OpenAIConfig{APIFormat: &responses}},
@@ -92,6 +105,21 @@ func TestCompileProviderCredentials(t *testing.T) {
 			for name, value := range test.environment {
 				if gotEnvironment[name] != value {
 					t.Errorf("environment[%s] = %q, want %q", name, gotEnvironment[name], value)
+				}
+			}
+			if test.provider == "chatgpt" {
+				if _, ok := gotEnvironment[openAIAPIKeyEnv]; ok {
+					t.Fatal("ChatGPT Actor has an API-key environment variable")
+				}
+				if cfg.Provider.AccountID != "test-account" || len(revision.Credentials) != 1 {
+					t.Fatal("missing ChatGPT account or credential binding")
+				}
+				binding, wantHost := revision.Credentials[0], "https://chatgpt.com:443"
+				if test.baseURL != "" {
+					wantHost = "https://codex.example.com:443"
+				}
+				if cfg.Provider.BaseURL != test.baseURL || binding.Origin != wantHost || binding.Header != "authorization" || binding.Prefix != "Bearer " || binding.URI != "ate-secret://k8s.io/default/test/model-auth/access-token" {
+					t.Fatalf("incorrect ChatGPT binding: %#v", binding)
 				}
 			}
 			if !reflect.DeepEqual(revision.EgressDestinations, test.egress) {

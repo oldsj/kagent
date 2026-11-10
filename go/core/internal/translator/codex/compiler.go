@@ -39,6 +39,7 @@ const (
 
 var ownedEnvironment = map[string]struct{}{
 	codexHomeEnv: {}, openAIAPIKeyEnv: {}, awsRegionEnv: {}, awsBedrockTokenEnv: {},
+	"CODEX_API_KEY": {},
 	awsAccessKeyEnv: {}, awsSecretKeyEnv: {}, awsSessionTokenEnv: {},
 }
 
@@ -172,7 +173,10 @@ func (c *Compiler) compileProvider(ctx context.Context, resolved *translator.Res
 		}
 		options := *model.Spec.OpenAI
 		baseURL := strings.TrimSpace(options.BaseURL)
-		options.BaseURL, options.APIFormat = "", nil
+		authMethod, accountID := options.AuthMethod, strings.TrimSpace(options.AccountID)
+		transport := options.ResponsesTransport
+		options.BaseURL, options.APIFormat, options.AuthMethod, options.AccountID = "", nil, "", ""
+		options.ResponsesTransport = ""
 		if !reflect.DeepEqual(options, v1alpha3.OpenAIConfig{}) {
 			return codexconfig.Provider{}, nil, nil, translator.NewValidationError("Codex does not support OpenAI provider options beyond baseUrl and apiFormat responses")
 		}
@@ -182,8 +186,7 @@ func (c *Compiler) compileProvider(ctx context.Context, resolved *translator.Res
 			}
 			credential = secretEnvironment(openAIAPIKeyEnv, model.Spec.APIKeySecret, model.Spec.APIKeySecretKey)
 		}
-		provider := codexconfig.Provider{Name: "openai", BaseURL: baseURL}
-		egress := []string{"https://api.openai.com:443"}
+		var egress []string
 		if baseURL != "" {
 			host, err := absoluteHTTPOrigin(baseURL)
 			if err != nil {
@@ -191,7 +194,25 @@ func (c *Compiler) compileProvider(ctx context.Context, resolved *translator.Res
 			}
 			egress = []string{host}
 		}
-		return provider, []corev1.EnvVar{credential}, egress, nil
+		if authMethod == v1alpha3.OpenAIAuthMethod_ChatGPT {
+			if accountID == "" {
+				return codexconfig.Provider{}, nil, nil, translator.NewValidationError("Codex ChatGPT requires accountID")
+			}
+			if model.Spec.ActorJWT != nil {
+				return codexconfig.Provider{}, nil, nil, translator.NewValidationError("Codex ChatGPT authMethod cannot be combined with actorJwt")
+			}
+			if egress == nil {
+				egress = []string{"https://chatgpt.com:443"}
+			}
+			return codexconfig.Provider{Name: "chatgpt", BaseURL: baseURL, AccountID: accountID, ResponsesTransport: string(transport)}, nil, egress, nil
+		}
+		if (authMethod != "" && authMethod != v1alpha3.OpenAIAuthMethod_APIKey) || accountID != "" || transport != "" {
+			return codexconfig.Provider{}, nil, nil, translator.NewValidationError("unsupported Codex OpenAI authentication configuration")
+		}
+		if egress == nil {
+			egress = []string{"https://api.openai.com:443"}
+		}
+		return codexconfig.Provider{Name: "openai", BaseURL: baseURL}, []corev1.EnvVar{credential}, egress, nil
 	case v1alpha3.ModelProviderBedrock:
 		if model.Spec.Bedrock == nil || strings.TrimSpace(model.Spec.Bedrock.Region) == "" {
 			return codexconfig.Provider{}, nil, nil, translator.NewValidationError("Codex Bedrock requires bedrock.region")

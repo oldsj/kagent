@@ -253,11 +253,17 @@ func modelCredentialTarget(resolved *ResolvedModelConfig) (name, endpoint, heade
 	switch spec.Provider {
 	case v1alpha3.ModelProviderOpenAI:
 		name, endpoint, header, prefix = env.OpenAIAPIKey.Name(), "https://api.openai.com", "authorization", "Bearer "
+		if spec.OpenAI != nil && spec.OpenAI.AuthMethod == v1alpha3.OpenAIAuthMethod_ChatGPT {
+			endpoint = "https://chatgpt.com"
+		}
 		if spec.OpenAI != nil && spec.OpenAI.BaseURL != "" {
 			endpoint = spec.OpenAI.BaseURL
 		}
 	case v1alpha3.ModelProviderAnthropic:
 		name, endpoint, header = env.AnthropicAPIKey.Name(), "https://api.anthropic.com", "x-api-key"
+		if spec.Anthropic != nil && spec.Anthropic.AuthMethod == v1alpha3.AnthropicAuthMethodOAuthToken {
+			name, header, prefix = "CLAUDE_CODE_OAUTH_TOKEN", "authorization", "Bearer "
+		}
 		if spec.Anthropic != nil && spec.Anthropic.BaseURL != "" {
 			endpoint = spec.Anthropic.BaseURL
 		}

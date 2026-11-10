@@ -72,10 +72,39 @@ jobs:
           ./core/internal/database ./core/pkg/migrations
           ./core/internal/service/session ./core/internal/service/checkpoint
           ./core/internal/grpcserver ./core/internal/httpserver/auth ./core/pkg/auth
+      - name: Test subscription credential refresh and compilation
+        run: >-
+          go test -count=1
+          ./core/internal/controller/chatgptrefresh ./core/internal/translator/...
+          ./core/internal/service/model ./core/pkg/config
       - name: Test fake native consumers
         run: >-
           go test -count=1 -skip '^TestPinnedCodexAcceptsGeneratedConfiguration$'
           ./harness/claude/... ./harness/codex/... ./harness/runtime/...
+
+  helm-unit-tests:
+    name: Helm chart unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VERSION: v0.0.1-test
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v3.18.0
+      - name: Install unittest plugin
+        run: helm plugin install https://github.com/helm-unittest/helm-unittest
+      - name: Chart init
+        run: make helm-version
+      - name: Run helm unit tests
+        run: helm unittest helm/kagent
 
   controller-dev-entrypoint:
     name: controller-dev-entrypoint.sh rebuild-on-change
