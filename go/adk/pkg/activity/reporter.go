@@ -73,6 +73,31 @@ func (r *Reporter) SetActive(active bool) {
 	}
 }
 
+// IdleWhenServing reports the runtime idle once serving reports true, unless a
+// busy/idle transition was already recorded. A wake that starts no turn, such
+// as a read routed to a suspended Actor, otherwise leaves nothing to schedule
+// suspension. The process may resume from a golden memory snapshot taken
+// before it served a Session, so this polls rather than running once at
+// startup; serving must be false during golden-snapshot creation.
+func (r *Reporter) IdleWhenServing(ctx context.Context, serving func() bool, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for !serving() {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+	r.mu.Lock()
+	if r.set {
+		r.mu.Unlock()
+		return
+	}
+	r.mu.Unlock()
+	r.SetActive(false)
+}
+
 func (r *Reporter) desired() (bool, bool, uint64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

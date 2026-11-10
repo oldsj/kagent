@@ -112,8 +112,11 @@ func run(ctx context.Context, check bool, getenv func(string) string, environmen
 	if !check {
 		execCfg.ClientAddr = executor.ClientAddr
 		if controller != nil {
-			reporter := activity.NewReporter(taskstore.New(controller, apia2a.RuntimeIdentityPath), logging.FromContext(ctx))
+			store := taskstore.New(controller, apia2a.RuntimeIdentityPath)
+			reporter := activity.NewReporter(store, logging.FromContext(ctx))
 			go reporter.Run(ctx)
+			// A wake that starts no turn must still become eligible for suspension.
+			go reporter.IdleWhenServing(ctx, store.ServesSession, time.Second)
 			execCfg.Activity = reporter
 		}
 	}
