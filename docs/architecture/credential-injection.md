@@ -439,8 +439,11 @@ git:
   pushProxyOrigin: http://mainloop-git-push.mainloop.svc.cluster.local
 ```
 
-These are the only accepted proxy origins. Push requires read, and this profile
-excludes `credentialSecretRef`. The canonical repository identity remains HTTPS
+Each Mainloop Git instance has one such pair of listeners,
+`http://mainloop-git-{read,push}.<namespace>.svc.cluster.local`. The CRD schema
+accepts only the known instances, `mainloop` and `mainloop-dev`, and requires
+read and push to belong to the same instance. Push requires read, and this
+profile excludes `credentialSecretRef`. The canonical repository identity remains HTTPS
 GitHub; the Actor receives only the read and optional push HTTP destinations at
 port 80. Git read and push capabilities are per-Session credential references
 containing the complete Authorization value. Neither value enters runtime
@@ -449,12 +452,39 @@ configuration, Git config, markers, environments or revision provenance.
 Both native compilers check the complete origin and credential union, including
 provider, shared MCP, skill and telemetry inputs. Proxy and no-Git revisions
 reject direct GitHub host families, legacy `mainloop-git-auth` references and
-revision credentials on either Git proxy host. A no-Git coordinator acquires
+revision credentials on any instance's Git proxy host. Effective egress may
+reach only the revision's own instance listeners. A no-Git coordinator acquires
 neither Git listener. Both proxy fields absent retain the standalone direct Git
 configuration. Production activation must select the proxy profile on every
 Git-enabled Harness and retire direct revisions deliberately.
 
-This check covers what a revision compiles to. It does not cover origins a
-later `EgressPolicy` grant adds, and it does not restrict which Secrets a caller
-may bind as Session credentials for the proxy origins; that caller policy is a
-separate control.
+The same rule holds after compilation. A proxy or no-Git native revision is
+recorded as Git-restricted, and `EgressPolicy` grants never add GitHub host
+families, Git proxy hosts (wildcards included), credentials on those hosts, or
+the legacy Git Secret to its Actors. The store drops them where grants meet a
+revision's pinned access, so the rule also covers Actors still pinned to an
+older revision, and the Agent's status reports the conflict. Explicit standalone
+direct Git is not restricted.
+
+### Session policy
+
+`config.server.auth.sessionPolicy` is the operator's allowlist for Session
+creation by API callers. It names one namespace and the Agents in it that
+callers may use, and the credential rules a `SessionCredential` must match
+exactly: Secret name glob, key, origin and header. `git-read` and `git-push`
+rules are accepted only as a known Git instance's fixed proxy tuples
+(`<namespace>-git-read-*` and `<namespace>-git-push-*`, key and header
+`authorization`, that instance's exact proxy origin), so a configuration mistake
+cannot widen which Secrets reach the proxies or pair one instance's Secrets with
+another's listener. Listing an instance's tuples is what approves it. The known
+instances' Secret patterns are disjoint. An
+`mcp` rule may use any `https` origin, or an `http` origin listed under
+`cleartextMcpOrigins` (exact in-cluster service origins only), and never any
+instance's Git proxy. With no rules, Sessions cannot carry credentials.
+
+The policy applies to every caller except internal controller work such as
+scheduled runs; runtime Actors are subject to it. A refusal is
+`PermissionDenied` and reserves nothing. The controller rejects an invalid
+policy at startup and under `--check-config`. Without a policy, the paragraph
+above about trusted callers applies: any authenticated caller may bind any
+Secret key in the Agent's namespace.

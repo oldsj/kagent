@@ -59,9 +59,16 @@ generation but leaves DELETING in place, keeping task admission closed until a
 delete retry completes. Explicit deletion requires a client retry; idle deletion
 is retried by the expiration worker. After an attempt issues runtime work, errors
 retain the operation and resource pins. The attempt releases its execution claim
-on return. A crashed executor's claim expires after at most two minutes, allowing
-a client retry to claim the same operation with a new executor ID. Each attempt
-uses a context bounded by that interval; no claim renewer or recovery sweep runs.
+on return. Each attempt, including automatic suspension, runs under
+`substrate.operationTimeout` (default 10m), and its execution claim lasts exactly
+as long as that attempt, so a second executor cannot start while the first is
+still inside a Substrate call. A crashed executor's claim expires at that bound,
+allowing a client retry to claim the same operation with a new executor ID; no
+claim renewer or recovery sweep runs. Actor resume, suspend and revert move
+snapshots, so they use `substrate.lifecycleCallTimeout` (default 5m); other
+Substrate RPCs use `substrate.callTimeout` (default 30s). The controller refuses
+to start unless the attempt bound exceeds the lifecycle call bound. A timed-out
+call is still an uncertain outcome that a retry reconciles from the Actor.
 A stale executor cannot complete or release a newer attempt's claim.
 
 Lifecycle retries inspect the pinned Actor identity and continue Substrate's
@@ -92,6 +99,20 @@ suspends the Actor while the Session stays READY, and Substrate ingress resumes
 it for the next interaction. There are no public Session suspend/resume controls;
 standalone Sandboxes retain their explicit controls. Scheduled-run deadline cleanup
 can still suspend a Session internally when no scheduled task can be identified.
+
+Because a sleeping Session stays READY, `GetSession` reports whether its runtime
+is awake through `runtime_association`. On each authorized read of a READY
+Session with no lifecycle operation, the control plane looks up the Session's
+Actor and reports it only when it is still the recorded Actor of the expected
+template:
+- `generation_id` is a name-based UUID of the Session ID and the Actor UID
+- `phase` is `active`
+- `current_active` is true only while the Actor is running
+
+An absent association means this read verified nothing, not that the runtime
+is asleep. List and other reads never include it. It is an observation, not a
+grant: callers fence runtime work with their own checks.
+
 Deletion closes task admission,
 stops and deletes the Actor, then tombstones the session. The workflow
 entry points are in
@@ -125,8 +146,14 @@ Substrate settlement and the complete multi-replica rollout remain acceptance wo
 Sessions expire after seven days without task activity by default, using the same
 bounded deletion workflow as Sandboxes. `config.sessions.idleTtl` in Helm configures
 the controller. Values use protobuf durations (`604800s` for seven days,
-`2592000s` for thirty); `0s` disables the worker, including retries, and negative values
-are rejected. There is no per-agent override or maximum TTL.
+`2592000s` for thirty); `0s` disables default admission, and negative values are
+rejected. `Harness.spec.sessionIdleTTL` overrides the default for every Agent using
+that Harness: omitted inherits it, `0s` never expires, and a positive duration
+replaces it, even when the controller default is zero. Subsecond durations round up
+to the next second. The override is mutable lifecycle policy stored on
+`agent_definition`, so edits apply to existing Sessions without changing their pinned
+runtime revision. While the Harness cannot be resolved, the last stored override
+stays in force. There is no maximum TTL beyond the duration type's range.
 
 Idle time is measured from the later of session creation and the latest stored
 A2A event's database timestamp. Forks retain original event timestamps, so their
@@ -207,6 +234,24 @@ replicas. Each worker scans at startup and, when idle, every minute by default
 leave an actor running until a surviving replica's next recovery scan; increasing
 the interval increases that delay and the time until its snapshot is available.
 Ordinary committed settlements do not wait for the recovery interval.
+
+`sessions.quiescenceDelay` (default `0s`, at most `1800s`) delays automatic
+suspension after a turn settles, so background processes such as dev servers keep
+running for a while. Settlement records the deadline with the database clock, so
+acknowledgement retries and controller restarts keep it; configuration changes
+affect only newly settled boundaries. Publication is not delayed: the task is
+visible immediately. A new turn supersedes unclaimed work during the delay. Claims
+check the deadline alongside the dispatch and lifecycle fences, and work that is not
+yet due does not count as pending, so idle workers notice it on their next recovery
+scan: suspension can land up to one recovery interval after the deadline. The
+delay does not wait for background processes to finish. Boundaries published on
+an ending runtime use no delay.
+
+The deadline column (migration 8) is nullable, and NULL means eligible now, so an
+older controller can still publish boundaries. Older workers ignore deadlines, so
+roll out in two steps: deploy the new controller with `quiescenceDelay: 0s`, wait
+for every old replica to exit (all replicas run quiescence workers), then raise the
+delay. To roll back the binary, set the delay to `0s` first and keep schema 8.
 
 An empty claim is followed by a check for unclaimed work on ready sessions. If
 dispatch, checkpoint creation, a lifecycle operation, or a row lock blocks that

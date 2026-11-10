@@ -333,3 +333,36 @@ func TestActorJWTGrantPersistenceAndRevocation(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, policy.Credentials, "live policy removal revokes Actor token injection on existing revisions")
 }
+
+func TestRuntimeEgressGitRestrictedRevisionIgnoresGitGrants(t *testing.T) {
+	client := NewClient(setupTestDB(t), "public")
+	ctx := t.Context()
+	require.NoError(t, client.UpsertAgentDefinition(ctx, AgentDefinition{Namespace: "team", AgentName: "source", AgentUID: "uid", EgressGrant: egress.Access{
+		Destinations: []string{"https://api.github.com", "https://pypi.org", "http://mainloop-git-push.mainloop.svc.cluster.local"},
+		Credentials:  []egress.Credential{{Origin: "https://api.github.com", Header: "authorization", URI: "ate-secret://k8s.io/default/team/token/key"}},
+	}}))
+	record := func(revision string, restricted bool) {
+		require.NoError(t, recordErr(client.RecordRuntimeRevision(ctx, RuntimeRevision{
+			Revision: revision, Namespace: "team", AgentName: "source", AgentUID: "uid",
+			SourceSnapshot: []byte(`{}`), AgentCard: &a2apb.AgentCard{}, ActorTemplateAtespace: "team", ActorTemplateName: "runtime-" + revision,
+			EgressDestinations:  []string{"http://mainloop-git-read.mainloop.svc.cluster.local:80"},
+			GitEgressRestricted: restricted,
+		}, RecordRevisionOptions{})))
+	}
+
+	t.Run("Given a Git-restricted revision, when grants add GitHub and a Git proxy, assert that only its compiled Git access and unrelated grants apply", func(t *testing.T) {
+		record("restricted", true)
+		policy, err := client.GetRuntimeEgressPolicy(ctx, "restricted")
+		require.NoError(t, err)
+		require.Equal(t, []string{"http://mainloop-git-read.mainloop.svc.cluster.local:80", "https://pypi.org:443"}, policy.Destinations)
+		require.Empty(t, policy.Credentials)
+	})
+
+	t.Run("Given an unrestricted revision of the same Agent, when the same grants apply, assert that they are kept", func(t *testing.T) {
+		record("direct", false)
+		policy, err := client.GetRuntimeEgressPolicy(ctx, "direct")
+		require.NoError(t, err)
+		require.Contains(t, policy.Destinations, "https://api.github.com:443")
+		require.Len(t, policy.Credentials, 1)
+	})
+}

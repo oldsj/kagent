@@ -26,7 +26,9 @@ import (
 	"syscall"
 
 	configv1 "github.com/kagent-dev/kagent/go/api/gen/kagent/config/v1"
+	"github.com/kagent-dev/kagent/go/core/internal/controller"
 	authimpl "github.com/kagent-dev/kagent/go/core/internal/httpserver/auth"
+	"github.com/kagent-dev/kagent/go/core/internal/service/controlauth"
 	"github.com/kagent-dev/kagent/go/core/pkg/app"
 	"github.com/kagent-dev/kagent/go/core/pkg/auth"
 	"github.com/kagent-dev/kagent/go/core/pkg/config"
@@ -56,6 +58,16 @@ func run(path string, check bool, level string) error {
 	})
 	if err := config.Validate(cfg); err != nil {
 		return err
+	}
+	// The policy's Git rules are fixed tuples the schema cannot express, so
+	// --check-config must reject a bad one too, not only a running controller.
+	if policy := cfg.GetServer().GetAuth().GetSessionPolicy(); policy != nil {
+		if _, err := controlauth.New(policy); err != nil {
+			return fmt.Errorf("invalid server.auth.session_policy: %w", err)
+		}
+	}
+	if err := controller.ValidateRuntimePayloads(cfg.GetRuntimePayloads()); err != nil {
+		return fmt.Errorf("invalid runtime_payloads: %w", err)
 	}
 	config.ResolveControllerPaths(cfg, path)
 	paths := []string{cfg.GetDatabase().GetReadWrite().GetUrlFile(), cfg.GetPush().GetSigningPrivateKeyFile()}

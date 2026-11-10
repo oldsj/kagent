@@ -161,6 +161,13 @@ config:
   # Requires kubernetes.leaderElection.
   # credentialRefresh:
   #   chatgptImage: ghcr.io/oldsj/kagent-codex-harness@sha256:...
+  # Runtime payloads composed with a caller-selected development image: the
+  # Agent's harness CLI and launcher, mounted read-only at /opt/mainloop-runtime.
+  # One digest-pinned image per provider (claude or codex) and platform; the
+  # Agent's WorkerPool must pin kubernetes.io/arch to that platform.
+  # runtimePayloads:
+  #   payloads:
+  #     - {provider: claude, platform: linux/arm64, image: "ghcr.io/oldsj/kagent-claude-runtime@sha256:...", cliVersion: 2.1.285}
   server:
     auth:
       # insecure, trusted-proxy, or service-account. service-account accepts only
@@ -175,6 +182,27 @@ config:
       #   authority: kubernetes
       #   allowedSubjects:
       #     - system:serviceaccount:mainloop:mainloop
+      # Allowlist for Session creation by API callers: which Agents they may use
+      # and which Secrets they may bind as Session credentials. Without it, any
+      # authenticated caller may bind any Secret key in the Agent's namespace.
+      # git-read and git-push rules must be exactly a known Mainloop Git
+      # instance's proxy tuples (instances: mainloop, mainloop-dev). Listing an
+      # instance's tuples approves it; a mainloop-dev instance uses
+      # http://mainloop-git-{read,push}.mainloop-dev.svc.cluster.local with
+      # secretNamePattern mainloop-dev-git-{read,push}-*.
+      # sessionPolicy:
+      #   namespace: kagent
+      #   agents: [claude, codex]
+      #   cleartextMcpOrigins:
+      #     - http://mainloop-mcp.mainloop.svc.cluster.local
+      #   credentials:
+      #     - {purpose: git-read, origin: "http://mainloop-git-read.mainloop.svc.cluster.local", secretNamePattern: "mainloop-git-read-*", key: authorization, header: authorization}
+      #     - {purpose: git-push, origin: "http://mainloop-git-push.mainloop.svc.cluster.local", secretNamePattern: "mainloop-git-push-*", key: authorization, header: authorization}
+      #     - {purpose: mcp, origin: "http://mainloop-mcp.mainloop.svc.cluster.local", secretNamePattern: "mainloop-mcp-*", key: authorization, header: authorization}
+      #   # Exact host[:port] registries whose digest-pinned images callers may
+      #   # select as a Session development environment. Empty denies selection,
+      #   # including for internal controller work. Requires runtimePayloads.
+      #   developmentEnvironmentRegistries: [registry.example.com]
     # Serve gRPC reflection for tools such as grpcurl. Callers must pass the
     # configured authentication. `kagent install` enables it.
     grpcReflection: false
@@ -203,6 +231,10 @@ config:
     recoveryInterval: 60s
   sessions:
     idleTtl: 604800s
+    # Delay after a turn settles before its idle runtime is suspended, so
+    # background processes keep running (0s to 1800s; 0s suspends at once).
+    # Raise it only after every older controller replica has exited.
+    quiescenceDelay: 0s
     shareMaxTtl: 0s
   sandboxes:
     guestImage: ""
@@ -215,6 +247,12 @@ config:
     routerUrl: https://atenet-router.ate-system.svc:443
     # Must match Substrate's ateApi.actorJWTIssuer; discovery uses substrate.caFile.
     actorJwtIssuer: https://idp.ate-system.svc
+    # Substrate deadlines. Resume, suspend and revert move snapshots and grow
+    # with durable data; operationTimeout bounds each attempt and its execution
+    # claim and must exceed lifecycleCallTimeout.
+    callTimeout: 30s
+    lifecycleCallTimeout: 300s
+    operationTimeout: 600s
   logging:
     level: info
   metrics:
@@ -249,6 +287,11 @@ controller:
   # Mount rotating Substrate PodIdentity/ServiceDNS credentials.
   substrateClientCertificate:
     enabled: false
+  # Register the controller's /mcp endpoint as the RemoteMCPServer <fullname>-api.
+  # The controller discovers its tools without credentials, so disable this when
+  # the endpoint requires authentication and no AgentTemplate binds the server.
+  apiToolServer:
+    enabled: true
   push:
     signing:
       # Optional operator-managed Secret with an unencrypted PKCS#8 Ed25519 key

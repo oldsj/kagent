@@ -81,6 +81,7 @@ jobs:
           go test -count=1
           ./core/internal/controller/chatgptrefresh ./core/internal/translator/...
           ./core/internal/service/model ./core/pkg/config
+          ./core/internal/service/controlauth ./core/cmd/controller
       - name: Test fake native consumers
         run: >-
           go test -count=1 -skip '^TestPinnedCodexAcceptsGeneratedConfiguration$'

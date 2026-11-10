@@ -87,7 +87,7 @@ func TestChatGPTMaterializesOnlySyntheticAuth(t *testing.T) {
 func TestChatGPTHTTPSKeepsSubscriptionAuth(t *testing.T) {
 	cfg := config.Production("gpt-6.1-sol", "Reply briefly")
 	cfg.Provider = config.Provider{Name: "chatgpt", AccountID: "test-account", ResponsesTransport: "https"}
-	contents, err := renderConfig(cfg, t.TempDir(), false)
+	contents, err := renderConfig(cfg, t.TempDir(), "/data/workspace", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestChatGPTBaseURLOverridesBackend(t *testing.T) {
 	}{{"", true}, {"https", false}} {
 		cfg := config.Production("gpt-6.1", "Reply briefly")
 		cfg.Provider = config.Provider{Name: "chatgpt", AccountID: "test-account", BaseURL: "https://codex.example.com/backend-api/codex", ResponsesTransport: test.transport}
-		contents, err := renderConfig(cfg, t.TempDir(), false)
+		contents, err := renderConfig(cfg, t.TempDir(), "/data/workspace", false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -342,7 +342,7 @@ func TestRenderConfigOmitsDisabledSignalExporter(t *testing.T) {
 			cfg := config.Production("gpt-5.2-codex", "work carefully")
 			cfg.Provider = config.Provider{Name: "openai"}
 			cfg.Telemetry = test.telemetry
-			contents, err := renderConfig(cfg, t.TempDir(), false)
+			contents, err := renderConfig(cfg, t.TempDir(), "/data/workspace", false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -485,5 +485,36 @@ func TestNativeEnvironmentDropsCompressionCodexCannotLoad(t *testing.T) {
 		return strings.HasPrefix(variable, "OTEL_RESOURCE_ATTRIBUTES=") && strings.Contains(variable, "gen_ai.main_agent.name=demo-codex")
 	}) {
 		t.Fatalf("environment = %v, want CODEX_HOME and the compiled identity", got)
+	}
+}
+
+func TestRenderConfigAutoCompactTokenLimit(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		limit int64
+		want  int64
+	}{
+		{name: "unset keeps the Codex default"},
+		{name: "set", limit: 120000, want: 120000},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := config.Production("gpt-5.2-codex", "work carefully")
+			cfg.Provider = config.Provider{Name: "openai"}
+			cfg.AutoCompactTokenLimit = tt.limit
+			contents, err := renderConfig(cfg, t.TempDir(), "/data/workspace", false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Contains(string(contents), "model_auto_compact_token_limit"); got != (tt.limit != 0) {
+				t.Fatalf("model_auto_compact_token_limit present = %v in:\n%s", got, contents)
+			}
+			var native nativeConfig
+			if err := toml.Unmarshal(contents, &native); err != nil {
+				t.Fatal(err)
+			}
+			if native.AutoCompactLimit != tt.want {
+				t.Fatalf("auto compact limit = %d, want %d", native.AutoCompactLimit, tt.want)
+			}
+		})
 	}
 }

@@ -583,3 +583,7 @@ func testSessionService() *sessionsvc.Service {
 func testCheckpointService() *checkpoint.Service {
 	return checkpoint.NewService(nil, nil, nil, nil)
 }
+
+func (*fakeSessionStore) GetSessionRequest(context.Context, string, string) (*apiv1.Session, error) {
+	return nil, database.ErrNotFound
+}

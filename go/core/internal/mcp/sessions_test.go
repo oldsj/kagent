@@ -786,3 +786,7 @@ func TestListTasksOfAnotherCallerIsNotFound(t *testing.T) {
 	require.True(t, result.IsError)
 	require.Equal(t, "not_found", result.Meta["kagent.dev/error-code"])
 }
+
+func (s *sessionStore) GetSessionRequest(context.Context, string, string) (*apiv1.Session, error) {
+	return nil, database.ErrNotFound
+}

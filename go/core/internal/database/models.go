@@ -58,6 +58,14 @@ type AgentDefinition struct {
 	EgressGrant egress.Access
 	// DesiredRevision is a compiled runtime digest, or empty while inputs are unresolved.
 	DesiredRevision string
+	// Nil preserves the stored policy when the Harness cannot be resolved.
+	SessionIdleTTL *SessionIdleTTLPolicy
+}
+
+// SessionIdleTTLPolicy is a resolved Harness lifecycle policy. Nil Seconds uses
+// the controller default; zero disables expiration.
+type SessionIdleTTLPolicy struct {
+	Seconds *int64
 }
 
 type RuntimeRevision struct {
@@ -70,12 +78,25 @@ type RuntimeRevision struct {
 	Credentials        []egress.Credential
 	EgressDestinations []string
 	// GitOrigins are the hosts Sessions of this revision may clone from.
-	GitOrigins              []string
+	GitOrigins []string
+	// GitEgressRestricted drops GitHub and Git proxy access from live grants.
+	GitEgressRestricted     bool
 	TokenPassthroughTargets []egresspolicy.GatewayTarget
 	ActorTemplateAtespace   string
 	ActorTemplateName       string
 	ActorTemplateUID        string
 	ActorTemplateSpecDigest string
+	// Composition and BaseRevision are set together for a composed variant of
+	// BaseRevision; both are empty for an Agent's own revisions.
+	Composition  *RevisionComposition
+	BaseRevision string
+}
+
+// RevisionComposition is the development image and runtime payload a composed
+// variant revision runs. Sessions pinned to the variant report both.
+type RevisionComposition struct {
+	Environment *apiv1.DevelopmentEnvironment
+	Runtime     *apiv1.RuntimeComposition
 }
 
 // SessionQuery narrows a page of sessions to an optional Agent.

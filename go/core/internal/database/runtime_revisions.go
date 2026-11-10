@@ -9,9 +9,11 @@ import (
 
 	a2apb "github.com/a2aproject/a2a-go/v2/a2apb/v1"
 	"github.com/jackc/pgx/v5"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/kagent-dev/kagent/go/api/bootstrap"
+	apiv1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1"
 	runtimev1 "github.com/kagent-dev/kagent/go/api/gen/kagent/runtime/v1"
 	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"github.com/kagent-dev/kagent/go/core/pkg/egresspolicy"
@@ -21,24 +23,33 @@ import (
 // Kubernetes Agent identity. Updating an existing definition revives it if retired and
 // preserves its latest successful revision. It atomically retires older identities
 // at the same names and rejects revisions whose deletion has started. Grants
-// are canonicalized before writing; errors may include an uncertain commit outcome.
+// are canonicalized before writing. An unresolved idle TTL policy preserves the
+// stored value; a resolved one replaces it, including NULL for no override.
+// Errors may include an uncertain commit outcome.
 func (c *Client) UpsertAgentDefinition(ctx context.Context, definition AgentDefinition) error {
 	grants, err := canonicalStoredGrants(definition.EgressGrant)
 	if err != nil {
 		return fmt.Errorf("validate source grants: %w", err)
+	}
+	var ttlSeconds *int64
+	if definition.SessionIdleTTL != nil {
+		ttlSeconds = definition.SessionIdleTTL.Seconds
 	}
 	return c.withTx(ctx, func(tx pgx.Tx) error {
 		if err := retireAgentIdentities(ctx, tx, definition.Namespace, definition.AgentName, definition.AgentUID); err != nil {
 			return err
 		}
 		if err := execSQL(ctx, tx, `
-			INSERT INTO agent_definition (namespace, agent_name, agent_uid, desired_revision, grant_destinations, grant_credentials)
-			VALUES ($1, $2, $3, $4, $5, $6)
+			INSERT INTO agent_definition (namespace, agent_name, agent_uid, desired_revision, grant_destinations, grant_credentials, session_idle_ttl_seconds)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
 			ON CONFLICT (namespace, agent_uid) DO UPDATE SET
 			    agent_name = EXCLUDED.agent_name, desired_revision = EXCLUDED.desired_revision,
 			    grant_destinations = EXCLUDED.grant_destinations, grant_credentials = EXCLUDED.grant_credentials,
+			    session_idle_ttl_seconds = CASE WHEN $8 THEN EXCLUDED.session_idle_ttl_seconds
+			        ELSE agent_definition.session_idle_ttl_seconds END,
 			    retired_at = NULL, updated_at = NOW()
-		`, definition.Namespace, definition.AgentName, definition.AgentUID, definition.DesiredRevision, grants.Destinations, grants.Credentials); err != nil {
+		`, definition.Namespace, definition.AgentName, definition.AgentUID, definition.DesiredRevision, grants.Destinations, grants.Credentials,
+			ttlSeconds, definition.SessionIdleTTL != nil); err != nil {
 			return err
 		}
 
@@ -127,6 +138,15 @@ func (c *Client) RecordRuntimeRevision(ctx context.Context, revision RuntimeRevi
 	if err != nil {
 		return GoldenRetry{}, fmt.Errorf("encode runtime revision Agent Card: %w", err)
 	}
+	if (revision.Composition == nil) != (revision.BaseRevision == "") {
+		return GoldenRetry{}, fmt.Errorf("runtime revision %s must set composition and base revision together", revision.Revision)
+	}
+	var composition []byte
+	if revision.Composition != nil {
+		if composition, err = encodeRevisionComposition(revision.Composition); err != nil {
+			return GoldenRetry{}, fmt.Errorf("encode runtime revision composition: %w", err)
+		}
+	}
 	var bundle []byte
 	if options.Bootstrap != nil {
 		if err := bootstrap.ValidateBundle(options.Bootstrap); err != nil {
@@ -158,18 +178,18 @@ func (c *Client) RecordRuntimeRevision(ctx context.Context, revision RuntimeRevi
 			RuntimeArtifact: RuntimeArtifact{Revision: revision.Revision, Kind: runtimeKindAgent, Namespace: revision.Namespace,
 				ActorTemplateAtespace: revision.ActorTemplateAtespace, ActorTemplateName: revision.ActorTemplateName, ActorTemplateUID: revision.ActorTemplateUID, ActorTemplateSpecDigest: revision.ActorTemplateSpecDigest},
 			SourceSnapshot: revision.SourceSnapshot, EgressDestinations: revision.EgressDestinations, Credentials: revision.Credentials, TokenPassthroughTargets: revision.TokenPassthroughTargets,
-			GitOrigins: revision.GitOrigins,
+			GitOrigins: revision.GitOrigins, GitEgressRestricted: revision.GitEgressRestricted,
 		}); err != nil {
 			return err
 		}
 		result, err := tx.Exec(ctx, `
-			INSERT INTO agent_revision (revision, agent_name, agent_uid, agent_card, bootstrap_bundle)
-			VALUES ($1, $2, $3, $4, $5)
+			INSERT INTO agent_revision (revision, agent_name, agent_uid, agent_card, bootstrap_bundle, base_revision, composition)
+			VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''), $7::jsonb)
 			ON CONFLICT (revision) DO UPDATE SET
 			    bootstrap_bundle = COALESCE(agent_revision.bootstrap_bundle, EXCLUDED.bootstrap_bundle)
 			WHERE EXCLUDED.bootstrap_bundle IS NULL OR agent_revision.bootstrap_bundle IS NULL
 			    OR agent_revision.bootstrap_bundle = EXCLUDED.bootstrap_bundle
-		`, revision.Revision, revision.AgentName, revision.AgentUID, card, bundle)
+		`, revision.Revision, revision.AgentName, revision.AgentUID, card, bundle, revision.BaseRevision, nullableJSON(composition))
 		if err != nil {
 			return fmt.Errorf("record agent revision: %w", err)
 		}
@@ -345,6 +365,7 @@ type runtimeRevisionRecord struct {
 	TokenPassthroughTargets []egresspolicy.GatewayTarget
 	Credentials             []egress.Credential
 	GitOrigins              []string
+	GitEgressRestricted     bool
 }
 
 // recordRuntimeRevision writes immutable common inputs and mutable artifact status.
@@ -364,13 +385,13 @@ func recordRuntimeRevision(ctx context.Context, tx pgx.Tx, revision runtimeRevis
 	}
 	result, err := tx.Exec(ctx, `
   INSERT INTO runtime_revision (revision, kind, namespace, source_snapshot, egress_destinations,
-   actor_template_atespace, actor_template_name, actor_template_uid, actor_template_spec_digest, credentials, token_passthrough_targets, git_origins)
-  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+   actor_template_atespace, actor_template_name, actor_template_uid, actor_template_spec_digest, credentials, token_passthrough_targets, git_origins, git_egress_restricted)
+  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
   ON CONFLICT (revision) DO UPDATE SET actor_template_uid = EXCLUDED.actor_template_uid,
    actor_template_spec_digest = EXCLUDED.actor_template_spec_digest, updated_at = NOW()
   WHERE runtime_revision.deleted_at IS NULL AND runtime_revision.kind = EXCLUDED.kind
  `, revision.Revision, revision.Kind, revision.Namespace, revision.SourceSnapshot, revision.EgressDestinations,
-		revision.ActorTemplateAtespace, revision.ActorTemplateName, revision.ActorTemplateUID, revision.ActorTemplateSpecDigest, revision.Credentials, revision.TokenPassthroughTargets, revision.GitOrigins)
+		revision.ActorTemplateAtespace, revision.ActorTemplateName, revision.ActorTemplateUID, revision.ActorTemplateSpecDigest, revision.Credentials, revision.TokenPassthroughTargets, revision.GitOrigins, revision.GitEgressRestricted)
 	if err != nil {
 		return fmt.Errorf("record runtime revision %s: %w", revision.Revision, err)
 	}
@@ -526,4 +547,63 @@ func recordGoldenRetry(ctx context.Context, tx pgx.Tx, revision, templateUID str
 		retry.FailedAt = *row.GoldenFailedAt
 	}
 	return retry, nil
+}
+
+// nullableJSON keeps an absent document NULL rather than encoding JSON null.
+func nullableJSON(document []byte) any {
+	if document == nil {
+		return nil
+	}
+	return string(document)
+}
+
+// storedComposition is the agent_revision.composition document.
+type storedComposition struct {
+	DevelopmentEnvironment json.RawMessage `json:"developmentEnvironment"`
+	RuntimeComposition     json.RawMessage `json:"runtimeComposition"`
+}
+
+func encodeRevisionComposition(composition *RevisionComposition) ([]byte, error) {
+	if composition.Environment == nil || composition.Runtime == nil {
+		return nil, errors.New("composition requires a development environment and a runtime payload")
+	}
+	environment, err := protojson.Marshal(composition.Environment)
+	if err != nil {
+		return nil, err
+	}
+	runtime, err := protojson.Marshal(composition.Runtime)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(storedComposition{DevelopmentEnvironment: environment, RuntimeComposition: runtime})
+}
+
+// getRevisionComposition returns the base revision and composition a variant
+// was prepared with, or a nil composition for an Agent's own revision.
+func getRevisionComposition(ctx context.Context, db dbExecutor, revision string) (string, *RevisionComposition, error) {
+	type compositionRow struct {
+		BaseRevision *string
+		Composition  []byte
+	}
+	row, err := queryOne(ctx, db, `
+		SELECT base_revision, composition FROM agent_revision WHERE revision = $1
+	`, pgx.RowToStructByName[compositionRow], revision)
+	if err != nil {
+		return "", nil, fmt.Errorf("get runtime revision %s composition: %w", revision, notFoundOr(err))
+	}
+	if row.BaseRevision == nil || row.Composition == nil {
+		return "", nil, nil
+	}
+	var stored storedComposition
+	composition := &RevisionComposition{Environment: &apiv1.DevelopmentEnvironment{}, Runtime: &apiv1.RuntimeComposition{}}
+	if err := json.Unmarshal(row.Composition, &stored); err != nil {
+		return "", nil, fmt.Errorf("decode runtime revision %s composition: %w", revision, err)
+	}
+	if err := protojson.Unmarshal(stored.DevelopmentEnvironment, composition.Environment); err != nil {
+		return "", nil, fmt.Errorf("decode runtime revision %s development environment: %w", revision, err)
+	}
+	if err := protojson.Unmarshal(stored.RuntimeComposition, composition.Runtime); err != nil {
+		return "", nil, fmt.Errorf("decode runtime revision %s runtime composition: %w", revision, err)
+	}
+	return *row.BaseRevision, composition, nil
 }
