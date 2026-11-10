@@ -145,9 +145,10 @@ over stdio; it opens no listener.
   bootstrap installs a user home it uses that home with user and project
   setting sources and the user's own hooks.
 - **Activity.** The driver reports busy/idle changes (clients attached, a turn,
-  a pending prompt, SDK background tasks) to an `ActivityReporter` and never
-  reports before serving a Session. Until the control-plane client lands on
-  this branch the reporter only logs.
+  SDK background tasks) to the control plane through `ReportActivity`, and never
+  reports before serving a Session. A prompt waiting for a human is not activity
+  by itself, so a parked question with no client attached can suspend. A woken
+  runtime that starts no turn reports idle once it serves a Session.
 
 The SDK version in [`sdk-runner/package.json`](sdk-runner/package.json) must be
 the release built for the pinned Claude CLI (SDK `0.3.N` with Claude Code
