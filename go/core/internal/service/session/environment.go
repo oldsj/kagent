@@ -56,7 +56,7 @@ func (s *Service) prepareEnvironment(ctx context.Context, agent *apiv1.ResourceR
 	existing, err := s.store.GetSessionRequest(ctx, creator, requestID)
 	switch {
 	case err == nil:
-		if !proto.Equal(existing.GetRuntimeComposition().GetDevelopmentEnvironment(), environment) {
+		if !proto.Equal(existing.GetDevelopmentEnvironment(), environment) {
 			return "", nil, serviceerrors.NewAlreadyExists("request_id was already used for a different Session", database.ErrIdempotencyConflict)
 		}
 		return existing.GetPreparedRevision(), existing.GetRuntimeComposition(), nil

@@ -19,7 +19,7 @@ func TestServiceCreateWithEnvironment(t *testing.T) {
 		Platform:       "linux/arm64",
 		PolicyIdentity: "project/v1",
 	}
-	prepared := &apiv1.RuntimeComposition{DevelopmentEnvironment: selected, PayloadImage: "payload", CliVersion: "2.1.285"}
+	prepared := &apiv1.RuntimeComposition{PayloadImage: "payload", Provider: "claude", Schema: 1, CliVersion: "2.1.285"}
 
 	t.Run("Given an admitting policy and a preparer, when a Session selects a development environment, assert that the reservation pins the prepared variant", func(t *testing.T) {
 		store := &environmentTestStore{serviceTestStore: &serviceTestStore{}}
@@ -32,7 +32,7 @@ func TestServiceCreateWithEnvironment(t *testing.T) {
 		if err != nil {
 			t.Fatalf("CreateWithEnvironment() error = %v", err)
 		}
-		if store.createInput.GetPreparedRevision() != "variant" || !proto.Equal(store.createInput.GetRuntimeComposition(), prepared) {
+		if store.createInput.GetPreparedRevision() != "variant" || !proto.Equal(store.createInput.GetRuntimeComposition(), prepared) || !proto.Equal(store.createInput.GetDevelopmentEnvironment(), selected) {
 			t.Fatalf("reserved %v, want the prepared variant and composition", store.createInput)
 		}
 		if preparer.calls != 1 {
@@ -41,7 +41,7 @@ func TestServiceCreateWithEnvironment(t *testing.T) {
 	})
 
 	t.Run("Given a Session already reserved for the request ID, when the same selection is retried, assert that the original preparation is reused", func(t *testing.T) {
-		store := &environmentTestStore{serviceTestStore: &serviceTestStore{}, existing: &apiv1.Session{PreparedRevision: "original", RuntimeComposition: prepared}}
+		store := &environmentTestStore{serviceTestStore: &serviceTestStore{}, existing: &apiv1.Session{PreparedRevision: "original", DevelopmentEnvironment: selected, RuntimeComposition: prepared}}
 		preparer := &fakePreparer{revision: "newer", composition: prepared}
 		service := NewService(store, serviceTestAuthorizer{}, serviceTestWorkflow{},
 			WithCreatePolicy(environmentPolicy{}), WithEnvironmentPreparer(preparer))
@@ -57,9 +57,9 @@ func TestServiceCreateWithEnvironment(t *testing.T) {
 	})
 
 	t.Run("Given a Session reserved for the request ID with another image, when a different selection reuses the ID, assert that it conflicts before preparing", func(t *testing.T) {
-		other := proto.CloneOf(prepared)
-		other.DevelopmentEnvironment.PolicyIdentity = "project/v2"
-		store := &environmentTestStore{serviceTestStore: &serviceTestStore{}, existing: &apiv1.Session{PreparedRevision: "original", RuntimeComposition: other}}
+		other := proto.CloneOf(selected)
+		other.PolicyIdentity = "project/v2"
+		store := &environmentTestStore{serviceTestStore: &serviceTestStore{}, existing: &apiv1.Session{PreparedRevision: "original", DevelopmentEnvironment: other, RuntimeComposition: prepared}}
 		preparer := &fakePreparer{revision: "variant", composition: prepared}
 		service := NewService(store, serviceTestAuthorizer{}, serviceTestWorkflow{},
 			WithCreatePolicy(environmentPolicy{}), WithEnvironmentPreparer(preparer))

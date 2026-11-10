@@ -70,7 +70,8 @@ retries. A retried `request_id` reuses its original preparation.
 
 The composition is part of the revision digest, so variants never collide
 with single-image revisions, and single-image digests are unchanged. A
-Session reports its `runtime_composition`, read from the pinned revision;
-checkpoint forks inherit it the same way. Garbage collection keeps an
+Session reports its `development_environment` and `runtime_composition`
+(payload image, provider, payload schema and CLI version), read from the
+pinned revision; checkpoint forks inherit them the same way. Garbage collection keeps an
 unreferenced variant while its base is an active Agent's latest successful
 revision, so concurrent Sessions reuse the same golden.

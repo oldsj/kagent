@@ -54,7 +54,7 @@ func marshalSession(session *apiv1.Session) ([]byte, error) {
 // affect retry identity.
 func sameSessionRequest(session, request *apiv1.Session) bool {
 	return proto.Equal(session.GetAgent().GetRef(), request.GetAgent().GetRef()) && proto.Equal(session.GetWorkspace(), request.GetWorkspace()) &&
-		proto.Equal(session.GetRuntimeComposition().GetDevelopmentEnvironment(), request.GetRuntimeComposition().GetDevelopmentEnvironment()) &&
+		proto.Equal(session.GetDevelopmentEnvironment(), request.GetDevelopmentEnvironment()) &&
 		proto.Equal(&apiv1.Session{Credentials: session.GetCredentials()}, &apiv1.Session{Credentials: request.GetCredentials()})
 }
 
@@ -121,13 +121,13 @@ func insertSession(ctx context.Context, db pgx.Tx, request *apiv1.Session, reque
 	if err != nil {
 		return sessionRow{}, err
 	}
-	if requested := request.GetRuntimeComposition(); requested != nil {
+	if requested := request.GetDevelopmentEnvironment(); requested != nil {
 		variant := request.GetPreparedRevision()
 		base, composition, err := getRevisionComposition(ctx, db, variant)
 		if err != nil {
 			return sessionRow{}, err
 		}
-		if composition == nil || base != revision || !proto.Equal(composition.GetDevelopmentEnvironment(), requested.GetDevelopmentEnvironment()) {
+		if composition == nil || base != revision || !proto.Equal(composition.Environment, requested) {
 			return sessionRow{}, fmt.Errorf("composed revision %s does not derive from the Agent's current revision: %w", variant, ErrConflict)
 		}
 		revision = variant
@@ -177,7 +177,10 @@ func insertPinnedSession(ctx context.Context, db pgx.Tx, request *apiv1.Session,
 		return sessionRow{}, err
 	}
 	session := proto.CloneOf(request)
-	session.RuntimeComposition = composition
+	session.DevelopmentEnvironment, session.RuntimeComposition = nil, nil
+	if composition != nil {
+		session.DevelopmentEnvironment, session.RuntimeComposition = composition.Environment, composition.Runtime
+	}
 	session.Agent.Uid = pinned.AgentUID
 	session.ContextId = session.Id
 	session.PreparedRevision = revisionID

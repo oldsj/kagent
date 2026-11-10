@@ -119,14 +119,14 @@ func (p *CompositionPreparer) Prepare(ctx context.Context, agent *apiv1.Resource
 		return "", nil, fmt.Errorf("%w: %v", sessionsvc.ErrEnvironmentUnsupported, err)
 	}
 	composition := &apiv1.RuntimeComposition{
-		DevelopmentEnvironment: environment, PayloadImage: entry.GetImage(), CliVersion: entry.GetCliVersion(),
+		PayloadImage: entry.GetImage(), Provider: entry.GetProvider(), Schema: payload.Schema, CliVersion: entry.GetCliVersion(),
 	}
 	for {
 		observed, err := p.ensureTemplate(ctx, desired)
 		if err != nil {
 			return "", nil, err
 		}
-		record, err := compositionRevision(&composed, id, base.RevisionID, composition, desired, observed)
+		record, err := compositionRevision(&composed, id, base.RevisionID, &database.RevisionComposition{Environment: environment, Runtime: composition}, desired, observed)
 		if err != nil {
 			return "", nil, err
 		}
@@ -186,7 +186,7 @@ func (p *CompositionPreparer) ensureTemplate(ctx context.Context, desired *ateap
 	return observed, nil
 }
 
-func compositionRevision(composed *translator.Revision, id, base translator.RevisionID, composition *apiv1.RuntimeComposition, desired, observed *ateapipb.ActorTemplate) (database.RuntimeRevision, error) {
+func compositionRevision(composed *translator.Revision, id, base translator.RevisionID, composition *database.RevisionComposition, desired, observed *ateapipb.ActorTemplate) (database.RuntimeRevision, error) {
 	digest, err := substrate.ActorTemplateSpecDigest(desired)
 	if err != nil {
 		return database.RuntimeRevision{}, err

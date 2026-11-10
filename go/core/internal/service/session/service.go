@@ -165,6 +165,7 @@ func (s *Service) CreateWithEnvironment(ctx context.Context, agent *apiv1.Resour
 		if request.PreparedRevision, request.RuntimeComposition, err = s.prepareEnvironment(ctx, agent, creator, requestID, environment); err != nil {
 			return nil, err
 		}
+		request.DevelopmentEnvironment = environment
 	}
 	session, _, err := s.store.CreateSession(ctx, request, requestID)
 	if errors.Is(err, database.ErrIdempotencyConflict) {

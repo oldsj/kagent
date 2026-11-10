@@ -41,7 +41,8 @@ func TestCompositionPreparer(t *testing.T) {
 		if recorded.Revision != revision || recorded.BaseRevision != fixture.base.String() || revision == fixture.base.String() {
 			t.Fatalf("recorded %s with base %s, returned %s; want a new variant of %s", recorded.Revision, recorded.BaseRevision, revision, fixture.base)
 		}
-		if !proto.Equal(recorded.Composition, composition) || composition.GetPayloadImage() != compositionPayloadImage || composition.GetCliVersion() != "2.1.285" {
+		if !proto.Equal(recorded.Composition.Runtime, composition) || !proto.Equal(recorded.Composition.Environment, selection) ||
+			composition.GetPayloadImage() != compositionPayloadImage || composition.GetProvider() != "claude" || composition.GetSchema() != 1 || composition.GetCliVersion() != "2.1.285" {
 			t.Fatalf("composition = %v, recorded %v", composition, recorded.Composition)
 		}
 		if image := fixture.templates.template.GetContainers()[0].GetImage(); image != selection.GetImage() {

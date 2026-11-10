@@ -134,7 +134,7 @@ func (c *Client) RecordRuntimeRevision(ctx context.Context, revision RuntimeRevi
 	}
 	var composition []byte
 	if revision.Composition != nil {
-		if composition, err = protojson.Marshal(revision.Composition); err != nil {
+		if composition, err = encodeRevisionComposition(revision.Composition); err != nil {
 			return GoldenRetry{}, fmt.Errorf("encode runtime revision composition: %w", err)
 		}
 	}
@@ -548,9 +548,30 @@ func nullableJSON(document []byte) any {
 	return string(document)
 }
 
+// storedComposition is the agent_revision.composition document.
+type storedComposition struct {
+	DevelopmentEnvironment json.RawMessage `json:"developmentEnvironment"`
+	RuntimeComposition     json.RawMessage `json:"runtimeComposition"`
+}
+
+func encodeRevisionComposition(composition *RevisionComposition) ([]byte, error) {
+	if composition.Environment == nil || composition.Runtime == nil {
+		return nil, errors.New("composition requires a development environment and a runtime payload")
+	}
+	environment, err := protojson.Marshal(composition.Environment)
+	if err != nil {
+		return nil, err
+	}
+	runtime, err := protojson.Marshal(composition.Runtime)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(storedComposition{DevelopmentEnvironment: environment, RuntimeComposition: runtime})
+}
+
 // getRevisionComposition returns the base revision and composition a variant
 // was prepared with, or a nil composition for an Agent's own revision.
-func getRevisionComposition(ctx context.Context, db dbExecutor, revision string) (string, *apiv1.RuntimeComposition, error) {
+func getRevisionComposition(ctx context.Context, db dbExecutor, revision string) (string, *RevisionComposition, error) {
 	type compositionRow struct {
 		BaseRevision *string
 		Composition  []byte
@@ -564,9 +585,16 @@ func getRevisionComposition(ctx context.Context, db dbExecutor, revision string)
 	if row.BaseRevision == nil || row.Composition == nil {
 		return "", nil, nil
 	}
-	composition := &apiv1.RuntimeComposition{}
-	if err := protojson.Unmarshal(row.Composition, composition); err != nil {
+	var stored storedComposition
+	composition := &RevisionComposition{Environment: &apiv1.DevelopmentEnvironment{}, Runtime: &apiv1.RuntimeComposition{}}
+	if err := json.Unmarshal(row.Composition, &stored); err != nil {
 		return "", nil, fmt.Errorf("decode runtime revision %s composition: %w", revision, err)
+	}
+	if err := protojson.Unmarshal(stored.DevelopmentEnvironment, composition.Environment); err != nil {
+		return "", nil, fmt.Errorf("decode runtime revision %s development environment: %w", revision, err)
+	}
+	if err := protojson.Unmarshal(stored.RuntimeComposition, composition.Runtime); err != nil {
+		return "", nil, fmt.Errorf("decode runtime revision %s runtime composition: %w", revision, err)
 	}
 	return *row.BaseRevision, composition, nil
 }

@@ -99,9 +99,13 @@ type Session struct {
 	Workspace *Workspace `protobuf:"bytes,16,opt,name=workspace,proto3" json:"workspace,omitempty"`
 	// Secret references only; forks do not inherit these bindings.
 	Credentials []*SessionCredential `protobuf:"bytes,17,rep,name=credentials,proto3" json:"credentials,omitempty"`
-	// Output only. The development image and runtime payload this Session runs.
-	// Unset for Sessions on the Agent's single-image revision. Forks keep it.
-	RuntimeComposition *RuntimeComposition `protobuf:"bytes,18,opt,name=runtime_composition,json=runtimeComposition,proto3" json:"runtime_composition,omitempty"`
+	// Output only. The development image this Session runs in, as selected at
+	// creation. Unset for Sessions on the Agent's single-image revision. Forks
+	// keep it.
+	DevelopmentEnvironment *DevelopmentEnvironment `protobuf:"bytes,18,opt,name=development_environment,json=developmentEnvironment,proto3" json:"development_environment,omitempty"`
+	// Output only. The operator's runtime payload pinned at creation; set exactly
+	// when development_environment is.
+	RuntimeComposition *RuntimeComposition `protobuf:"bytes,19,opt,name=runtime_composition,json=runtimeComposition,proto3" json:"runtime_composition,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -230,6 +234,13 @@ func (x *Session) GetWorkspace() *Workspace {
 func (x *Session) GetCredentials() []*SessionCredential {
 	if x != nil {
 		return x.Credentials
+	}
+	return nil
+}
+
+func (x *Session) GetDevelopmentEnvironment() *DevelopmentEnvironment {
+	if x != nil {
+		return x.DevelopmentEnvironment
 	}
 	return nil
 }
@@ -566,14 +577,18 @@ func (x *DevelopmentEnvironment) GetPolicyIdentity() string {
 	return ""
 }
 
-// RuntimeComposition is the resolved pairing a composed Session runs.
+// RuntimeComposition is the operator-resolved runtime payload a composed
+// Session runs its harness from.
 type RuntimeComposition struct {
-	state                  protoimpl.MessageState  `protogen:"open.v1"`
-	DevelopmentEnvironment *DevelopmentEnvironment `protobuf:"bytes,1,opt,name=development_environment,json=developmentEnvironment,proto3" json:"development_environment,omitempty"`
-	// Runtime payload image from the operator catalog.
-	PayloadImage string `protobuf:"bytes,2,opt,name=payload_image,json=payloadImage,proto3" json:"payload_image,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Digest-pinned payload image from the operator catalog.
+	PayloadImage string `protobuf:"bytes,1,opt,name=payload_image,json=payloadImage,proto3" json:"payload_image,omitempty"`
+	// Harness provider the payload serves: claude or codex.
+	Provider string `protobuf:"bytes,2,opt,name=provider,proto3" json:"provider,omitempty"`
+	// Payload contract schema.
+	Schema uint32 `protobuf:"varint,3,opt,name=schema,proto3" json:"schema,omitempty"`
 	// CLI version the payload carries.
-	CliVersion    string `protobuf:"bytes,3,opt,name=cli_version,json=cliVersion,proto3" json:"cli_version,omitempty"`
+	CliVersion    string `protobuf:"bytes,4,opt,name=cli_version,json=cliVersion,proto3" json:"cli_version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -608,18 +623,25 @@ func (*RuntimeComposition) Descriptor() ([]byte, []int) {
 	return file_kagent_api_v1_sessions_proto_rawDescGZIP(), []int{7}
 }
 
-func (x *RuntimeComposition) GetDevelopmentEnvironment() *DevelopmentEnvironment {
-	if x != nil {
-		return x.DevelopmentEnvironment
-	}
-	return nil
-}
-
 func (x *RuntimeComposition) GetPayloadImage() string {
 	if x != nil {
 		return x.PayloadImage
 	}
 	return ""
+}
+
+func (x *RuntimeComposition) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
+func (x *RuntimeComposition) GetSchema() uint32 {
+	if x != nil {
+		return x.Schema
+	}
+	return 0
 }
 
 func (x *RuntimeComposition) GetCliVersion() string {
@@ -1528,7 +1550,7 @@ const file_kagent_api_v1_sessions_proto_rawDesc = "" +
 	"\x1ckagent/api/v1/sessions.proto\x12\rkagent.api.v1\x1a\x1bbuf/validate/validate.proto\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1akagent/api/v1/common.proto\x1a\x1bkagent/api/v1/runtime.proto\";\n" +
 	"\aFailure\x12\x16\n" +
 	"\x06reason\x18\x01 \x01(\tR\x06reason\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\xd8\x05\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xb8\x06\n" +
 	"\aSession\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x18\n" +
 	"\acreator\x18\x02 \x01(\tR\acreator\x124\n" +
@@ -1547,8 +1569,9 @@ const file_kagent_api_v1_sessions_proto_rawDesc = "" +
 	"\n" +
 	"context_id\x18\x0e \x01(\tR\tcontextId\x126\n" +
 	"\tworkspace\x18\x10 \x01(\v2\x18.kagent.api.v1.WorkspaceR\tworkspace\x12B\n" +
-	"\vcredentials\x18\x11 \x03(\v2 .kagent.api.v1.SessionCredentialR\vcredentials\x12R\n" +
-	"\x13runtime_composition\x18\x12 \x01(\v2!.kagent.api.v1.RuntimeCompositionR\x12runtimeComposition\"\xa9\x01\n" +
+	"\vcredentials\x18\x11 \x03(\v2 .kagent.api.v1.SessionCredentialR\vcredentials\x12^\n" +
+	"\x17development_environment\x18\x12 \x01(\v2%.kagent.api.v1.DevelopmentEnvironmentR\x16developmentEnvironment\x12R\n" +
+	"\x13runtime_composition\x18\x13 \x01(\v2!.kagent.api.v1.RuntimeCompositionR\x12runtimeComposition\"\xa9\x01\n" +
 	"\x12SecretKeyReference\x12b\n" +
 	"\x04name\x18\x01 \x01(\tBN\xbaHKrI\x10\x01\x18\xfd\x012B^[a-z0-9]([-a-z0-9]*[a-z0-9])?([.][a-z0-9]([-a-z0-9]*[a-z0-9])?)*$R\x04name\x12/\n" +
 	"\x03key\x18\x02 \x01(\tB\x1d\xbaH\x1ar\x18\x10\x01\x18\xfd\x012\x11^[A-Za-z0-9._-]+$R\x03key\"\xeb\x01\n" +
@@ -1572,11 +1595,12 @@ const file_kagent_api_v1_sessions_proto_rawDesc = "" +
 	"\x16DevelopmentEnvironment\x12R\n" +
 	"\x05image\x18\x01 \x01(\tB<\xbaH9r7\x18\x80\x0422^[A-Za-z0-9][A-Za-z0-9./_:-]*@sha256:[a-f0-9]{64}$R\x05image\x12;\n" +
 	"\bplatform\x18\x02 \x01(\tB\x1f\xbaH\x1cr\x1aR\vlinux/amd64R\vlinux/arm64R\bplatform\x12@\n" +
-	"\x0fpolicy_identity\x18\x03 \x01(\tB\x17\xbaH\x14r\x12\x10\x01\x18\x80\x022\v^\\S(.*\\S)?$R\x0epolicyIdentity\"\xba\x01\n" +
-	"\x12RuntimeComposition\x12^\n" +
-	"\x17development_environment\x18\x01 \x01(\v2%.kagent.api.v1.DevelopmentEnvironmentR\x16developmentEnvironment\x12#\n" +
-	"\rpayload_image\x18\x02 \x01(\tR\fpayloadImage\x12\x1f\n" +
-	"\vcli_version\x18\x03 \x01(\tR\n" +
+	"\x0fpolicy_identity\x18\x03 \x01(\tB\x17\xbaH\x14r\x12\x10\x01\x18\x80\x022\v^\\S(.*\\S)?$R\x0epolicyIdentity\"\x8e\x01\n" +
+	"\x12RuntimeComposition\x12#\n" +
+	"\rpayload_image\x18\x01 \x01(\tR\fpayloadImage\x12\x1a\n" +
+	"\bprovider\x18\x02 \x01(\tR\bprovider\x12\x16\n" +
+	"\x06schema\x18\x03 \x01(\rR\x06schema\x12\x1f\n" +
+	"\vcli_version\x18\x04 \x01(\tR\n" +
 	"cliVersion\"I\n" +
 	"\x15CreateSessionResponse\x120\n" +
 	"\asession\x18\x01 \x01(\v2\x16.kagent.api.v1.SessionR\asession\"<\n" +
@@ -1704,14 +1728,14 @@ var file_kagent_api_v1_sessions_proto_depIdxs = []int32{
 	28, // 5: kagent.api.v1.Session.updated_at:type_name -> google.protobuf.Timestamp
 	29, // 6: kagent.api.v1.Session.workspace:type_name -> kagent.api.v1.Workspace
 	3,  // 7: kagent.api.v1.Session.credentials:type_name -> kagent.api.v1.SessionCredential
-	7,  // 8: kagent.api.v1.Session.runtime_composition:type_name -> kagent.api.v1.RuntimeComposition
-	2,  // 9: kagent.api.v1.SessionCredential.secret_ref:type_name -> kagent.api.v1.SecretKeyReference
-	30, // 10: kagent.api.v1.AgentProvenance.ref:type_name -> kagent.api.v1.ResourceReference
-	30, // 11: kagent.api.v1.CreateSessionRequest.agent:type_name -> kagent.api.v1.ResourceReference
-	29, // 12: kagent.api.v1.CreateSessionRequest.workspace:type_name -> kagent.api.v1.Workspace
-	3,  // 13: kagent.api.v1.CreateSessionRequest.credentials:type_name -> kagent.api.v1.SessionCredential
-	6,  // 14: kagent.api.v1.CreateSessionRequest.development_environment:type_name -> kagent.api.v1.DevelopmentEnvironment
-	6,  // 15: kagent.api.v1.RuntimeComposition.development_environment:type_name -> kagent.api.v1.DevelopmentEnvironment
+	6,  // 8: kagent.api.v1.Session.development_environment:type_name -> kagent.api.v1.DevelopmentEnvironment
+	7,  // 9: kagent.api.v1.Session.runtime_composition:type_name -> kagent.api.v1.RuntimeComposition
+	2,  // 10: kagent.api.v1.SessionCredential.secret_ref:type_name -> kagent.api.v1.SecretKeyReference
+	30, // 11: kagent.api.v1.AgentProvenance.ref:type_name -> kagent.api.v1.ResourceReference
+	30, // 12: kagent.api.v1.CreateSessionRequest.agent:type_name -> kagent.api.v1.ResourceReference
+	29, // 13: kagent.api.v1.CreateSessionRequest.workspace:type_name -> kagent.api.v1.Workspace
+	3,  // 14: kagent.api.v1.CreateSessionRequest.credentials:type_name -> kagent.api.v1.SessionCredential
+	6,  // 15: kagent.api.v1.CreateSessionRequest.development_environment:type_name -> kagent.api.v1.DevelopmentEnvironment
 	1,  // 16: kagent.api.v1.CreateSessionResponse.session:type_name -> kagent.api.v1.Session
 	1,  // 17: kagent.api.v1.GetSessionResponse.session:type_name -> kagent.api.v1.Session
 	31, // 18: kagent.api.v1.ListSessionsRequest.page:type_name -> kagent.api.v1.PageRequest

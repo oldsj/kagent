@@ -55,9 +55,13 @@ message Session {
   Workspace workspace = 16;
   // Secret references only; forks do not inherit these bindings.
   repeated SessionCredential credentials = 17;
-  // Output only. The development image and runtime payload this Session runs.
-  // Unset for Sessions on the Agent's single-image revision. Forks keep it.
-  RuntimeComposition runtime_composition = 18;
+  // Output only. The development image this Session runs in, as selected at
+  // creation. Unset for Sessions on the Agent's single-image revision. Forks
+  // keep it.
+  DevelopmentEnvironment development_environment = 18;
+  // Output only. The operator's runtime payload pinned at creation; set exactly
+  // when development_environment is.
+  RuntimeComposition runtime_composition = 19;
 }
 
 // SecretKeyReference identifies a key in the Agent's namespace. The value is
@@ -141,13 +145,17 @@ message DevelopmentEnvironment {
   }];
 }
 
-// RuntimeComposition is the resolved pairing a composed Session runs.
+// RuntimeComposition is the operator-resolved runtime payload a composed
+// Session runs its harness from.
 message RuntimeComposition {
-  DevelopmentEnvironment development_environment = 1;
-  // Runtime payload image from the operator catalog.
-  string payload_image = 2;
+  // Digest-pinned payload image from the operator catalog.
+  string payload_image = 1;
+  // Harness provider the payload serves: claude or codex.
+  string provider = 2;
+  // Payload contract schema.
+  uint32 schema = 3;
   // CLI version the payload carries.
-  string cli_version = 3;
+  string cli_version = 4;
 }
 
 message CreateSessionResponse {

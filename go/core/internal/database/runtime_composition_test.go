@@ -13,17 +13,19 @@ import (
 )
 
 func TestComposedSessions(t *testing.T) {
-	composition := func(identity string) *apiv1.RuntimeComposition {
-		return &apiv1.RuntimeComposition{
-			DevelopmentEnvironment: &apiv1.DevelopmentEnvironment{
+	composition := func(identity string) *RevisionComposition {
+		return &RevisionComposition{
+			Environment: &apiv1.DevelopmentEnvironment{
 				Image:    "registry.example/dev@sha256:1111111111111111111111111111111111111111111111111111111111111111",
 				Platform: "linux/arm64", PolicyIdentity: identity,
 			},
-			PayloadImage: "registry.example/runtime-claude@sha256:2222222222222222222222222222222222222222222222222222222222222222",
-			CliVersion:   "2.1.285",
+			Runtime: &apiv1.RuntimeComposition{
+				PayloadImage: "registry.example/runtime-claude@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+				Provider:     "claude", Schema: 1, CliVersion: "2.1.285",
+			},
 		}
 	}
-	recordVariant := func(t *testing.T, client *Client, ctx context.Context, variant, base string, selected *apiv1.RuntimeComposition) {
+	recordVariant := func(t *testing.T, client *Client, ctx context.Context, variant, base string, selected *RevisionComposition) {
 		t.Helper()
 		require.NoError(t, recordErr(client.RecordRuntimeRevision(ctx, RuntimeRevision{
 			Revision: variant, Namespace: "team-a", AgentName: "assistant", AgentUID: "assistant-uid",
@@ -32,9 +34,9 @@ func TestComposedSessions(t *testing.T) {
 			BaseRevision: base, Composition: selected,
 		}, RecordRevisionOptions{Ready: true})))
 	}
-	composedRequest := func(variant string, selected *apiv1.RuntimeComposition) *apiv1.Session {
+	composedRequest := func(variant string, selected *RevisionComposition) *apiv1.Session {
 		request := newSessionRequest(uuid.NewString(), "assistant", "claude", "")
-		request.PreparedRevision, request.RuntimeComposition = variant, selected
+		request.PreparedRevision, request.DevelopmentEnvironment, request.RuntimeComposition = variant, selected.Environment, selected.Runtime
 		return request
 	}
 
@@ -47,7 +49,8 @@ func TestComposedSessions(t *testing.T) {
 
 		require.NoError(t, err)
 		require.Equal(t, "variant", created.GetPreparedRevision())
-		require.True(t, proto.Equal(composition("project/v1"), created.GetRuntimeComposition()), "got %v", created.GetRuntimeComposition())
+		require.True(t, proto.Equal(composition("project/v1").Environment, created.GetDevelopmentEnvironment()), "got %v", created.GetDevelopmentEnvironment())
+		require.True(t, proto.Equal(composition("project/v1").Runtime, created.GetRuntimeComposition()), "got %v", created.GetRuntimeComposition())
 		found, err := client.GetSessionRequest(ctx, "alice", "request-1")
 		require.NoError(t, err)
 		require.Equal(t, created.GetId(), found.GetId())
