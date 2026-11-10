@@ -214,6 +214,21 @@ func TestConfigurationCRDValidation(t *testing.T) {
 		}
 	})
 
+	t.Run("Harness and SandboxTemplate quiesce snapshot scope", func(t *testing.T) {
+		for _, scope := range []RuntimeSnapshotScope{RuntimeSnapshotScopeData, RuntimeSnapshotScopeFull} {
+			harness := validHarness(namespace, "quiesce-"+strings.ToLower(string(scope)), HarnessSpec{Kagent: &KagentHarness{}})
+			harness.Spec.Substrate.SnapshotPolicy.OnQuiesce = scope
+			require.NoError(t, cl.Create(ctx, harness))
+		}
+		sandbox := sandboxTemplateForValidation(namespace, "quiesce-full", func(spec *SandboxTemplateSpec) {
+			spec.Substrate.SnapshotPolicy.OnQuiesce = RuntimeSnapshotScopeFull
+		})
+		require.NoError(t, cl.Create(ctx, sandbox))
+		harness := validHarness(namespace, "quiesce-memory", HarnessSpec{Kagent: &KagentHarness{}})
+		harness.Spec.Substrate.SnapshotPolicy.OnQuiesce = "Memory"
+		require.ErrorContains(t, cl.Create(ctx, harness), "spec.substrate.snapshotPolicy.onQuiesce")
+	})
+
 	t.Run("Harness image defaulting", func(t *testing.T) {
 		for _, variant := range []struct {
 			name string

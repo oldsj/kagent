@@ -197,8 +197,8 @@ func ApplyActorTransition(ctx context.Context, actors LifecycleClient, transitio
 		}
 		if err == nil {
 			snapshot := LatestActorSnapshot(actor)
-			if SnapshotURI(snapshot) == "" || snapshot.GetFidelity() != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
-				err = fmt.Errorf("suspended Actor requires a durable VOLUMES snapshot")
+			if SnapshotURI(snapshot) == "" || !SuspendFidelity(snapshot.GetFidelity()) {
+				err = fmt.Errorf("suspended Actor requires a durable snapshot")
 			}
 		}
 	case apiv1.RuntimeOperation_RUNTIME_OPERATION_REVERT:
