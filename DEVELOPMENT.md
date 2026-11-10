@@ -18,6 +18,35 @@ When making changes to `kagent`, the most important thing is to figure out which
 - [go](go): Contains the code for the kubernetes controller, and the CLI.
 - [ui](ui): Contains the code for the web UI.
 
+## Mainloop fork CI and images
+
+`oldsj/kagent` carries its work on `mainloop-substrate-1-0`, which tracks
+upstream `main`. Upstream's own workflows use runners the fork does not have,
+so two fork workflows cover it on GitHub-hosted runners:
+
+- `.github/workflows/mainloop-fork-ci.yaml` runs on pull requests to and
+  pushes on `mainloop-substrate-1-0`. It builds every Go package, runs the
+  control-plane and harness unit tests that need no cluster (PostgreSQL comes
+  from testcontainers), and validates the `kagent-controller-dev` image and its
+  entrypoint (see `docs/mainloop-dev-target.md`). A pull request that ports a
+  fork feature adds that feature's packages to the test steps.
+- `.github/workflows/mainloop-fork-images.yaml` runs on pushes to the branch
+  and on manual dispatch. It publishes `kagent-controller`,
+  `kagent-controller-dev`, `kagent-claude-harness` and `kagent-codex-harness`
+  to `ghcr.io/oldsj` for `linux/amd64` and `linux/arm64`, tagged
+  `0.0.0-<7-character-source-SHA>`, then packages `helm/kagent-crds` and
+  `helm/kagent` at the same version and pushes them to
+  `oci://ghcr.io/oldsj/charts`. The chart's default controller image and its
+  built-in Claude and Codex Harness image catalog
+  (`files/builtin-harness-images.json`, pinned by digest) point at that run's
+  images. The UI, sandbox guest and kagent (ADK) Harness images are not
+  published by the fork; set them through chart values if you use them. The
+  job refuses to overwrite a chart version whose content differs.
+
+The package owner must grant `oldsj/kagent` write access under **Manage
+Actions access** for each GHCR package the workflow pushes. Deployment pins are
+updated through a separately reviewed infrastructure change.
+
 ## Releases
 
 Run the [Release workflow](https://github.com/kagent-dev/kagent/actions/workflows/tag.yaml)
