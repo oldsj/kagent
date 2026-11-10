@@ -264,3 +264,32 @@ func TestRuntimePayloads(t *testing.T) {
 		})
 	}
 }
+
+func TestSubstrateDeadlineBounds(t *testing.T) {
+	scenarios := []struct {
+		name, field, value string
+		wantErr            string
+	}{
+		{name: "Given a 20m lifecycle call deadline, when the config is validated, assert that it is accepted", field: "lifecycleCallTimeout", value: "1200s"},
+		{name: "Given a 2h attempt bound, when the config is validated, assert that it is accepted", field: "operationTimeout", value: "7200s"},
+		{name: "Given a call deadline under 1s, when the config is validated, assert that it is rejected", field: "callTimeout", value: "0.5s", wantErr: "call_timeout"},
+		{name: "Given a lifecycle call deadline above 1h, when the config is validated, assert that it is rejected", field: "lifecycleCallTimeout", value: "3601s", wantErr: "lifecycle_call_timeout"},
+		{name: "Given an attempt bound above 2h, when the config is validated, assert that it is rejected", field: "operationTimeout", value: "7201s", wantErr: "operation_timeout"},
+	}
+	for _, scenario := range scenarios {
+		t.Run(scenario.name, func(t *testing.T) {
+			cfg := &configv1.ControllerConfig{}
+			require.NoError(t, config.Decode([]byte("substrate: {"+scenario.field+": "+scenario.value+"}"), cfg))
+			config.DefaultController(cfg)
+			setLogins(cfg)
+
+			err := config.Validate(cfg)
+
+			if scenario.wantErr != "" {
+				require.ErrorContains(t, err, scenario.wantErr)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}

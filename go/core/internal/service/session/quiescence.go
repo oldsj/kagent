@@ -73,7 +73,7 @@ func (w *ActorWorkflow) Start(ctx context.Context) error {
 }
 
 func (w *ActorWorkflow) quiesceIdleSession(ctx context.Context, work *database.SessionQuiescence) {
-	runtimeCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	runtimeCtx, cancel := context.WithTimeout(ctx, w.operationTimeout)
 	snapshot, err := w.Quiesce(runtimeCtx, work.Session)
 	cancel()
 	if err != nil {

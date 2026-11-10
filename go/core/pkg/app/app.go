@@ -303,6 +303,11 @@ func Run(ctx context.Context, input *configv1.ControllerConfig, opts Options) er
 	if err != nil {
 		return err
 	}
+	deadlines, err := substrate.ResolveDeadlines(cfg.GetSubstrate().GetCallTimeout().AsDuration(),
+		cfg.GetSubstrate().GetLifecycleCallTimeout().AsDuration(), cfg.GetSubstrate().GetOperationTimeout().AsDuration())
+	if err != nil {
+		return err
+	}
 	actors, err := substrate.Dial(ctx, substrate.Config{
 		EgressPolicies:        store,
 		EgressPolicyCompilers: opts.EgressPolicyCompilers,
@@ -310,7 +315,8 @@ func Run(ctx context.Context, input *configv1.ControllerConfig, opts Options) er
 		AteAPIEndpoint:        cfg.GetSubstrate().GetApiEndpoint(),
 		CAFile:                cfg.GetSubstrate().GetCaFile(),
 		ClientCertFile:        cfg.GetSubstrate().GetClientCertFile(),
-		CallTimeout:           30 * time.Second,
+		CallTimeout:           deadlines.Call,
+		LifecycleCallTimeout:  deadlines.Lifecycle,
 	})
 	if err != nil {
 		return err
@@ -375,7 +381,7 @@ func Run(ctx context.Context, input *configv1.ControllerConfig, opts Options) er
 	memory := memoryservice.NewService(store, authorizer)
 	quiescenceWake := make(chan struct{}, 1)
 	pushWake := make(chan struct{}, 1)
-	sessionWorkflow := sessionsvc.NewActorWorkflow(store, actors, quiescenceWake, quiescenceInterval)
+	sessionWorkflow := sessionsvc.NewActorWorkflow(store, actors, quiescenceWake, quiescenceInterval, sessionsvc.WithOperationTimeout(deadlines.Operation))
 	runtimeTasks := taskstore.NewService(store, quiescenceWake, pushWake)
 	if err := manager.Add(sessionWorkflow); err != nil {
 		return fmt.Errorf("register idle session worker: %w", err)
@@ -456,7 +462,8 @@ func Run(ctx context.Context, input *configv1.ControllerConfig, opts Options) er
 		return err
 	}
 	sandboxes, err := sandboxservice.NewService(sandboxservice.Config{Store: store, Kube: manager.GetClient(), Authorizer: authorizer, Actors: actors, Guests: guests,
-		DefaultTTL: cfg.GetSandboxes().GetDefaultTtl().AsDuration(), MaxTTL: cfg.GetSandboxes().GetMaxTtl().AsDuration(), ExpirationPollInterval: cfg.GetSandboxes().GetExpirationInterval().AsDuration()})
+		DefaultTTL: cfg.GetSandboxes().GetDefaultTtl().AsDuration(), MaxTTL: cfg.GetSandboxes().GetMaxTtl().AsDuration(), ExpirationPollInterval: cfg.GetSandboxes().GetExpirationInterval().AsDuration(),
+		OperationTimeout: deadlines.Operation})
 	if err != nil {
 		return err
 	}

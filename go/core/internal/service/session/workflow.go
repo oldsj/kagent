@@ -42,12 +42,31 @@ type ActorWorkflow struct {
 	actors           actorClient
 	recoveryInterval time.Duration
 	quiescenceWake   chan struct{}
+	operationTimeout time.Duration
+}
+
+// WorkflowOption configures an ActorWorkflow.
+type WorkflowOption func(*ActorWorkflow)
+
+// WithOperationTimeout bounds each runtime lifecycle attempt, including
+// automatic suspension. Nonpositive values keep the default.
+func WithOperationTimeout(timeout time.Duration) WorkflowOption {
+	return func(w *ActorWorkflow) {
+		if timeout > 0 {
+			w.operationTimeout = timeout
+		}
+	}
 }
 
 // quiescenceWake is a shared, single-slot hint channel. Callers must not close it;
 // the workflow stops through context cancellation.
-func NewActorWorkflow(store workflowStore, actors actorClient, quiescenceWake chan struct{}, recoveryInterval time.Duration) *ActorWorkflow {
-	return &ActorWorkflow{store: store, actors: actors, recoveryInterval: recoveryInterval, quiescenceWake: quiescenceWake}
+func NewActorWorkflow(store workflowStore, actors actorClient, quiescenceWake chan struct{}, recoveryInterval time.Duration, options ...WorkflowOption) *ActorWorkflow {
+	w := &ActorWorkflow{store: store, actors: actors, recoveryInterval: recoveryInterval, quiescenceWake: quiescenceWake,
+		operationTimeout: database.DefaultRuntimeOperationTimeout}
+	for _, option := range options {
+		option(w)
+	}
+	return w
 }
 
 // Quiesce durably suspends the runtime without changing the Session's
@@ -113,7 +132,7 @@ func (w *ActorWorkflow) Delete(ctx context.Context, session *apiv1.Session, forc
 }
 
 func (w *ActorWorkflow) run(ctx context.Context, sessionID string, requestedKind apiv1.RuntimeOperation, force bool) (*apiv1.Session, error) {
-	ctx, cancelAttempt := context.WithTimeout(ctx, database.RuntimeOperationTimeout)
+	ctx, cancelAttempt := context.WithTimeout(ctx, w.operationTimeout)
 	defer cancelAttempt()
 	operation, err := w.store.BeginSessionOperation(ctx, sessionID, requestedKind, force)
 	if err != nil {

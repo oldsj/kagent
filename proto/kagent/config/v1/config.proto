@@ -337,6 +337,24 @@ message SubstrateConfig {
     uri: true
     pattern: "^https://[^/?#]+"
   }];
+  // Deadline for each Substrate RPC other than Actor resume, suspend and
+  // revert. Defaults to 30s.
+  google.protobuf.Duration call_timeout = 6 [(buf.validate.field).duration = {
+    gte: {seconds: 1}
+    lte: {seconds: 3600}
+  }];
+  // Deadline for Actor resume, suspend and revert, which move snapshots and
+  // grow with the runtime's durable data. Defaults to 5m.
+  google.protobuf.Duration lifecycle_call_timeout = 7 [(buf.validate.field).duration = {
+    gte: {seconds: 1}
+    lte: {seconds: 3600}
+  }];
+  // Bound on one runtime lifecycle attempt and its execution claim. It must
+  // exceed lifecycle_call_timeout. Defaults to 10m.
+  google.protobuf.Duration operation_timeout = 8 [(buf.validate.field).duration = {
+    gte: {seconds: 1}
+    lte: {seconds: 7200}
+  }];
 }
 
 message SessionsConfig {

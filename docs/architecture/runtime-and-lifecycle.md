@@ -59,9 +59,16 @@ generation but leaves DELETING in place, keeping task admission closed until a
 delete retry completes. Explicit deletion requires a client retry; idle deletion
 is retried by the expiration worker. After an attempt issues runtime work, errors
 retain the operation and resource pins. The attempt releases its execution claim
-on return. A crashed executor's claim expires after at most two minutes, allowing
-a client retry to claim the same operation with a new executor ID. Each attempt
-uses a context bounded by that interval; no claim renewer or recovery sweep runs.
+on return. Each attempt, including automatic suspension, runs under
+`substrate.operationTimeout` (default 10m), and its execution claim lasts exactly
+as long as that attempt, so a second executor cannot start while the first is
+still inside a Substrate call. A crashed executor's claim expires at that bound,
+allowing a client retry to claim the same operation with a new executor ID; no
+claim renewer or recovery sweep runs. Actor resume, suspend and revert move
+snapshots, so they use `substrate.lifecycleCallTimeout` (default 5m); other
+Substrate RPCs use `substrate.callTimeout` (default 30s). The controller refuses
+to start unless the attempt bound exceeds the lifecycle call bound. A timed-out
+call is still an uncertain outcome that a retry reconciles from the Actor.
 A stale executor cannot complete or release a newer attempt's claim.
 
 Lifecycle retries inspect the pinned Actor identity and continue Substrate's

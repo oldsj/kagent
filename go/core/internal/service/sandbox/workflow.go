@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -19,7 +20,7 @@ import (
 // run executes one attempt inline. Errors retain durable intent; only another
 // lifecycle request retries it. Expiration independently requests deletion.
 func (s *Service) run(ctx context.Context, id string, kind apiv1.RuntimeOperation) (_ *apiv1.Sandbox, err error) {
-	ctx, cancel := context.WithTimeout(ctx, database.RuntimeOperationTimeout)
+	ctx, cancel := context.WithTimeout(ctx, cmp.Or(s.config.OperationTimeout, database.DefaultRuntimeOperationTimeout))
 	defer cancel()
 	op, err := s.config.Store.BeginSandboxOperation(ctx, id, kind)
 	if err != nil {
