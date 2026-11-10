@@ -1,0 +1,287 @@
+name: Publish Mainloop fork images
+
+on:
+  push:
+    branches: [mainloop-substrate-1-0]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    name: Publish ${{ matrix.image }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [kagent-controller, kagent-controller-dev, kagent-claude-harness, kagent-codex-harness]
+        arch: [amd64, arm64]
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+          - image: kagent-controller
+            file: go/Dockerfile
+            build-args: BUILD_PACKAGE=./core/cmd/controller
+          - image: kagent-controller-dev
+            file: go/Dockerfile.dev
+            build-args: BUILD_PACKAGE=./core/cmd/controller
+          - image: kagent-claude-harness
+            file: go/harness/claude/Dockerfile
+            build-args: ''
+          - image: kagent-codex-harness
+            file: go/harness/codex/Dockerfile
+            build-args: ''
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Compute image version
+        id: version
+        shell: bash
+        run: echo "version=0.0.0-${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: go
+          file: ${{ matrix.file }}
+          platforms: linux/${{ matrix.arch }}
+          push: true
+          tags: ghcr.io/oldsj/${{ matrix.image }}:${{ steps.version.outputs.version }}-${{ matrix.arch }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            DOCKER_REPO=kagent-dev/kagent
+            DOCKER_REGISTRY=ghcr.io/oldsj
+            BASE_IMAGE_REGISTRY=cgr.dev
+            TOOLS_UV_VERSION=0.10.4
+            TOOLS_PYTHON_VERSION=3.13
+            TOOLS_NODE_VERSION=24
+            LDFLAGS=-X github.com/kagent-dev/kagent/go/core/internal/version.Version=${{ steps.version.outputs.version }}
+            ${{ matrix.build-args }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+          # Not for kagent-controller-dev: its layers carry a baked Go module and build cache
+          # (about 1.3 GB), and exporting them took longer (279 s) than the build they save.
+          cache-from: ${{ matrix.image != 'kagent-controller-dev' && format('type=gha,scope=publish-{0}-{1}', matrix.image, matrix.arch) || '' }}
+          cache-to: ${{ matrix.image != 'kagent-controller-dev' && format('type=gha,mode=max,scope=publish-{0}-{1}', matrix.image, matrix.arch) || '' }}
+
+      - name: Record published digest
+        shell: bash
+        env:
+          IMAGE: ghcr.io/oldsj/${{ matrix.image }}
+          VERSION: ${{ steps.version.outputs.version }}-${{ matrix.arch }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          test -n "$DIGEST"
+          {
+            printf '### %s (linux/%s)\n\n' "$IMAGE" "${{ matrix.arch }}"
+            printf 'Source commit: `%s`\n\n' "$GITHUB_SHA"
+            printf 'Tag: `%s:%s`\n\n' "$IMAGE" "$VERSION"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Joins the two native builds into one multi-arch index under the version tag, so pods pull the
+  # right one on arm64 (worker-01) and amd64 (k8s-worker-b550).
+  merge:
+    name: Publish ${{ matrix.image }} multi-arch index
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [kagent-controller, kagent-controller-dev, kagent-claude-harness, kagent-codex-harness]
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Create the index
+        shell: bash
+        env:
+          IMAGE: ghcr.io/oldsj/${{ matrix.image }}
+        run: |
+          set -euo pipefail
+          version="0.0.0-${GITHUB_SHA:0:7}"
+          docker buildx imagetools create --tag "$IMAGE:${version}" \
+            "$IMAGE:${version}-amd64" "$IMAGE:${version}-arm64"
+          index="$(docker buildx imagetools inspect "$IMAGE:${version}" --format '{{json .Manifest}}')"
+          jq -e '[.manifests[].platform.architecture] | (index("amd64") and index("arm64"))' <<<"$index" >/dev/null
+          {
+            printf '### %s:%s (linux/amd64, linux/arm64)\n\n' "$IMAGE" "$version"
+            printf 'Infra pin: `%s@%s`\n\n' "$IMAGE" "$(jq -r .digest <<<"$index")"
+            printf 'Update deployment pins through a separately reviewed infra PR.\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish-charts:
+    name: Publish Helm charts
+    needs: merge
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Compute chart version
+        id: version
+        shell: bash
+        run: echo "version=0.0.0-${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v3.18.0
+
+      - name: Point default controller image at this build
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          test -n "$VERSION"
+          sed -i "/repository: kagent-dev\/kagent\/controller/{s#kagent-dev/kagent/controller#oldsj/kagent-controller#; n; s#tag: \"\"#tag: \"$VERSION\"#}" helm/kagent/values.yaml
+          # Fail loudly rather than silently if values.yaml no longer matches this pattern.
+          [ "$(grep -c 'repository: oldsj/kagent-controller' helm/kagent/values.yaml)" = "1" ]
+          [ "$(grep -c "tag: \"$VERSION\"" helm/kagent/values.yaml)" = "1" ]
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # The chart's default Claude and Codex Harness images come from this
+      # catalog; the controller requires digests and a release equal to its own
+      # version. The kagent (ADK) Harness is not published by the fork.
+      - name: Write the built-in Harness image catalog
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          digest() { docker buildx imagetools inspect "$1" --format '{{json .Manifest}}' | jq -er .digest; }
+          claude="ghcr.io/oldsj/kagent-claude-harness"
+          codex="ghcr.io/oldsj/kagent-codex-harness"
+          mkdir -p helm/kagent/files
+          jq -n --arg release "$VERSION" \
+            --arg claude "$claude@$(digest "$claude:$VERSION")" \
+            --arg codex "$codex@$(digest "$codex:$VERSION")" \
+            '{release: $release, claude: $claude, codex: $codex}' \
+            | tee helm/kagent/files/builtin-harness-images.json
+
+      - name: Package charts
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: make helm-version
+
+      - name: Lint and render charts
+        shell: bash
+        run: |
+          set -euo pipefail
+          helm lint helm/kagent-crds
+          helm lint helm/kagent
+          helm template kagent-crds helm/kagent-crds --namespace kagent > /dev/null
+          helm template kagent helm/kagent --namespace kagent > /dev/null
+
+      - name: Push charts
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          CHART_REPO: oci://ghcr.io/oldsj/charts
+        run: |
+          set -euo pipefail
+
+          # helm package output is not byte-reproducible (file mtimes from the
+          # checkout get baked into the tarball), so compare extracted file
+          # contents rather than the archive's own sha256. Subchart archives get
+          # the same treatment, and Chart.lock's generated: timestamp (when
+          # `helm dependency build` ran) is dropped, since both change on every
+          # rebuild of the same commit.
+          chart_contents_digest() {
+            local archive="$1" extract_dir nested
+            extract_dir="$(mktemp -d)"
+            tar -xzf "$archive" -C "$extract_dir"
+            while IFS= read -r -d '' nested; do
+              mkdir -p "${nested}.d"
+              tar -xzf "$nested" -C "${nested}.d"
+              rm "$nested"
+            done < <(find "$extract_dir" -name '*.tgz' -print0)
+            find "$extract_dir" -name Chart.lock -exec sed -i '/^generated:/d' {} +
+            find "$extract_dir" -type f -exec sha256sum {} + \
+              | sed "s#${extract_dir}/##" \
+              | sort -k2 \
+              | sha256sum | cut -d' ' -f1
+          }
+
+          for chart in kagent-crds kagent; do
+            tgz="dist/${chart}-${VERSION}.tgz"
+            test -s "$tgz"
+            local_digest="$(chart_contents_digest "$tgz")"
+
+            pull_dir="$(mktemp -d)"
+            if pull_output="$(helm pull "${CHART_REPO}/${chart}" --version "$VERSION" -d "$pull_dir" 2>&1)"; then
+              existing_tgz="${pull_dir}/${chart}-${VERSION}.tgz"
+              existing_digest="$(chart_contents_digest "$existing_tgz")"
+              if [ "$existing_digest" = "$local_digest" ]; then
+                printf '### %s:%s (unchanged)\n\nAlready published with matching content: `sha256:%s`\n\n' "$chart" "$VERSION" "$local_digest" >> "$GITHUB_STEP_SUMMARY"
+                continue
+              fi
+              printf '::error::%s/%s:%s already exists with different content (published content sha256:%s, this build content sha256:%s); refusing to overwrite\n' "$CHART_REPO" "$chart" "$VERSION" "$existing_digest" "$local_digest"
+              exit 1
+            elif ! printf '%s' "$pull_output" | grep -qi 'not found'; then
+              printf '%s\n' "$pull_output"
+              printf '::error::could not check for an existing %s:%s chart (helm pull failed); a 403/denied error usually means the ghcr.io package charts/%s needs Actions write access granted for oldsj/kagent\n' "$chart" "$VERSION" "$chart"
+              exit 1
+            fi
+
+            if ! push_output="$(helm push "$tgz" "$CHART_REPO" 2>&1)"; then
+              printf '%s\n' "$push_output"
+              printf '::error::helm push failed for %s:%s; a 403/denied error usually means the ghcr.io package charts/%s needs Actions write access granted for oldsj/kagent\n' "$chart" "$VERSION" "$chart"
+              exit 1
+            fi
+            printf '%s\n' "$push_output"
+            digest="$(printf '%s' "$push_output" | sed -n 's/^Digest: *//p')"
+            test -n "$digest"
+            {
+              printf '### %s/%s:%s\n\n' "$CHART_REPO" "$chart" "$VERSION"
+              printf 'Source commit: `%s`\n\n' "$GITHUB_SHA"
+              printf 'Infra pin: `%s/%s@%s`\n\n' "$CHART_REPO" "$chart" "$digest"
+              printf 'Update deployment pins through a separately reviewed infra PR.\n'
+            } >> "$GITHUB_STEP_SUMMARY"
+          done
