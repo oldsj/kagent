@@ -209,9 +209,18 @@ func (d *SDKDriver) replay(ctx context.Context, turn runtime.Turn, sink runtime.
 		cleaning: d.replayCanceling(tool),
 	}
 	outcome, err := t.consume(ctx, sink)
-	if err != nil || !livePrompt(outcome) {
-		d.session.EndTurn(sub)
+	if err == nil && livePrompt(outcome) {
+		// The replay is over and the turn now waits on a prompt the bridge
+		// holds. Close the journal here: the pending turn that resolves the
+		// prompt knows nothing of it, and an open entry would be read as an
+		// abandoned replay by the next turn.
+		if err := d.completeReplay(tool); err != nil {
+			_ = outcome.Pending.Cancel(context.WithoutCancel(ctx), sink)
+			return runtime.Outcome{}, err
+		}
+		return outcome, nil
 	}
+	d.session.EndTurn(sub)
 	if err != nil && ctx.Err() != nil {
 		var cancellationErr *runtime.CancellationError
 		if !errors.As(err, &cancellationErr) {

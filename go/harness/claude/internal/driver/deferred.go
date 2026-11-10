@@ -329,6 +329,23 @@ func (d *ProcessDriver) replayCanceling(tool *DeferredTool) bool {
 	return err == nil && r != nil && r.Canceling && r.Tool.ID == tool.ID
 }
 
+// completeReplay closes the journal for a replay whose saved answer the hooks
+// have consumed, when the turn goes on without returning through Resume.
+func (d *ProcessDriver) completeReplay(tool *DeferredTool) error {
+	b := d.config.ApprovalBroker
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	r, err := loadDeferred(b.directory, d.config.MaxEventBytes)
+	if err != nil {
+		return err
+	}
+	if r == nil || r.Tool.ID != tool.ID || (r.Phase != phaseExecuting && r.Phase != phaseReleased) {
+		return fmt.Errorf("Claude did not consume its deferred decision")
+	}
+	r.Phase = phaseComplete
+	return saveDeferred(b.directory, d.config.MaxEventBytes, r)
+}
+
 // AwaitingReplay reports whether a deferred tool call is still in Claude's
 // transcript without its answer: no decision has arrived, or its replay has
 // not reached the hook. A user message sent now would make Claude answer it

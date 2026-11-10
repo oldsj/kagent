@@ -175,6 +175,30 @@ func TestSDKPromptsOutsideTheJournal(t *testing.T) {
 		require.Equal(t, "defer", withTurn.Specific.Decision)
 	})
 
+	t.Run("Given an approved call replayed after a restart, when Claude then raises a prompt outside the approval boundary, assert that the journal is closed and the live prompt still resolves the turn", func(t *testing.T) {
+		actor := newDurableActor(t, DeferredTool{ID: "call-1", Name: "mcp__protected__deploy", Input: map[string]any{"env": "prod"}})
+		request := actor.GivenTurnParkedOn(t).(*runtime.ApprovalRequest)
+		restarted := actor.WhenActorRestarts(t)
+		restarted.claude.thenPrompt = "Bash"
+		sink := &recordingSink{}
+
+		outcome, err := restarted.pending.Resume(t.Context(), &runtime.ApprovalDecision{ID: request.ID, Approved: true}, sink)
+
+		require.NoError(t, err)
+		require.NotNil(t, outcome.Pending, "the turn waits on the live prompt")
+		live := outcome.Pending.Request().(*runtime.ApprovalRequest)
+		require.Equal(t, "Bash", live.Name)
+		require.Equal(t, phaseComplete, restarted.phase(t), "the replayed call is settled")
+		_, _, restored, err := restarted.driver.RestorePending()
+		require.NoError(t, err)
+		require.Nil(t, restored, "a later turn must not find an abandoned replay")
+		final, err := outcome.Pending.Resume(t.Context(), &runtime.ApprovalDecision{ID: live.ID, Approved: true}, sink)
+		require.NoError(t, err)
+		require.Nil(t, final.Pending)
+		require.Equal(t, "deployed", sink.text.String())
+		require.False(t, restarted.session.TurnActive())
+	})
+
 	t.Run("Given a call waiting for its answer, when the driver is asked whether a new message is safe, assert that it reports the wait until the call has been replayed", func(t *testing.T) {
 		actor := newDurableActor(t, DeferredTool{ID: "call-1", Name: "mcp__protected__deploy", Input: map[string]any{"env": "prod"}})
 		before, err := actor.driver.AwaitingReplay()
@@ -311,6 +335,9 @@ type fakeClaude struct {
 	skipHook bool
 	// holdAnswer keeps Claude working after the call ran, until interrupted.
 	holdAnswer bool
+	// thenPrompt is a tool outside the approval boundary that Claude asks about
+	// once the deferred call has run.
+	thenPrompt string
 
 	mu      sync.Mutex
 	ops     []sdkrunnertest.Op
@@ -342,6 +369,12 @@ func (c *fakeClaude) handle(b *sdkrunnertest.Bridge, op sdkrunnertest.Op) {
 		c.mu.Unlock()
 		if op.Behavior == "allow" && c.holdAnswer {
 			c.toolResult(b, "ok", false)
+		} else if op.Behavior == "allow" && c.thenPrompt != "" && op.ID == "perm-1" {
+			c.toolResult(b, "ok", false)
+			b.Emit(map[string]any{"k": "perm", "id": "perm-2", "toolName": c.thenPrompt, "input": map[string]any{"command": "ls"}, "toolUseID": "call-2"})
+		} else if op.Behavior == "allow" && op.ID == "perm-2" {
+			b.SDK(map[string]any{"type": "assistant", "message": map[string]any{"id": "m2", "content": []any{map[string]any{"type": "text", "text": "deployed"}}}})
+			b.SDK(map[string]any{"type": "result", "subtype": "success", "is_error": false, "result": "deployed", "session_id": sdkSessionID})
 		} else if op.Behavior == "allow" {
 			c.finish(b, "ok", false, "deployed", replied)
 		} else {
