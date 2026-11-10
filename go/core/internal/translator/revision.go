@@ -84,6 +84,17 @@ type Revision struct {
 	// add GitHub or Git proxy access. It is derived from the harness type and
 	// Git policy already in ConfigJSON, so it does not enter the digest.
 	GitEgressRestricted bool
+
+	// Harness and WorkerPoolPlatform are derived from the compiled Harness and
+	// its WorkerPool. They gate composition and do not enter the digest.
+	Harness            HarnessType
+	WorkerPoolPlatform string
+	// Composition pairs a Session-selected development image with the
+	// operator's runtime payload. Nil for single-image revisions.
+	Composition *Composition
+	// BaseRevision is the Agent revision a composed variant was derived from.
+	// It retains the variant while that base is active and is not in the digest.
+	BaseRevision RevisionID
 }
 
 // Equals compares the Agent Card's contents without inspecting protobuf caches.
@@ -127,6 +138,8 @@ func (r *Revision) Digest() (RevisionID, error) {
 		TokenPassthroughTargets []egresspolicy.GatewayTarget `json:"tokenPassthroughTargets,omitempty"`
 		EgressDestinations      []string                     `json:"egressDestinations"`
 		SandboxClass            atev1.SandboxClass           `json:"sandboxClass"`
+		// Omitted for single-image revisions so their digests are unchanged.
+		Composition *Composition `json:"composition,omitempty"`
 
 		// Placement now matches the pool's namespace as well as its name.
 		// Hash it explicitly so existing immutable templates do not conflict after upgrades.
@@ -140,6 +153,7 @@ func (r *Revision) Digest() (RevisionID, error) {
 		WorkerPoolName: r.WorkerPoolName, SnapshotLocation: r.SnapshotLocation,
 		TokenPassthroughTargets: r.TokenPassthroughTargets, Credentials: r.Credentials, EgressDestinations: r.EgressDestinations,
 		SandboxClass: sandboxClass, WorkerPoolNamespace: r.Namespace,
+		Composition: r.Composition,
 	})
 	if err != nil {
 		return RevisionID{}, fmt.Errorf("marshal runtime revision inputs: %w", err)
