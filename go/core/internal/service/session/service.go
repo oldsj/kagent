@@ -65,10 +65,26 @@ type ShareListResult struct {
 }
 
 type Service struct {
-	store       store
-	authorizer  auth.Authorizer
-	workflow    sessionWorkflow
-	shareMaxTTL time.Duration
+	store        store
+	authorizer   auth.Authorizer
+	workflow     sessionWorkflow
+	shareMaxTTL  time.Duration
+	createPolicy CreatePolicy
+}
+
+// CreatePolicy is the operator's allowlist for Session creation. It decides
+// from the request alone; whether the caller may act at all is the
+// authorizer's job.
+type CreatePolicy interface {
+	CheckCreateSession(ctx context.Context, agent *apiv1.ResourceReference, credentials []*apiv1.SessionCredential) error
+}
+
+// WithCreatePolicy refuses Session creation the policy does not admit. Without
+// it, any authorized caller may bind any Secret key in the Agent's namespace.
+func WithCreatePolicy(policy CreatePolicy) Option {
+	return func(service *Service) {
+		service.createPolicy = policy
+	}
 }
 
 type Option func(*Service)
@@ -104,6 +120,11 @@ func (s *Service) Create(ctx context.Context, agent *apiv1.ResourceReference, re
 	}
 	if err := validateWorkspace(requested); err != nil {
 		return nil, err
+	}
+	if s.createPolicy != nil {
+		if err := s.createPolicy.CheckCreateSession(ctx, agent, credentials); err != nil {
+			return nil, serviceerrors.NewPermissionDenied("Session creation is not permitted by the session policy", err)
+		}
 	}
 	creator, err := s.authorizeResource(ctx, auth.VerbCreate, auth.Resource{Type: "Session", Namespace: agent.Namespace})
 	if err != nil {

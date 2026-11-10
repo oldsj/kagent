@@ -175,6 +175,19 @@ config:
       #   authority: kubernetes
       #   allowedSubjects:
       #     - system:serviceaccount:mainloop:mainloop
+      # Allowlist for Session creation by API callers: which Agents they may use
+      # and which Secrets they may bind as Session credentials. Without it, any
+      # authenticated caller may bind any Secret key in the Agent's namespace.
+      # git-read and git-push rules must be exactly the trusted proxy tuples.
+      # sessionPolicy:
+      #   namespace: kagent
+      #   agents: [claude, codex]
+      #   cleartextMcpOrigins:
+      #     - http://mainloop-mcp.mainloop.svc.cluster.local
+      #   credentials:
+      #     - {purpose: git-read, origin: "http://mainloop-git-read.mainloop.svc.cluster.local", secretNamePattern: "mainloop-git-read-*", key: authorization, header: authorization}
+      #     - {purpose: git-push, origin: "http://mainloop-git-push.mainloop.svc.cluster.local", secretNamePattern: "mainloop-git-push-*", key: authorization, header: authorization}
+      #     - {purpose: mcp, origin: "http://mainloop-mcp.mainloop.svc.cluster.local", secretNamePattern: "mainloop-mcp-*", key: authorization, header: authorization}
     # Serve gRPC reflection for tools such as grpcurl. Callers must pass the
     # configured authentication. `kagent install` enables it.
     grpcReflection: false

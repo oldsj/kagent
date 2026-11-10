@@ -80,6 +80,10 @@ type Revision struct {
 	// GitOrigins lists the hosts Sessions may clone from. It is derived from the
 	// compiled config, which the digest already covers.
 	GitOrigins []string
+	// GitEgressRestricted marks a native revision whose live grants must never
+	// add GitHub or Git proxy access. It is derived from the harness type and
+	// Git policy already in ConfigJSON, so it does not enter the digest.
+	GitEgressRestricted bool
 }
 
 // Equals compares the Agent Card's contents without inspecting protobuf caches.

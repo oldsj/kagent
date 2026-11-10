@@ -50,19 +50,6 @@ func mustProxyURL(origin string) *url.URL {
 	return u
 }
 
-func gitProxyHost(host string) bool {
-	return host == mustProxyURL(workspace.ReadProxyOrigin).Hostname() || host == mustProxyURL(workspace.PushProxyOrigin).Hostname()
-}
-
-func directGitHubHost(host string) bool {
-	for _, domain := range []string{"github.com", "githubusercontent.com", "githubassets.com", "github.io"} {
-		if host == domain || strings.HasSuffix(host, "."+domain) {
-			return true
-		}
-	}
-	return false
-}
-
 // ValidateGitEgress checks the complete native revision, after every inherited
 // contributor. Explicit standalone direct Git is retained; proxy and no-Git
 // revisions cannot acquire direct GitHub or legacy PAT authority sideways.
@@ -81,10 +68,10 @@ func ValidateGitEgress(policy *workspace.Git, destinations []string, credentials
 			return NewValidationError("invalid effective egress origin")
 		}
 		host := workspace.NormalizeHost(u.Hostname())
-		if directGitHubHost(host) {
+		if workspace.DirectGitHubHost(host) {
 			return NewValidationError("effective egress contains direct GitHub authority")
 		}
-		if gitProxyHost(host) {
+		if workspace.GitProxyHost(host) {
 			allowed := policy != nil && (egress.Origin(u) == workspace.ReadProxyOrigin+":80" || (policy.PushProxyOrigin != nil && egress.Origin(u) == workspace.PushProxyOrigin+":80"))
 			if !allowed {
 				return NewValidationError("effective egress contains an unapproved Git proxy origin")
@@ -102,7 +89,7 @@ func ValidateGitEgress(policy *workspace.Git, destinations []string, credentials
 			return NewValidationError("invalid effective credential origin")
 		}
 		host := workspace.NormalizeHost(origin.Hostname())
-		if directGitHubHost(host) || gitProxyHost(host) || (len(parts) == 4 && parts[2] == "mainloop-git-auth") {
+		if workspace.DirectGitHubHost(host) || workspace.GitProxyHost(host) || (len(parts) == 4 && parts[2] == workspace.LegacyGitCredentialSecret) {
 			return NewValidationError("effective revision contains a reserved Git credential; Git proxies require per-Session references")
 		}
 	}
@@ -116,4 +103,12 @@ func GitOrigins(policy *workspace.Git) []string {
 		return nil
 	}
 	return policy.Origins
+}
+
+// GitEgressRestricted reports whether a native revision with this policy must
+// never reach GitHub or the Git proxies except as the policy itself provides:
+// true for the proxy profile and for no Git at all, false for explicit
+// standalone direct Git.
+func GitEgressRestricted(policy *workspace.Git) bool {
+	return policy == nil || policy.ReadProxyOrigin != nil
 }
