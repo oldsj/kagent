@@ -345,6 +345,9 @@ type SetupInstaller struct {
 	Store *continuation.Store
 	// Runner is the current driver, including its ephemeral approval broker.
 	Runner *driver.ProcessDriver
+	// Wrap, if set, adapts the reconfigured driver before it replaces the
+	// turn runner (the SDK runner keeps its live session across setup).
+	Wrap   func(*driver.ProcessDriver) workspace.Runner
 	mu     sync.Mutex
 	closed bool
 }
@@ -394,6 +397,9 @@ func (s *SetupInstaller) Setup(ctx context.Context, input workspace.Preparation,
 		_ = s.Runner.Close()
 	}
 	s.Runner = runner
+	if s.Wrap != nil {
+		return s.Wrap(runner), "append_system_prompt", nil
+	}
 	return runner, "append_system_prompt", nil
 }
 

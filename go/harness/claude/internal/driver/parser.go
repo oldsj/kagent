@@ -51,12 +51,7 @@ func parseJSONL(r io.Reader, maxEventBytes int, workspace, version string, emit 
 	if maxEventBytes <= 0 {
 		return fmt.Errorf("max event bytes must be positive")
 	}
-	p := parser{
-		health:  newHealthProducer(workspace, version),
-		emitted: map[string]string{}, tools: map[string]string{},
-		emittedToolCalls: map[string]struct{}{}, emittedResults: map[string]struct{}{},
-		backgroundTasks: map[string]taskPhase{},
-	}
+	p := newParser(workspace, version)
 	reader := bufio.NewReaderSize(r, min(maxEventBytes+1, 64*1024))
 	for {
 		line, err := readBoundedLine(reader, maxEventBytes)
@@ -76,6 +71,15 @@ func parseJSONL(r io.Reader, maxEventBytes int, workspace, version string, emit 
 		return fmt.Errorf("claude process exited without a terminal result event")
 	}
 	return p.health.finish(emit)
+}
+
+func newParser(workspace, version string) *parser {
+	return &parser{
+		health:  newHealthProducer(workspace, version),
+		emitted: map[string]string{}, tools: map[string]string{},
+		emittedToolCalls: map[string]struct{}{}, emittedResults: map[string]struct{}{},
+		backgroundTasks: map[string]taskPhase{},
+	}
 }
 
 func readBoundedLine(r *bufio.Reader, max int) ([]byte, error) {

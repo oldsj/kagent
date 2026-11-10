@@ -4,6 +4,7 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -13,6 +14,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/kagent-dev/kagent/go/harness/claude/config"
 	"github.com/kagent-dev/kagent/go/harness/claude/internal/adapter"
+	"github.com/kagent-dev/kagent/go/harness/claude/internal/driver"
+	"github.com/kagent-dev/kagent/go/harness/claude/internal/sdkrunner"
 	runtimea2a "github.com/kagent-dev/kagent/go/harness/runtime/a2a"
 	"github.com/kagent-dev/kagent/go/harness/runtime/continuation"
 	"github.com/kagent-dev/kagent/go/harness/runtime/workspace"
@@ -34,6 +37,12 @@ type Config struct {
 	// which only a configuration check and an embedder without a control plane
 	// should do.
 	Conversation continuation.FreshSource
+	// ClientAddr is where the SDK runner serves clients when the Harness selects
+	// it (KAGENT_CLAUDE_DRIVER=sdk). Empty serves no client port, which only a
+	// configuration check should do.
+	ClientAddr string
+	// Activity receives the SDK runner's busy/idle transitions. Nil reports none.
+	Activity sdkrunner.ActivityReporter
 }
 
 // New validates the configuration and Claude installation, then returns the
@@ -82,14 +91,27 @@ func New(ctx context.Context, cfg Config) (a2asrv.AgentExecutor, io.Closer, erro
 		_ = runner.Close()
 		return nil, nil, err
 	}
+	mode, err := selectedDriver(cfg.Environment)
+	if err != nil {
+		_ = runner.Close()
+		return nil, nil, err
+	}
 	var turns runtimea2a.Runner = runner
 	var closer io.Closer = runner
+	var sdk *sdkWiring
+	if mode == modeSDK {
+		if sdk, err = newSDKWiring(ctx, cfg, runner, store, parsed.InterruptGrace()); err != nil {
+			_ = runner.Close()
+			return nil, nil, err
+		}
+		turns = sdk.driver(runner)
+	}
 	if parsed.Git != nil {
 		if cfg.Workspace == nil {
 			_ = runner.Close()
 			return nil, nil, fmt.Errorf("configuration enables git but no workspace source was provided")
 		}
-		bootstrap, bootstrapErr := workspace.New(runner, workspace.Config{
+		bootstrap, bootstrapErr := workspace.New(turns, workspace.Config{
 			Dir: cfg.DataDir + "/workspace", StateDir: cfg.DataDir + "/.kagent", Policy: *parsed.Git, Source: cfg.Workspace, Environment: cfg.Environment,
 		})
 		if bootstrapErr != nil {
@@ -98,9 +120,26 @@ func New(ctx context.Context, cfg Config) (a2asrv.AgentExecutor, io.Closer, erro
 		}
 		input.SetupProfile = ""
 		installer := &adapter.SetupInstaller{Input: input, Store: store, Runner: runner}
+		if sdk != nil {
+			installer.Wrap = func(d *driver.ProcessDriver) workspace.Runner { return sdk.driver(d) }
+			sdk.prepare = func(ctx context.Context) error {
+				if failure := bootstrap.Ready(ctx); failure != "" {
+					return errors.New(failure)
+				}
+				return nil
+			}
+		}
 		bootstrap.ServePreparations(ctx, installer)
 		closer = installer
 		turns = bootstrap
+	}
+	if sdk != nil {
+		served, err := sdk.serve(ctx, cfg.ClientAddr)
+		if err != nil {
+			_ = closer.Close()
+			return nil, nil, err
+		}
+		closer = closers{served, closer}
 	}
 	executor, err := runtimea2a.New(turns, store, parsed.RuntimeTelemetry, config.EffortLevels...)
 	if err != nil {

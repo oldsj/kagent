@@ -92,7 +92,12 @@ func run(ctx context.Context, check bool, getenv func(string) string, environmen
 		}
 		defer controller.Close()
 	}
-	exec, closer, err := executor.New(ctx, executor.Config{ConfigJSON: configJSON, DataDir: dataDir, Environment: environment, Workspace: source, Conversation: workspace.ConversationOf(source)})
+	execCfg := executor.Config{ConfigJSON: configJSON, DataDir: dataDir, Environment: environment, Workspace: source, Conversation: workspace.ConversationOf(source)}
+	if !check {
+		execCfg.ClientAddr = executor.ClientAddr
+		execCfg.Activity = loggedActivity{ctx: ctx}
+	}
+	exec, closer, err := executor.New(ctx, execCfg)
 	if err != nil {
 		return err
 	}
@@ -117,4 +122,12 @@ func requiredEnvironment(getenv func(string) string, name string) ([]byte, error
 		return nil, fmt.Errorf("%s is required", name)
 	}
 	return []byte(value), nil
+}
+
+// loggedActivity records the SDK runner's busy/idle transitions. It stands in
+// for the TaskStore activity reporter until that client lands.
+type loggedActivity struct{ ctx context.Context }
+
+func (a loggedActivity) SetActive(active bool) {
+	logging.FromContext(a.ctx).InfoContext(a.ctx, "sdk runner activity", "active", active)
 }
