@@ -790,13 +790,19 @@ func newInteractionFixtureForTemplate(t *testing.T, harness testHarness, target,
 
 func newInteractionFixtureForHarnessTemplate(t *testing.T, target, harnessName, templateName string) *interactionFixture {
 	t.Helper()
+	return newInteractionFixtureForRequest(t, target, &apiv1.CreateSessionRequest{
+		Agent: &apiv1.ResourceReference{Namespace: "kagent", Name: templateName}, RequestId: uuid.NewString(),
+	})
+}
+
+// newInteractionFixtureForRequest creates the Session request describes, such
+// as one with a workspace and credentials, and deletes it on cleanup.
+func newInteractionFixtureForRequest(t *testing.T, target string, request *apiv1.CreateSessionRequest) *interactionFixture {
+	t.Helper()
 	conn := newControllerConn(t, target)
 	ctx, cancel := context.WithTimeout(metadata.AppendToOutgoingContext(t.Context(), "x-user-id", "e2e", a2atype.SvcParamVersion, string(a2atype.Version)), 4*time.Minute)
 	t.Cleanup(cancel)
 	sessions := apiv1.NewSessionServiceClient(conn)
-	request := &apiv1.CreateSessionRequest{
-		Agent: &apiv1.ResourceReference{Namespace: "kagent", Name: templateName}, RequestId: uuid.NewString(),
-	}
 	var created *apiv1.CreateSessionResponse
 	err := wait.PollUntilContextTimeout(ctx, time.Second, time.Minute, true, func(ctx context.Context) (bool, error) {
 		var err error
