@@ -231,6 +231,10 @@ config:
     recoveryInterval: 60s
   sessions:
     idleTtl: 604800s
+    # Delay after a turn settles before its idle runtime is suspended, so
+    # background processes keep running (0s to 1800s; 0s suspends at once).
+    # Raise it only after every older controller replica has exited.
+    quiescenceDelay: 0s
     shareMaxTtl: 0s
   sandboxes:
     guestImage: ""

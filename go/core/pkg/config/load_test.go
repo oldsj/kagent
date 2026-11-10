@@ -293,3 +293,38 @@ func TestSubstrateDeadlineBounds(t *testing.T) {
 		})
 	}
 }
+
+func TestSessionsQuiescenceDelayBounds(t *testing.T) {
+	scenarios := []struct {
+		name, delay string
+		want        time.Duration
+		wantErr     bool
+	}{
+		{name: "Given no quiescence delay, when the config loads, assert that suspension is immediate", delay: "", want: 0},
+		{name: "Given a 15m quiescence delay, when the config loads, assert that it is kept", delay: "900s", want: 15 * time.Minute},
+		{name: "Given the 30m maximum, when the config loads, assert that it is accepted", delay: "1800s", want: 30 * time.Minute},
+		{name: "Given a delay above 30m, when the config is validated, assert that it is rejected", delay: "1801s", wantErr: true},
+		{name: "Given a negative delay, when the config is validated, assert that it is rejected", delay: "-1s", wantErr: true},
+	}
+	for _, scenario := range scenarios {
+		t.Run(scenario.name, func(t *testing.T) {
+			input := "{}"
+			if scenario.delay != "" {
+				input = "sessions: {quiescenceDelay: " + scenario.delay + "}"
+			}
+			cfg := &configv1.ControllerConfig{}
+			require.NoError(t, config.Decode([]byte(input), cfg))
+			config.DefaultController(cfg)
+			setLogins(cfg)
+
+			err := config.Validate(cfg)
+
+			if scenario.wantErr {
+				require.ErrorContains(t, err, "quiescence_delay")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, scenario.want, cfg.GetSessions().GetQuiescenceDelay().AsDuration())
+		})
+	}
+}

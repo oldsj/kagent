@@ -235,6 +235,24 @@ leave an actor running until a surviving replica's next recovery scan; increasin
 the interval increases that delay and the time until its snapshot is available.
 Ordinary committed settlements do not wait for the recovery interval.
 
+`sessions.quiescenceDelay` (default `0s`, at most `1800s`) delays automatic
+suspension after a turn settles, so background processes such as dev servers keep
+running for a while. Settlement records the deadline with the database clock, so
+acknowledgement retries and controller restarts keep it; configuration changes
+affect only newly settled boundaries. Publication is not delayed: the task is
+visible immediately. A new turn supersedes unclaimed work during the delay. Claims
+check the deadline alongside the dispatch and lifecycle fences, and work that is not
+yet due does not count as pending, so idle workers notice it on their next recovery
+scan: suspension can land up to one recovery interval after the deadline. The
+delay does not wait for background processes to finish. Boundaries published on
+an ending runtime use no delay.
+
+The deadline column (migration 8) is nullable, and NULL means eligible now, so an
+older controller can still publish boundaries. Older workers ignore deadlines, so
+roll out in two steps: deploy the new controller with `quiescenceDelay: 0s`, wait
+for every old replica to exit (all replicas run quiescence workers), then raise the
+delay. To roll back the binary, set the delay to `0s` first and keep schema 8.
+
 An empty claim is followed by a check for unclaimed work on ready sessions. If
 dispatch, checkpoint creation, a lifecycle operation, or a row lock blocks that
 work, workers retry within one second until it becomes eligible or is superseded.

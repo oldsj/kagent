@@ -25,12 +25,15 @@ type SessionQuiescence struct {
 // dispatch, checkpoints, lifecycle operations, or row locks. Already claimed
 // work is excluded: its runtime outcome may be uncertain and cannot be retried
 // by another worker. Suspended/deleted sessions need no automatic runtime work.
+// Boundaries still inside their quiescence delay are not pending yet, so idle
+// workers fall back to the recovery interval instead of polling until they are due.
 func (c *Client) HasPendingSessionQuiescence(ctx context.Context) (bool, error) {
 	return queryOne(ctx, c.db, `
 		SELECT EXISTS (
 			SELECT 1 FROM session_task_event e JOIN session_record i ON i.history_id = e.history_id
 			WHERE e.published AND e.quiescence_pending = TRUE
 			  AND e.quiescence_executor_id IS NULL
+			  AND (e.quiescence_due_at IS NULL OR e.quiescence_due_at <= statement_timestamp())
 			  AND i.state = 'RUNTIME_STATE_READY'
 		)
 	`, pgx.RowTo[bool])
@@ -38,8 +41,8 @@ func (c *Client) HasPendingSessionQuiescence(ctx context.Context) (bool, error) 
 
 // ClaimSessionQuiescence claims an idle session at its latest settled task
 // version. A new turn supersedes unclaimed idle work; a claim blocks task writes,
-// checkpoints, and explicit lifecycle operations until it finishes. Missing work
-// returns ErrNotFound. Uncertain issued work is never reassigned after a timeout.
+// checkpoints, and explicit lifecycle operations until it finishes. Missing work,
+// including boundaries before their durable quiescence deadline, returns ErrNotFound. Uncertain issued work is never reassigned after a timeout.
 func (c *Client) ClaimSessionQuiescence(ctx context.Context) (*SessionQuiescence, error) {
 	var result *SessionQuiescence
 	err := c.withTx(ctx, func(tx pgx.Tx) error {
@@ -53,6 +56,7 @@ func (c *Client) ClaimSessionQuiescence(ctx context.Context) (*SessionQuiescence
 			FROM session_task_event e JOIN session_record i ON i.history_id = e.history_id
 			WHERE e.published AND e.quiescence_pending = TRUE
 			  AND e.quiescence_executor_id IS NULL
+			  AND (e.quiescence_due_at IS NULL OR e.quiescence_due_at <= statement_timestamp())
 			  AND i.state = 'RUNTIME_STATE_READY'
 			  AND i.operation = 'RUNTIME_OPERATION_NONE'
 			  AND (i.dispatch_expires_at IS NULL OR i.dispatch_expires_at <= clock_timestamp())
@@ -88,6 +92,7 @@ func (c *Client) ClaimSessionQuiescence(ctx context.Context) (*SessionQuiescence
 			UPDATE session_task_event SET quiescence_executor_id = $2
 			WHERE sequence = $1 AND published AND quiescence_pending
 			  AND quiescence_executor_id IS NULL
+			  AND (quiescence_due_at IS NULL OR quiescence_due_at <= statement_timestamp())
 			  AND NOT EXISTS (SELECT 1 FROM session WHERE id = $3 AND dispatch_expires_at > clock_timestamp())
 			  AND NOT EXISTS (SELECT 1 FROM session_checkpoint WHERE source_session_id = $3 AND state = 'CREATING')
 		`, result.Version, result.ExecutorID, session.ID)
