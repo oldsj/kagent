@@ -55,6 +55,9 @@ message Session {
   Workspace workspace = 16;
   // Secret references only; forks do not inherit these bindings.
   repeated SessionCredential credentials = 17;
+  // Output only. The development image and runtime payload this Session runs.
+  // Unset for Sessions on the Agent's single-image revision. Forks keep it.
+  RuntimeComposition runtime_composition = 18;
 }
 
 // SecretKeyReference identifies a key in the Agent's namespace. The value is
@@ -110,6 +113,41 @@ message CreateSessionRequest {
   Workspace workspace = 6;
   // Per-session headers for origins already allowed by the Agent revision.
   repeated SessionCredential credentials = 7 [(buf.validate.field).repeated.max_items = 4];
+  // Optional development image to run the Agent's Claude or Codex harness in.
+  // The harness, its CLI and helpers come from the operator's runtime payload.
+  // Selection requires the controller's session policy to allow its registry.
+  DevelopmentEnvironment development_environment = 8;
+}
+
+// DevelopmentEnvironment selects the image a composed Session runs in.
+message DevelopmentEnvironment {
+  // Digest-pinned image reference.
+  string image = 1 [(buf.validate.field).string = {
+    max_len: 512
+    pattern: "^[A-Za-z0-9][A-Za-z0-9./_:-]*@sha256:[a-f0-9]{64}$"
+  }];
+  string platform = 2 [(buf.validate.field).string = {
+    in: [
+      "linux/amd64",
+      "linux/arm64"
+    ]
+  }];
+  // Caller-owned immutable identity of the policy the image was admitted
+  // under, such as a registration revision. It is part of the revision identity.
+  string policy_identity = 3 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 256
+    pattern: "^\\S(.*\\S)?$"
+  }];
+}
+
+// RuntimeComposition is the resolved pairing a composed Session runs.
+message RuntimeComposition {
+  DevelopmentEnvironment development_environment = 1;
+  // Runtime payload image from the operator catalog.
+  string payload_image = 2;
+  // CLI version the payload carries.
+  string cli_version = 3;
 }
 
 message CreateSessionResponse {

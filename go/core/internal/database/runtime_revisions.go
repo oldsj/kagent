@@ -9,9 +9,11 @@ import (
 
 	a2apb "github.com/a2aproject/a2a-go/v2/a2apb/v1"
 	"github.com/jackc/pgx/v5"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/kagent-dev/kagent/go/api/bootstrap"
+	apiv1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1"
 	runtimev1 "github.com/kagent-dev/kagent/go/api/gen/kagent/runtime/v1"
 	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"github.com/kagent-dev/kagent/go/core/pkg/egresspolicy"
@@ -127,6 +129,15 @@ func (c *Client) RecordRuntimeRevision(ctx context.Context, revision RuntimeRevi
 	if err != nil {
 		return GoldenRetry{}, fmt.Errorf("encode runtime revision Agent Card: %w", err)
 	}
+	if (revision.Composition == nil) != (revision.BaseRevision == "") {
+		return GoldenRetry{}, fmt.Errorf("runtime revision %s must set composition and base revision together", revision.Revision)
+	}
+	var composition []byte
+	if revision.Composition != nil {
+		if composition, err = protojson.Marshal(revision.Composition); err != nil {
+			return GoldenRetry{}, fmt.Errorf("encode runtime revision composition: %w", err)
+		}
+	}
 	var bundle []byte
 	if options.Bootstrap != nil {
 		if err := bootstrap.ValidateBundle(options.Bootstrap); err != nil {
@@ -163,13 +174,13 @@ func (c *Client) RecordRuntimeRevision(ctx context.Context, revision RuntimeRevi
 			return err
 		}
 		result, err := tx.Exec(ctx, `
-			INSERT INTO agent_revision (revision, agent_name, agent_uid, agent_card, bootstrap_bundle)
-			VALUES ($1, $2, $3, $4, $5)
+			INSERT INTO agent_revision (revision, agent_name, agent_uid, agent_card, bootstrap_bundle, base_revision, composition)
+			VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''), $7::jsonb)
 			ON CONFLICT (revision) DO UPDATE SET
 			    bootstrap_bundle = COALESCE(agent_revision.bootstrap_bundle, EXCLUDED.bootstrap_bundle)
 			WHERE EXCLUDED.bootstrap_bundle IS NULL OR agent_revision.bootstrap_bundle IS NULL
 			    OR agent_revision.bootstrap_bundle = EXCLUDED.bootstrap_bundle
-		`, revision.Revision, revision.AgentName, revision.AgentUID, card, bundle)
+		`, revision.Revision, revision.AgentName, revision.AgentUID, card, bundle, revision.BaseRevision, nullableJSON(composition))
 		if err != nil {
 			return fmt.Errorf("record agent revision: %w", err)
 		}
@@ -527,4 +538,35 @@ func recordGoldenRetry(ctx context.Context, tx pgx.Tx, revision, templateUID str
 		retry.FailedAt = *row.GoldenFailedAt
 	}
 	return retry, nil
+}
+
+// nullableJSON keeps an absent document NULL rather than encoding JSON null.
+func nullableJSON(document []byte) any {
+	if document == nil {
+		return nil
+	}
+	return string(document)
+}
+
+// getRevisionComposition returns the base revision and composition a variant
+// was prepared with, or a nil composition for an Agent's own revision.
+func getRevisionComposition(ctx context.Context, db dbExecutor, revision string) (string, *apiv1.RuntimeComposition, error) {
+	type compositionRow struct {
+		BaseRevision *string
+		Composition  []byte
+	}
+	row, err := queryOne(ctx, db, `
+		SELECT base_revision, composition FROM agent_revision WHERE revision = $1
+	`, pgx.RowToStructByName[compositionRow], revision)
+	if err != nil {
+		return "", nil, fmt.Errorf("get runtime revision %s composition: %w", revision, notFoundOr(err))
+	}
+	if row.BaseRevision == nil || row.Composition == nil {
+		return "", nil, nil
+	}
+	composition := &apiv1.RuntimeComposition{}
+	if err := protojson.Unmarshal(row.Composition, composition); err != nil {
+		return "", nil, fmt.Errorf("decode runtime revision %s composition: %w", revision, err)
+	}
+	return *row.BaseRevision, composition, nil
 }

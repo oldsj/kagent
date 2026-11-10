@@ -870,3 +870,11 @@ func TestServiceCanonicalizesSessionAndShareIdentities(t *testing.T) {
 		}
 	}
 }
+
+func (s *serviceTestStore) GetSessionRequest(context.Context, string, string) (*apiv1.Session, error) {
+	return nil, database.ErrNotFound
+}
+
+func (p refusingCreatePolicy) CheckDevelopmentEnvironment(context.Context, *apiv1.ResourceReference, *apiv1.DevelopmentEnvironment) error {
+	return nil
+}

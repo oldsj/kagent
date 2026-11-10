@@ -54,6 +54,7 @@ func marshalSession(session *apiv1.Session) ([]byte, error) {
 // affect retry identity.
 func sameSessionRequest(session, request *apiv1.Session) bool {
 	return proto.Equal(session.GetAgent().GetRef(), request.GetAgent().GetRef()) && proto.Equal(session.GetWorkspace(), request.GetWorkspace()) &&
+		proto.Equal(session.GetRuntimeComposition().GetDevelopmentEnvironment(), request.GetRuntimeComposition().GetDevelopmentEnvironment()) &&
 		proto.Equal(&apiv1.Session{Credentials: session.GetCredentials()}, &apiv1.Session{Credentials: request.GetCredentials()})
 }
 
@@ -110,10 +111,26 @@ func (c *Client) CreateSession(ctx context.Context, request *apiv1.Session, requ
 // a transaction so the history and session commit together. A missing prepared target
 // returns ErrNotFound; a duplicate creator/requestID returns pgx.ErrNoRows for the caller
 // to resolve.
+//
+// A request with a runtime composition pins its prepared variant instead. The
+// variant must derive from the Agent's current latest revision and carry the
+// requested development environment; otherwise ErrConflict asks the caller to
+// prepare again.
 func insertSession(ctx context.Context, db pgx.Tx, request *apiv1.Session, requestID string) (sessionRow, error) {
 	revision, err := getLatestSuccessfulRevisionForUpdate(ctx, db, request.GetAgent())
 	if err != nil {
 		return sessionRow{}, err
+	}
+	if requested := request.GetRuntimeComposition(); requested != nil {
+		variant := request.GetPreparedRevision()
+		base, composition, err := getRevisionComposition(ctx, db, variant)
+		if err != nil {
+			return sessionRow{}, err
+		}
+		if composition == nil || base != revision || !proto.Equal(composition.GetDevelopmentEnvironment(), requested.GetDevelopmentEnvironment()) {
+			return sessionRow{}, fmt.Errorf("composed revision %s does not derive from the Agent's current revision: %w", variant, ErrConflict)
+		}
+		revision = variant
 	}
 	return insertPinnedSession(ctx, db, request, requestID, revision)
 }
@@ -155,7 +172,12 @@ func insertPinnedSession(ctx context.Context, db pgx.Tx, request *apiv1.Session,
 	if _, err := egress.SessionCredentials(pinned.Namespace, request.GetCredentials(), pinned.EgressDestinations, pinned.Credentials); err != nil {
 		return sessionRow{}, fmt.Errorf("%w: %v", ErrSessionCredentialNotAllowed, err)
 	}
+	_, composition, err := getRevisionComposition(ctx, db, revisionID)
+	if err != nil {
+		return sessionRow{}, err
+	}
 	session := proto.CloneOf(request)
+	session.RuntimeComposition = composition
 	session.Agent.Uid = pinned.AgentUID
 	session.ContextId = session.Id
 	session.PreparedRevision = revisionID
@@ -379,4 +401,36 @@ func checkWorkspaceOrigin(ctx context.Context, db pgx.Tx, revision string, reque
 		return fmt.Errorf("%w: %s", ErrWorkspaceNotAllowed, host)
 	}
 	return nil
+}
+
+// GetSessionRequest returns the Session creator reserved with requestID, or
+// ErrNotFound. A request ID that a checkpoint fork used returns
+// ErrIdempotencyConflict. It lets a caller reuse expensive preparation on retry;
+// CreateSession still decides the outcome.
+func (c *Client) GetSessionRequest(ctx context.Context, creator, requestID string) (*apiv1.Session, error) {
+	row, err := readSessionRequest(ctx, c.db, creator, requestID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get Session request: %w", err)
+	}
+	if row.SourceCheckpointID != nil {
+		return nil, ErrIdempotencyConflict
+	}
+	return toSession(row)
+}
+
+// GetLatestSuccessfulRevision returns the revision new Sessions of the active
+// Agent pin, or ErrNotFound when it has none.
+func (c *Client) GetLatestSuccessfulRevision(ctx context.Context, namespace, name string) (string, error) {
+	revision, err := queryOne(ctx, c.db, `
+		SELECT latest_successful_revision FROM agent_definition
+		WHERE namespace = $1 AND agent_name = $2 AND retired_at IS NULL
+		    AND latest_successful_revision IS NOT NULL
+	`, pgx.RowTo[string], namespace, name)
+	if err != nil {
+		return "", fmt.Errorf("get latest prepared runtime revision: %w", notFoundOr(err))
+	}
+	return revision, nil
 }

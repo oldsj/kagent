@@ -29,9 +29,14 @@ COPY --from=builder /out/ /opt/mainloop-runtime/bin/
 # Copy the Alpine helper/library closure without introducing a global LD_LIBRARY_PATH.
 # Dereference symlinks: the mounted payload never resolves into D's filesystem.
 # Git helpers share inodes; configure their private ABI only once.
+# Codex package helpers (codex-code-mode-host) also sit beside the relocated CLI
+# in libexec, since the CLI may resolve them relative to its own executable.
 RUN mkdir -p /opt/mainloop-runtime/lib /opt/mainloop-runtime/libexec /opt/mainloop-runtime/share \
  && mv "/opt/mainloop-runtime/bin/$PROVIDER" "/opt/mainloop-runtime/libexec/$PROVIDER" \
  && cp /opt/mainloop-runtime/bin/launch "/opt/mainloop-runtime/bin/$PROVIDER" \
+ && for helper in /opt/mainloop-runtime/bin/codex-*; do \
+      [ -f "$helper" ] && [ ! -e "/opt/mainloop-runtime/libexec/${helper##*/}" ] && cp "$helper" /opt/mainloop-runtime/libexec/ || true; \
+    done \
  && cp -L /bin/bash /usr/bin/git /usr/bin/rg /opt/mainloop-runtime/bin/ \
  && cp -RL --preserve=links /usr/libexec/git-core /opt/mainloop-runtime/libexec/ \
  && cp -RL /usr/share/git-core /opt/mainloop-runtime/share/ \

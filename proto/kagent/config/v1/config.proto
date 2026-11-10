@@ -128,6 +128,33 @@ message ControllerConfig {
   HarnessImagesConfig harness_images = 14;
   PushConfig push = 15;
   CredentialRefreshConfig credential_refresh = 16;
+  RuntimePayloadsConfig runtime_payloads = 17;
+}
+
+// RuntimePayloadsConfig is the operator catalog for composed Sessions. A
+// composed Session runs a caller-selected development image with the payload
+// for its harness and platform mounted read-only. Callers cannot choose the
+// payload. An empty catalog disables composition.
+message RuntimePayloadsConfig {
+  repeated RuntimePayload payloads = 1 [(buf.validate.field).repeated.max_items = 16];
+}
+
+message RuntimePayload {
+  string provider = 1 [(buf.validate.field).string = {
+    in: [
+      "claude",
+      "codex"
+    ]
+  }];
+  string platform = 2 [(buf.validate.field).string = {
+    in: [
+      "linux/amd64",
+      "linux/arm64"
+    ]
+  }];
+  string image = 3 [(buf.validate.field).string.pattern = "^[A-Za-z0-9][A-Za-z0-9./_:-]*@sha256:[a-f0-9]{64}$"];
+  // CLI release the payload carries; the harness checks it at startup.
+  string cli_version = 4 [(buf.validate.field).string.pattern = "^[0-9]+[.][0-9]+[.][0-9]+(?:[-+][0-9A-Za-z.-]+)?$"];
 }
 
 // CredentialRefreshConfig controls control-side refresh of subscription
@@ -208,6 +235,14 @@ message SessionPolicy {
   repeated SessionCredentialRule credentials = 3;
   // Exact in-cluster http:// origins an "mcp" rule may use. https needs no entry.
   repeated string cleartext_mcp_origins = 4 [(buf.validate.field).repeated.unique = true];
+  // Exact registry hosts, with an optional port, that development images may
+  // come from. Empty denies development environment selection.
+  repeated string development_environment_registries = 5 [(buf.validate.field).repeated = {
+    unique: true
+    items: {
+      string: {pattern: "^[A-Za-z0-9.-]+(:[0-9]{1,5})?$"}
+    }
+  }];
 }
 
 message SessionCredentialRule {

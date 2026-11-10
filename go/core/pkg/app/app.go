@@ -396,6 +396,13 @@ func Run(ctx context.Context, input *configv1.ControllerConfig, opts Options) er
 		}
 		sessionOptions = append(sessionOptions, sessionsvc.WithCreatePolicy(policy))
 	}
+	preparer, err := controller.NewCompositionPreparer(runtime.Collections, actors, store, cfg.GetRuntimePayloads())
+	if err != nil {
+		return fmt.Errorf("invalid runtime_payloads: %w", err)
+	}
+	if preparer != nil {
+		sessionOptions = append(sessionOptions, sessionsvc.WithEnvironmentPreparer(preparer))
+	}
 	sessions := sessionsvc.NewService(store, authorizer, sessionWorkflow, sessionOptions...)
 	checkpoints := checkpoint.NewService(store, authorizer, actors, sessionWorkflow)
 	gatewayDialer, err := a2agateway.NewRuntimeDialer(

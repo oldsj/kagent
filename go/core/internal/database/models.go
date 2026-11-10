@@ -78,6 +78,10 @@ type RuntimeRevision struct {
 	ActorTemplateName       string
 	ActorTemplateUID        string
 	ActorTemplateSpecDigest string
+	// Composition and BaseRevision are set together for a composed variant of
+	// BaseRevision; both are empty for an Agent's own revisions.
+	Composition  *apiv1.RuntimeComposition
+	BaseRevision string
 }
 
 // SessionQuery narrows a page of sessions to an optional Agent.

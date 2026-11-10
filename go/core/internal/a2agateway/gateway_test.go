@@ -972,3 +972,7 @@ func TestGatewayUnusedStreamDoesNotReserveDispatch(t *testing.T) {
 	require.Zero(t, store.reserveCalls)
 	require.Nil(t, dialer.session)
 }
+
+func (s *gatewayTestStore) GetSessionRequest(context.Context, string, string) (*apiv1.Session, error) {
+	return nil, database.ErrNotFound
+}
