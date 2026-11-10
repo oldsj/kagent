@@ -3,8 +3,10 @@ package workspace
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"os"
 	"os/exec"
@@ -25,6 +27,10 @@ const placeholderHeader = "Authorization: Basic cGxhY2Vob2xkZXI="
 
 // maxStderr bounds how much of a failed git invocation is kept.
 const maxStderr = 8 << 10
+
+// maxStdout bounds what a git command may print; every caller reads a ref, a
+// branch name or the local config.
+const maxStdout = 16 << 10
 
 var (
 	errRefNotFound = errors.New("ref not found")
@@ -321,12 +327,15 @@ func (g *gitRunner) git(ctx context.Context, dir, step string, args ...string) (
 // run executes git and returns stdout. Callers
 // that need a working directory use git, which passes -C.
 func (g *gitRunner) run(ctx context.Context, step string, args ...string) (string, error) {
+	// Automatic maintenance could rewrite the repository between a preparation
+	// and its later observation.
+	args = append([]string{"-c", "maintenance.auto=false", "-c", "gc.auto=0"}, args...)
 	cmd := exec.CommandContext(ctx, g.path, args...)
 	cmd.Env = g.environment
 	cmd.WaitDelay = 5 * time.Second
-	var stdout bytes.Buffer
+	stdout := &boundedBuffer{limit: maxStdout}
 	stderr := &boundedBuffer{limit: maxStderr}
-	cmd.Stdout, cmd.Stderr = &stdout, stderr
+	cmd.Stdout, cmd.Stderr = stdout, stderr
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() != nil {
 			return "", ctx.Err()
@@ -355,4 +364,108 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 		b.Buffer.Write(p[:min(room, len(p))])
 	}
 	return len(p), nil
+}
+
+// proxyExtraHeaders returns the fixed http.<origin>/.extraheader entries for
+// policy's Mainloop Git instance, keyed by both that instance's read and push
+// origin, so the transport fingerprint does not depend on whether the session
+// can push. ok is false when policy has no proxy transport at all.
+func proxyExtraHeaders(policy apiworkspace.Git) (headers map[string]string, ok bool, err error) {
+	if policy.ReadProxyOrigin == nil {
+		return nil, false, nil
+	}
+	namespace, valid := apiworkspace.ParseGitProxyOrigin(*policy.ReadProxyOrigin, true)
+	if !valid {
+		return nil, false, errors.New("invalid Git proxy transport")
+	}
+	readOrigin, pushOrigin := apiworkspace.GitInstanceOrigins(namespace)
+	return map[string]string{
+		"http." + readOrigin + "/.extraheader": placeholderHeader,
+		"http." + pushOrigin + "/.extraheader": placeholderHeader,
+	}, true, nil
+}
+
+// requiredTransport is the local Git config a prepared proxy checkout of repo
+// must carry, with keys as git config --list prints them.
+func requiredTransport(policy apiworkspace.Git, repo string) (map[string]string, error) {
+	read, push, err := policy.Transport(repo)
+	if err != nil {
+		return nil, err
+	}
+	headers, ok, err := proxyExtraHeaders(policy)
+	if err != nil {
+		return nil, err
+	}
+	if !ok || policy.PushProxyOrigin == nil {
+		return nil, errors.New("preparation requires fixed proxy transport")
+	}
+	required := map[string]string{"remote.origin.url": read, "remote.origin.pushurl": push, "http.followredirects": "false"}
+	maps.Copy(required, headers)
+	return required, nil
+}
+
+// TransportDigest fingerprints the fixed proxy transport of a prepared
+// checkout of repo, without exposing it in a receipt.
+func TransportDigest(policy apiworkspace.Git, repo string) (string, error) {
+	required, err := requiredTransport(policy, repo)
+	if err != nil {
+		return "", err
+	}
+	data, err := json.Marshal(required)
+	return apiworkspace.Digest(data), err
+}
+
+// observe reads back a prepared checkout: HEAD must be exactly request.Ref on
+// request.Branch, and the local Git config must hold exactly the fixed proxy
+// transport plus git init's own defaults.
+func (b *Bootstrapper) observe(ctx context.Context, request Request) (head, branch, transportDigest string, err error) {
+	info, err := os.Lstat(filepath.Join(b.dir, ".git"))
+	if err != nil || !info.IsDir() {
+		return "", "", "", errors.New("workspace Git directory is not owned")
+	}
+	required, err := requiredTransport(b.policy, request.Repo)
+	if err != nil {
+		return "", "", "", err
+	}
+	head, err = b.git.git(ctx, b.dir, "observe HEAD", "rev-parse", "--verify", "HEAD")
+	if head = strings.TrimSpace(head); err != nil || head != request.Ref {
+		return "", "", "", errors.New("workspace HEAD differs")
+	}
+	branch, err = b.git.git(ctx, b.dir, "observe branch", "symbolic-ref", "--short", "HEAD")
+	if branch = strings.TrimSpace(branch); err != nil || branch != request.Branch {
+		return "", "", "", errors.New("workspace branch differs")
+	}
+	config, err := b.git.git(ctx, b.dir, "observe transport", "config", "--local", "--null", "--list")
+	if err != nil {
+		return "", "", "", err
+	}
+	// git init's own defaults. It adds ignorecase and precomposeunicode only on
+	// case-insensitive or macOS filesystems; neither affects transport.
+	allowed := map[string]string{
+		"core.repositoryformatversion": "0", "core.filemode": "true", "core.bare": "false", "core.logallrefupdates": "true",
+		"core.ignorecase": "true", "core.precomposeunicode": "true",
+		"remote.origin.fetch": "+refs/heads/*:refs/remotes/origin/*",
+	}
+	seen := map[string]bool{}
+	for item := range strings.SplitSeq(strings.TrimSuffix(config, "\x00"), "\x00") {
+		key, value, ok := strings.Cut(item, "\n")
+		if !ok || seen[key] {
+			return "", "", "", errors.New("duplicate or malformed workspace Git config")
+		}
+		expected, exists := required[key]
+		if !exists {
+			expected, exists = allowed[key]
+		}
+		if !exists || value != expected {
+			return "", "", "", errors.New("workspace Git transport differs")
+		}
+		seen[key] = true
+	}
+	for key := range required {
+		if !seen[key] {
+			return "", "", "", errors.New("workspace Git transport is incomplete")
+		}
+	}
+	transportDigest, err = TransportDigest(b.policy, request.Repo)
+	return head, branch, transportDigest, err
 }

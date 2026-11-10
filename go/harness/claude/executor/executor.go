@@ -4,6 +4,7 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/kagent-dev/kagent/go/harness/claude/config"
 	"github.com/kagent-dev/kagent/go/harness/claude/internal/adapter"
+	"github.com/kagent-dev/kagent/go/harness/claude/internal/driver"
 	"github.com/kagent-dev/kagent/go/harness/claude/internal/sdkrunner"
 	runtimea2a "github.com/kagent-dev/kagent/go/harness/runtime/a2a"
 	"github.com/kagent-dev/kagent/go/harness/runtime/continuation"
@@ -40,12 +42,23 @@ type Config struct {
 // New validates the configuration and Claude installation, then returns the
 // executor and the resource to close on shutdown.
 func New(ctx context.Context, cfg Config) (a2asrv.AgentExecutor, io.Closer, error) {
-	runner, err := adapter.New(ctx, adapter.Input{
+	stateDir := cfg.DataDir + "/.kagent"
+	// A setup installed by an earlier process is restored, so its standing
+	// context survives a restart without another preparation.
+	restored, err := workspace.RestoreSetup(cfg.ConfigJSON, stateDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	input := adapter.Input{
 		ConfigJSON: cfg.ConfigJSON,
 		Workspace:  cfg.DataDir + "/workspace", DurableDir: cfg.DataDir,
 		EphemeralDir: "/tmp/kagent-claude",
 		Environment:  cfg.Environment,
-	})
+	}
+	if restored != nil {
+		input.SetupProfile = restored.Profile
+	}
+	runner, err := adapter.New(ctx, input)
 	if err != nil {
 		return nil, nil, fmt.Errorf("configure Claude Harness: %w", err)
 	}
@@ -75,35 +88,57 @@ func New(ctx context.Context, cfg Config) (a2asrv.AgentExecutor, io.Closer, erro
 		return nil, nil, err
 	}
 	var turns runtimea2a.Runner = runner
-	closer := closers{runner}
+	// runnerCloser owns the current driver. Preparation can replace it, so
+	// with Git it becomes the setup installer, which closes whichever is current.
+	var runnerCloser io.Closer = runner
+	var sdk *sdkWiring
 	if mode == modeSDK {
-		sdk, err := newSDKWiring(ctx, cfg, runner, store, parsed.InterruptGrace())
-		if err != nil {
-			_ = closer.Close()
+		if sdk, err = newSDKWiring(ctx, cfg, runner, store, parsed.InterruptGrace()); err != nil {
+			_ = runner.Close()
 			return nil, nil, err
 		}
+		turns = sdk.driver(runner)
+	}
+	// The checkout wraps whichever driver serves turns, so both establish the
+	// workspace before the first one.
+	if parsed.Git != nil {
+		if cfg.Workspace == nil {
+			_ = runner.Close()
+			return nil, nil, fmt.Errorf("configuration enables git but no workspace source was provided")
+		}
+		bootstrap, err := workspace.New(turns, workspace.Config{
+			Dir: cfg.DataDir + "/workspace", StateDir: stateDir, Policy: *parsed.Git, Source: cfg.Workspace, Environment: cfg.Environment,
+		})
+		if err != nil {
+			_ = runner.Close()
+			return nil, nil, err
+		}
+		// The installer configures each assigned profile itself.
+		input.SetupProfile = ""
+		installer := &adapter.SetupInstaller{Input: input, Store: store, Runner: runner}
+		if sdk != nil {
+			installer.Wrap = func(d *driver.ProcessDriver) workspace.Runner { return sdk.driver(d) }
+			// A client attaching to the SDK runner starts native work outside a
+			// turn, so it passes the same admission and checkout first.
+			sdk.prepare = func(ctx context.Context) error {
+				if failure := bootstrap.Ready(ctx); failure != "" {
+					return errors.New(failure)
+				}
+				return nil
+			}
+		}
+		bootstrap.ServePreparations(ctx, installer)
+		turns, runnerCloser = bootstrap, installer
+	}
+	closer := closers{runnerCloser}
+	if sdk != nil {
 		served, err := sdk.serve(ctx, cfg.ClientAddr)
 		if err != nil {
 			_ = closer.Close()
 			return nil, nil, err
 		}
 		// Stop the client port and the bridge before the driver they use.
-		turns, closer = sdk.driver(runner), closers{served, runner}
-	}
-	// The checkout wraps whichever driver serves turns, so both establish the
-	// workspace before the first one.
-	if parsed.Git != nil {
-		if cfg.Workspace == nil {
-			_ = closer.Close()
-			return nil, nil, fmt.Errorf("configuration enables git but no workspace source was provided")
-		}
-		turns, err = workspace.New(turns, workspace.Config{
-			Dir: cfg.DataDir + "/workspace", StateDir: cfg.DataDir + "/.kagent", Policy: *parsed.Git, Source: cfg.Workspace, Environment: cfg.Environment,
-		})
-		if err != nil {
-			_ = closer.Close()
-			return nil, nil, err
-		}
+		closer = closers{served, runnerCloser}
 	}
 	executor, err := runtimea2a.New(turns, store, parsed.RuntimeTelemetry, config.EffortLevels...)
 	if err != nil {

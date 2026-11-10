@@ -573,3 +573,53 @@ earlier Actor is marked `historical`.
 Until the preparation is `confirmed`, the store refuses new runtime tasks for
 the Session. The check runs in the same transaction that creates the task. A
 `definite-failure` keeps turns refused; the caller deletes the Session.
+
+### Runtime workspace preparation
+
+When the control plane requires preparation for a Session, the runtime prepares
+it instead of bootstrapping on the first turn. The runtime reads its assignment
+through `TaskStoreService.GetWorkspace` once a second, on the same authenticated
+channel, and stops polling when the response reports that the Session requires
+no preparation. Turns that arrive while preparation is required but not ready
+end with "Workspace preparation is incomplete." and never reach the agent.
+
+An assignment carries an exact commit `ref` and a `branch`, together with the
+digests of the fixed setup it installs:
+
+- `setup_digest` is the SHA-256 of the profile's standing context
+  (`supervisor`, `child` or `agent`), the fixed role text in
+  `go/api/workspace`. The text must not change byte for byte, because the
+  control plane hashes the same text.
+- `config_digest` and `mcp_digest` hash the bootstrap bundle's `config_json`,
+  re-marshaled as a top-level map, and its `mcp_servers`. The MCP server must
+  belong to the same Mainloop instance as the Git policy's read proxy, matched
+  by URL origin, so a Session cannot pair one instance's Git credentials with
+  another instance's MCP identity.
+
+The runtime first writes the effect to `native-preparation.issued` in
+`/data/.kagent` with an exclusive create and an fsync. Only then does it clone
+through the existing bootstrap. It never adopts or resets a checkout it didn't
+make. An issued action is only ever observed again, never redone, including
+after a crash.
+
+After the checkout, the runtime reads it back. HEAD must equal `ref` on
+`branch`, and the local Git config must hold exactly the fixed proxy transport
+plus `git init`'s own defaults. The native setup installer then adds the
+standing context to the native hook, and setup is refused if native history
+already exists:
+
+| Harness | Native hook |
+| --- | --- |
+| Claude | `append_system_prompt` |
+| Codex | `developer_instruction` |
+
+The runtime persists the result to `native-preparation.result` before reporting
+it with `CompleteWorkspacePreparation`. It writes `native-preparation.ack`
+after the report succeeds, so a lost reply resends the original bytes.
+
+`native-setup.json` records the installed profile and digests. A restarted
+runtime restores the standing context from that record, and checks the
+materialized native files against it before it rewrites any of them. A Claude
+runtime also checks its MCP, settings and system prompt files. A Codex runtime
+checks its rendered `config.toml`. Each turn of a prepared Session re-observes
+the installed setup before it runs.

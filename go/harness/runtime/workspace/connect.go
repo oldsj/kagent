@@ -21,3 +21,7 @@ func OpenController(apiURL, appName string) (*controllerclient.Client, Source, e
 	}
 	return client, FromTaskStore(taskstore.New(client, apia2a.RuntimeIdentityPath)), nil
 }
+
+// The runtime's task store serves preparations, so OpenController's Source is
+// always a PreparationSource.
+var _ PreparationStore = (*taskstore.Store)(nil)
