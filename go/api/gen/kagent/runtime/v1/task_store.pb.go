@@ -12,6 +12,7 @@ import (
 	v11 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -643,7 +644,13 @@ type TaskStoreServiceGetWorkspaceResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Unset when the Session has no workspace.
 	Workspace *v11.Workspace `protobuf:"bytes,1,opt,name=workspace,proto3" json:"workspace,omitempty"`
-	// Fields 2-4 are reserved for workspace preparation.
+	// True when turns wait for a confirmed workspace preparation.
+	PreparationRequired bool `protobuf:"varint,2,opt,name=preparation_required,json=preparationRequired,proto3" json:"preparation_required,omitempty"`
+	// True once the preparation is confirmed and turns may run.
+	PreparationReady bool `protobuf:"varint,3,opt,name=preparation_ready,json=preparationReady,proto3" json:"preparation_ready,omitempty"`
+	// The issued assignment, set until its result is committed. Reading it
+	// records the issue; a later read returns the same assignment.
+	Preparation *WorkspacePreparation `protobuf:"bytes,4,opt,name=preparation,proto3" json:"preparation,omitempty"`
 	// True for a fork created with a fresh conversation: before its first turn the
 	// runtime discards native conversation state restored from the checkpoint.
 	FreshConversation bool `protobuf:"varint,5,opt,name=fresh_conversation,json=freshConversation,proto3" json:"fresh_conversation,omitempty"`
@@ -688,6 +695,27 @@ func (x *TaskStoreServiceGetWorkspaceResponse) GetWorkspace() *v11.Workspace {
 	return nil
 }
 
+func (x *TaskStoreServiceGetWorkspaceResponse) GetPreparationRequired() bool {
+	if x != nil {
+		return x.PreparationRequired
+	}
+	return false
+}
+
+func (x *TaskStoreServiceGetWorkspaceResponse) GetPreparationReady() bool {
+	if x != nil {
+		return x.PreparationReady
+	}
+	return false
+}
+
+func (x *TaskStoreServiceGetWorkspaceResponse) GetPreparation() *WorkspacePreparation {
+	if x != nil {
+		return x.Preparation
+	}
+	return nil
+}
+
 func (x *TaskStoreServiceGetWorkspaceResponse) GetFreshConversation() bool {
 	if x != nil {
 		return x.FreshConversation
@@ -695,11 +723,387 @@ func (x *TaskStoreServiceGetWorkspaceResponse) GetFreshConversation() bool {
 	return false
 }
 
+// WorkspacePreparation is one assigned preparation action for this runtime.
+type WorkspacePreparation struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	SessionId       string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	ContextId       string                 `protobuf:"bytes,2,opt,name=context_id,json=contextId,proto3" json:"context_id,omitempty"`
+	CreateRequestId string                 `protobuf:"bytes,3,opt,name=create_request_id,json=createRequestId,proto3" json:"create_request_id,omitempty"`
+	ActionId        string                 `protobuf:"bytes,4,opt,name=action_id,json=actionId,proto3" json:"action_id,omitempty"`
+	RequestDigest   string                 `protobuf:"bytes,5,opt,name=request_digest,json=requestDigest,proto3" json:"request_digest,omitempty"`
+	ExecutionId     string                 `protobuf:"bytes,6,opt,name=execution_id,json=executionId,proto3" json:"execution_id,omitempty"`
+	ChallengeId     string                 `protobuf:"bytes,7,opt,name=challenge_id,json=challengeId,proto3" json:"challenge_id,omitempty"`
+	// 0 for the original effect; a positive sequence only observes it.
+	Sequence         uint64         `protobuf:"varint,8,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	GenerationId     string         `protobuf:"bytes,9,opt,name=generation_id,json=generationId,proto3" json:"generation_id,omitempty"`
+	Atespace         string         `protobuf:"bytes,10,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	ActorName        string         `protobuf:"bytes,11,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	ActorUid         string         `protobuf:"bytes,12,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	PreparedRevision string         `protobuf:"bytes,13,opt,name=prepared_revision,json=preparedRevision,proto3" json:"prepared_revision,omitempty"`
+	Workspace        *v11.Workspace `protobuf:"bytes,14,opt,name=workspace,proto3" json:"workspace,omitempty"`
+	DevelopmentImage string         `protobuf:"bytes,15,opt,name=development_image,json=developmentImage,proto3" json:"development_image,omitempty"`
+	Platform         string         `protobuf:"bytes,16,opt,name=platform,proto3" json:"platform,omitempty"`
+	PolicyIdentity   string         `protobuf:"bytes,17,opt,name=policy_identity,json=policyIdentity,proto3" json:"policy_identity,omitempty"`
+	PayloadImage     string         `protobuf:"bytes,18,opt,name=payload_image,json=payloadImage,proto3" json:"payload_image,omitempty"`
+	Provider         string         `protobuf:"bytes,19,opt,name=provider,proto3" json:"provider,omitempty"`
+	Schema           uint32         `protobuf:"varint,20,opt,name=schema,proto3" json:"schema,omitempty"`
+	CliVersion       string         `protobuf:"bytes,21,opt,name=cli_version,json=cliVersion,proto3" json:"cli_version,omitempty"`
+	Profile          string         `protobuf:"bytes,22,opt,name=profile,proto3" json:"profile,omitempty"`
+	SetupDigest      string         `protobuf:"bytes,23,opt,name=setup_digest,json=setupDigest,proto3" json:"setup_digest,omitempty"`
+	// Digests of the revision's bootstrap config_json and its mcp_servers.
+	ConfigDigest  string `protobuf:"bytes,24,opt,name=config_digest,json=configDigest,proto3" json:"config_digest,omitempty"`
+	McpDigest     string `protobuf:"bytes,25,opt,name=mcp_digest,json=mcpDigest,proto3" json:"mcp_digest,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WorkspacePreparation) Reset() {
+	*x = WorkspacePreparation{}
+	mi := &file_kagent_runtime_v1_task_store_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WorkspacePreparation) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WorkspacePreparation) ProtoMessage() {}
+
+func (x *WorkspacePreparation) ProtoReflect() protoreflect.Message {
+	mi := &file_kagent_runtime_v1_task_store_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WorkspacePreparation.ProtoReflect.Descriptor instead.
+func (*WorkspacePreparation) Descriptor() ([]byte, []int) {
+	return file_kagent_runtime_v1_task_store_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *WorkspacePreparation) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *WorkspacePreparation) GetContextId() string {
+	if x != nil {
+		return x.ContextId
+	}
+	return ""
+}
+
+func (x *WorkspacePreparation) GetCreateRequestId() string {
+	if x != nil {
+		return x.CreateRequestId
+	}
+	return ""
+}
+
+func (x *WorkspacePreparation) GetActionId() string {
+	if x != nil {
+		return x.ActionId
+	}
+	return ""
+}
+
+func (x *WorkspacePreparation) GetRequestDigest() string {
+	if x != nil {
+		return x.RequestDigest
+	}
+	return ""
+}
+
+func (x *WorkspacePreparation) GetExecutionId() string {
+	if x != nil {
+		return x.ExecutionId
+	}
+	return ""
+}
+
+func (x *WorkspacePreparation) GetChallengeId() string {
+	if x != nil {
+		return x.ChallengeId
+	}
+	return ""
+}
+
+func (x *WorkspacePreparation) GetSequence() uint64 {
+	if x != nil {
+		return x.Sequence
+	}
+	return 0
+}
+
+func (x *WorkspacePreparation) GetGenerationId() string {
+	if x != nil {
+		return x.GenerationId
+	}
+	return ""
+}
+
+func (x *WorkspacePreparation) GetAtespace() string {
+	if x != nil {
+		return x.Atespace
+	}
+	return ""
+}
+
+func (x *WorkspacePreparation) GetActorName() string {
+	if x != nil {
+		return x.ActorName
+	}
+	return ""
+}
+
+func (x *WorkspacePreparation) GetActorUid() string {
+	if x != nil {
+		return x.ActorUid
+	}
+	return ""
+}
+
+func (x *WorkspacePreparation) GetPreparedRevision() string {
+	if x != nil {
+		return x.PreparedRevision
+	}
+	return ""
+}
+
+func (x *WorkspacePreparation) GetWorkspace() *v11.Workspace {
+	if x != nil {
+		return x.Workspace
+	}
+	return nil
+}
+
+func (x *WorkspacePreparation) GetDevelopmentImage() string {
+	if x != nil {
+		return x.DevelopmentImage
+	}
+	return ""
+}
+
+func (x *WorkspacePreparation) GetPlatform() string {
+	if x != nil {
+		return x.Platform
+	}
+	return ""
+}
+
+func (x *WorkspacePreparation) GetPolicyIdentity() string {
+	if x != nil {
+		return x.PolicyIdentity
+	}
+	return ""
+}
+
+func (x *WorkspacePreparation) GetPayloadImage() string {
+	if x != nil {
+		return x.PayloadImage
+	}
+	return ""
+}
+
+func (x *WorkspacePreparation) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
+func (x *WorkspacePreparation) GetSchema() uint32 {
+	if x != nil {
+		return x.Schema
+	}
+	return 0
+}
+
+func (x *WorkspacePreparation) GetCliVersion() string {
+	if x != nil {
+		return x.CliVersion
+	}
+	return ""
+}
+
+func (x *WorkspacePreparation) GetProfile() string {
+	if x != nil {
+		return x.Profile
+	}
+	return ""
+}
+
+func (x *WorkspacePreparation) GetSetupDigest() string {
+	if x != nil {
+		return x.SetupDigest
+	}
+	return ""
+}
+
+func (x *WorkspacePreparation) GetConfigDigest() string {
+	if x != nil {
+		return x.ConfigDigest
+	}
+	return ""
+}
+
+func (x *WorkspacePreparation) GetMcpDigest() string {
+	if x != nil {
+		return x.McpDigest
+	}
+	return ""
+}
+
+type TaskStoreServiceCompleteWorkspacePreparationRequest struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	SessionId       string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Assignment      *WorkspacePreparation  `protobuf:"bytes,2,opt,name=assignment,proto3" json:"assignment,omitempty"`
+	Head            string                 `protobuf:"bytes,3,opt,name=head,proto3" json:"head,omitempty"`
+	Branch          string                 `protobuf:"bytes,4,opt,name=branch,proto3" json:"branch,omitempty"`
+	TransportDigest string                 `protobuf:"bytes,5,opt,name=transport_digest,json=transportDigest,proto3" json:"transport_digest,omitempty"`
+	NativeHook      string                 `protobuf:"bytes,6,opt,name=native_hook,json=nativeHook,proto3" json:"native_hook,omitempty"`
+	ObservedAt      *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=observed_at,json=observedAt,proto3" json:"observed_at,omitempty"`
+	// False reports a definite failure.
+	Confirmed     bool `protobuf:"varint,8,opt,name=confirmed,proto3" json:"confirmed,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TaskStoreServiceCompleteWorkspacePreparationRequest) Reset() {
+	*x = TaskStoreServiceCompleteWorkspacePreparationRequest{}
+	mi := &file_kagent_runtime_v1_task_store_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TaskStoreServiceCompleteWorkspacePreparationRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TaskStoreServiceCompleteWorkspacePreparationRequest) ProtoMessage() {}
+
+func (x *TaskStoreServiceCompleteWorkspacePreparationRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kagent_runtime_v1_task_store_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TaskStoreServiceCompleteWorkspacePreparationRequest.ProtoReflect.Descriptor instead.
+func (*TaskStoreServiceCompleteWorkspacePreparationRequest) Descriptor() ([]byte, []int) {
+	return file_kagent_runtime_v1_task_store_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *TaskStoreServiceCompleteWorkspacePreparationRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *TaskStoreServiceCompleteWorkspacePreparationRequest) GetAssignment() *WorkspacePreparation {
+	if x != nil {
+		return x.Assignment
+	}
+	return nil
+}
+
+func (x *TaskStoreServiceCompleteWorkspacePreparationRequest) GetHead() string {
+	if x != nil {
+		return x.Head
+	}
+	return ""
+}
+
+func (x *TaskStoreServiceCompleteWorkspacePreparationRequest) GetBranch() string {
+	if x != nil {
+		return x.Branch
+	}
+	return ""
+}
+
+func (x *TaskStoreServiceCompleteWorkspacePreparationRequest) GetTransportDigest() string {
+	if x != nil {
+		return x.TransportDigest
+	}
+	return ""
+}
+
+func (x *TaskStoreServiceCompleteWorkspacePreparationRequest) GetNativeHook() string {
+	if x != nil {
+		return x.NativeHook
+	}
+	return ""
+}
+
+func (x *TaskStoreServiceCompleteWorkspacePreparationRequest) GetObservedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ObservedAt
+	}
+	return nil
+}
+
+func (x *TaskStoreServiceCompleteWorkspacePreparationRequest) GetConfirmed() bool {
+	if x != nil {
+		return x.Confirmed
+	}
+	return false
+}
+
+type TaskStoreServiceCompleteWorkspacePreparationResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TaskStoreServiceCompleteWorkspacePreparationResponse) Reset() {
+	*x = TaskStoreServiceCompleteWorkspacePreparationResponse{}
+	mi := &file_kagent_runtime_v1_task_store_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TaskStoreServiceCompleteWorkspacePreparationResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TaskStoreServiceCompleteWorkspacePreparationResponse) ProtoMessage() {}
+
+func (x *TaskStoreServiceCompleteWorkspacePreparationResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_kagent_runtime_v1_task_store_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TaskStoreServiceCompleteWorkspacePreparationResponse.ProtoReflect.Descriptor instead.
+func (*TaskStoreServiceCompleteWorkspacePreparationResponse) Descriptor() ([]byte, []int) {
+	return file_kagent_runtime_v1_task_store_proto_rawDescGZIP(), []int{15}
+}
+
 var File_kagent_runtime_v1_task_store_proto protoreflect.FileDescriptor
 
 const file_kagent_runtime_v1_task_store_proto_rawDesc = "" +
 	"\n" +
-	"\"kagent/runtime/v1/task_store.proto\x12\x11kagent.runtime.v1\x1a\ta2a.proto\x1a\x1bbuf/validate/validate.proto\x1a\x1akagent/api/v1/common.proto\"K\n" +
+	"\"kagent/runtime/v1/task_store.proto\x12\x11kagent.runtime.v1\x1a\ta2a.proto\x1a\x1bbuf/validate/validate.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1akagent/api/v1/common.proto\"K\n" +
 	"\n" +
 	"StoredTask\x12#\n" +
 	"\x04task\x18\x01 \x01(\v2\x0f.lf.a2a.v1.TaskR\x04task\x12\x18\n" +
@@ -746,10 +1150,73 @@ const file_kagent_runtime_v1_task_store_proto_rawDesc = "" +
 	"\"TaskStoreServiceSettleTaskResponse\"N\n" +
 	"#TaskStoreServiceGetWorkspaceRequest\x12'\n" +
 	"\n" +
-	"session_id\x18\x01 \x01(\tB\b\xbaH\x05r\x03\xb0\x01\x01R\tsessionId\"\x8d\x01\n" +
+	"session_id\x18\x01 \x01(\tB\b\xbaH\x05r\x03\xb0\x01\x01R\tsessionId\"\xb8\x02\n" +
 	"$TaskStoreServiceGetWorkspaceResponse\x126\n" +
-	"\tworkspace\x18\x01 \x01(\v2\x18.kagent.api.v1.WorkspaceR\tworkspace\x12-\n" +
-	"\x12fresh_conversation\x18\x05 \x01(\bR\x11freshConversation2\xee\x05\n" +
+	"\tworkspace\x18\x01 \x01(\v2\x18.kagent.api.v1.WorkspaceR\tworkspace\x121\n" +
+	"\x14preparation_required\x18\x02 \x01(\bR\x13preparationRequired\x12+\n" +
+	"\x11preparation_ready\x18\x03 \x01(\bR\x10preparationReady\x12I\n" +
+	"\vpreparation\x18\x04 \x01(\v2'.kagent.runtime.v1.WorkspacePreparationR\vpreparation\x12-\n" +
+	"\x12fresh_conversation\x18\x05 \x01(\bR\x11freshConversation\"\xc7\t\n" +
+	"\x14WorkspacePreparation\x12'\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tB\b\xbaH\x05r\x03\xb0\x01\x01R\tsessionId\x12'\n" +
+	"\n" +
+	"context_id\x18\x02 \x01(\tB\b\xbaH\x05r\x03\xb0\x01\x01R\tcontextId\x126\n" +
+	"\x11create_request_id\x18\x03 \x01(\tB\n" +
+	"\xbaH\ar\x05\x10\x01\x18\x80\x01R\x0fcreateRequestId\x12'\n" +
+	"\taction_id\x18\x04 \x01(\tB\n" +
+	"\xbaH\ar\x05\x10\x01\x18\x80\x01R\bactionId\x12<\n" +
+	"\x0erequest_digest\x18\x05 \x01(\tB\x15\xbaH\x12r\x102\x0e^[a-f0-9]{64}$R\rrequestDigest\x12+\n" +
+	"\fexecution_id\x18\x06 \x01(\tB\b\xbaH\x05r\x03\xb0\x01\x01R\vexecutionId\x12+\n" +
+	"\fchallenge_id\x18\a \x01(\tB\b\xbaH\x05r\x03\xb0\x01\x01R\vchallengeId\x12%\n" +
+	"\bsequence\x18\b \x01(\x04B\t\xbaH\x062\x04\x18\xff\xff\x03R\bsequence\x12-\n" +
+	"\rgeneration_id\x18\t \x01(\tB\b\xbaH\x05r\x03\xb0\x01\x01R\fgenerationId\x12&\n" +
+	"\batespace\x18\n" +
+	" \x01(\tB\n" +
+	"\xbaH\ar\x05\x10\x01\x18\x80\x01R\batespace\x12)\n" +
+	"\n" +
+	"actor_name\x18\v \x01(\tB\n" +
+	"\xbaH\ar\x05\x10\x01\x18\x80\x01R\tactorName\x12'\n" +
+	"\tactor_uid\x18\f \x01(\tB\n" +
+	"\xbaH\ar\x05\x10\x01\x18\x80\x01R\bactorUid\x127\n" +
+	"\x11prepared_revision\x18\r \x01(\tB\n" +
+	"\xbaH\ar\x05\x10\x01\x18\x80\x01R\x10preparedRevision\x12>\n" +
+	"\tworkspace\x18\x0e \x01(\v2\x18.kagent.api.v1.WorkspaceB\x06\xbaH\x03\xc8\x01\x01R\tworkspace\x127\n" +
+	"\x11development_image\x18\x0f \x01(\tB\n" +
+	"\xbaH\ar\x05\x10\x01\x18\x80\x04R\x10developmentImage\x12&\n" +
+	"\bplatform\x18\x10 \x01(\tB\n" +
+	"\xbaH\ar\x05\x10\x01\x18\x80\x01R\bplatform\x123\n" +
+	"\x0fpolicy_identity\x18\x11 \x01(\tB\n" +
+	"\xbaH\ar\x05\x10\x01\x18\x80\x02R\x0epolicyIdentity\x12/\n" +
+	"\rpayload_image\x18\x12 \x01(\tB\n" +
+	"\xbaH\ar\x05\x10\x01\x18\x80\x04R\fpayloadImage\x12&\n" +
+	"\bprovider\x18\x13 \x01(\tB\n" +
+	"\xbaH\ar\x05\x10\x01\x18\x80\x01R\bprovider\x12\x16\n" +
+	"\x06schema\x18\x14 \x01(\rR\x06schema\x12+\n" +
+	"\vcli_version\x18\x15 \x01(\tB\n" +
+	"\xbaH\ar\x05\x10\x01\x18\x80\x01R\n" +
+	"cliVersion\x129\n" +
+	"\aprofile\x18\x16 \x01(\tB\x1f\xbaH\x1cr\x1aR\n" +
+	"supervisorR\x05childR\x05agentR\aprofile\x128\n" +
+	"\fsetup_digest\x18\x17 \x01(\tB\x15\xbaH\x12r\x102\x0e^[a-f0-9]{64}$R\vsetupDigest\x12:\n" +
+	"\rconfig_digest\x18\x18 \x01(\tB\x15\xbaH\x12r\x102\x0e^[a-f0-9]{64}$R\fconfigDigest\x124\n" +
+	"\n" +
+	"mcp_digest\x18\x19 \x01(\tB\x15\xbaH\x12r\x102\x0e^[a-f0-9]{64}$R\tmcpDigest\"\x86\x04\n" +
+	"3TaskStoreServiceCompleteWorkspacePreparationRequest\x12'\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tB\b\xbaH\x05r\x03\xb0\x01\x01R\tsessionId\x12O\n" +
+	"\n" +
+	"assignment\x18\x02 \x01(\v2'.kagent.runtime.v1.WorkspacePreparationB\x06\xbaH\x03\xc8\x01\x01R\n" +
+	"assignment\x120\n" +
+	"\x04head\x18\x03 \x01(\tB\x1c\xbaH\x19r\x17\x18(2\x13^(?:[a-f0-9]{40})?$R\x04head\x12 \n" +
+	"\x06branch\x18\x04 \x01(\tB\b\xbaH\x05r\x03\x18\x80\x02R\x06branch\x12G\n" +
+	"\x10transport_digest\x18\x05 \x01(\tB\x1c\xbaH\x19r\x17\x18@2\x13^(?:[a-f0-9]{64})?$R\x0ftransportDigest\x12U\n" +
+	"\vnative_hook\x18\x06 \x01(\tB4\xbaH1r/R\x00R\x14append_system_promptR\x15developer_instructionR\n" +
+	"nativeHook\x12C\n" +
+	"\vobserved_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampB\x06\xbaH\x03\xc8\x01\x01R\n" +
+	"observedAt\x12\x1c\n" +
+	"\tconfirmed\x18\b \x01(\bR\tconfirmed\"6\n" +
+	"4TaskStoreServiceCompleteWorkspacePreparationResponse2\xa0\a\n" +
 	"\x10TaskStoreService\x12y\n" +
 	"\n" +
 	"CreateTask\x124.kagent.runtime.v1.TaskStoreServiceCreateTaskRequest\x1a5.kagent.runtime.v1.TaskStoreServiceCreateTaskResponse\x12p\n" +
@@ -759,7 +1226,8 @@ const file_kagent_runtime_v1_task_store_proto_rawDesc = "" +
 	"\tListTasks\x123.kagent.runtime.v1.TaskStoreServiceListTasksRequest\x1a4.kagent.runtime.v1.TaskStoreServiceListTasksResponse\x12y\n" +
 	"\n" +
 	"SettleTask\x124.kagent.runtime.v1.TaskStoreServiceSettleTaskRequest\x1a5.kagent.runtime.v1.TaskStoreServiceSettleTaskResponse\x12\x7f\n" +
-	"\fGetWorkspace\x126.kagent.runtime.v1.TaskStoreServiceGetWorkspaceRequest\x1a7.kagent.runtime.v1.TaskStoreServiceGetWorkspaceResponseBEZCgithub.com/kagent-dev/kagent/go/api/gen/kagent/runtime/v1;runtimev1b\x06proto3"
+	"\fGetWorkspace\x126.kagent.runtime.v1.TaskStoreServiceGetWorkspaceRequest\x1a7.kagent.runtime.v1.TaskStoreServiceGetWorkspaceResponse\x12\xaf\x01\n" +
+	"\x1cCompleteWorkspacePreparation\x12F.kagent.runtime.v1.TaskStoreServiceCompleteWorkspacePreparationRequest\x1aG.kagent.runtime.v1.TaskStoreServiceCompleteWorkspacePreparationResponseBEZCgithub.com/kagent-dev/kagent/go/api/gen/kagent/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_kagent_runtime_v1_task_store_proto_rawDescOnce sync.Once
@@ -773,53 +1241,63 @@ func file_kagent_runtime_v1_task_store_proto_rawDescGZIP() []byte {
 	return file_kagent_runtime_v1_task_store_proto_rawDescData
 }
 
-var file_kagent_runtime_v1_task_store_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_kagent_runtime_v1_task_store_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
 var file_kagent_runtime_v1_task_store_proto_goTypes = []any{
-	(*StoredTask)(nil),                           // 0: kagent.runtime.v1.StoredTask
-	(*TaskStoreServiceCreateTaskRequest)(nil),    // 1: kagent.runtime.v1.TaskStoreServiceCreateTaskRequest
-	(*TaskStoreServiceCreateTaskResponse)(nil),   // 2: kagent.runtime.v1.TaskStoreServiceCreateTaskResponse
-	(*TaskStoreServiceGetTaskRequest)(nil),       // 3: kagent.runtime.v1.TaskStoreServiceGetTaskRequest
-	(*TaskStoreServiceGetTaskResponse)(nil),      // 4: kagent.runtime.v1.TaskStoreServiceGetTaskResponse
-	(*TaskStoreServiceUpdateTaskRequest)(nil),    // 5: kagent.runtime.v1.TaskStoreServiceUpdateTaskRequest
-	(*TaskStoreServiceUpdateTaskResponse)(nil),   // 6: kagent.runtime.v1.TaskStoreServiceUpdateTaskResponse
-	(*TaskStoreServiceListTasksRequest)(nil),     // 7: kagent.runtime.v1.TaskStoreServiceListTasksRequest
-	(*TaskStoreServiceListTasksResponse)(nil),    // 8: kagent.runtime.v1.TaskStoreServiceListTasksResponse
-	(*TaskStoreServiceSettleTaskRequest)(nil),    // 9: kagent.runtime.v1.TaskStoreServiceSettleTaskRequest
-	(*TaskStoreServiceSettleTaskResponse)(nil),   // 10: kagent.runtime.v1.TaskStoreServiceSettleTaskResponse
-	(*TaskStoreServiceGetWorkspaceRequest)(nil),  // 11: kagent.runtime.v1.TaskStoreServiceGetWorkspaceRequest
-	(*TaskStoreServiceGetWorkspaceResponse)(nil), // 12: kagent.runtime.v1.TaskStoreServiceGetWorkspaceResponse
-	(*v1.Task)(nil),              // 13: lf.a2a.v1.Task
-	(*v1.StreamResponse)(nil),    // 14: lf.a2a.v1.StreamResponse
-	(*v1.ListTasksRequest)(nil),  // 15: lf.a2a.v1.ListTasksRequest
-	(*v1.ListTasksResponse)(nil), // 16: lf.a2a.v1.ListTasksResponse
-	(*v11.Workspace)(nil),        // 17: kagent.api.v1.Workspace
+	(*StoredTask)(nil),                                           // 0: kagent.runtime.v1.StoredTask
+	(*TaskStoreServiceCreateTaskRequest)(nil),                    // 1: kagent.runtime.v1.TaskStoreServiceCreateTaskRequest
+	(*TaskStoreServiceCreateTaskResponse)(nil),                   // 2: kagent.runtime.v1.TaskStoreServiceCreateTaskResponse
+	(*TaskStoreServiceGetTaskRequest)(nil),                       // 3: kagent.runtime.v1.TaskStoreServiceGetTaskRequest
+	(*TaskStoreServiceGetTaskResponse)(nil),                      // 4: kagent.runtime.v1.TaskStoreServiceGetTaskResponse
+	(*TaskStoreServiceUpdateTaskRequest)(nil),                    // 5: kagent.runtime.v1.TaskStoreServiceUpdateTaskRequest
+	(*TaskStoreServiceUpdateTaskResponse)(nil),                   // 6: kagent.runtime.v1.TaskStoreServiceUpdateTaskResponse
+	(*TaskStoreServiceListTasksRequest)(nil),                     // 7: kagent.runtime.v1.TaskStoreServiceListTasksRequest
+	(*TaskStoreServiceListTasksResponse)(nil),                    // 8: kagent.runtime.v1.TaskStoreServiceListTasksResponse
+	(*TaskStoreServiceSettleTaskRequest)(nil),                    // 9: kagent.runtime.v1.TaskStoreServiceSettleTaskRequest
+	(*TaskStoreServiceSettleTaskResponse)(nil),                   // 10: kagent.runtime.v1.TaskStoreServiceSettleTaskResponse
+	(*TaskStoreServiceGetWorkspaceRequest)(nil),                  // 11: kagent.runtime.v1.TaskStoreServiceGetWorkspaceRequest
+	(*TaskStoreServiceGetWorkspaceResponse)(nil),                 // 12: kagent.runtime.v1.TaskStoreServiceGetWorkspaceResponse
+	(*WorkspacePreparation)(nil),                                 // 13: kagent.runtime.v1.WorkspacePreparation
+	(*TaskStoreServiceCompleteWorkspacePreparationRequest)(nil),  // 14: kagent.runtime.v1.TaskStoreServiceCompleteWorkspacePreparationRequest
+	(*TaskStoreServiceCompleteWorkspacePreparationResponse)(nil), // 15: kagent.runtime.v1.TaskStoreServiceCompleteWorkspacePreparationResponse
+	(*v1.Task)(nil),               // 16: lf.a2a.v1.Task
+	(*v1.StreamResponse)(nil),     // 17: lf.a2a.v1.StreamResponse
+	(*v1.ListTasksRequest)(nil),   // 18: lf.a2a.v1.ListTasksRequest
+	(*v1.ListTasksResponse)(nil),  // 19: lf.a2a.v1.ListTasksResponse
+	(*v11.Workspace)(nil),         // 20: kagent.api.v1.Workspace
+	(*timestamppb.Timestamp)(nil), // 21: google.protobuf.Timestamp
 }
 var file_kagent_runtime_v1_task_store_proto_depIdxs = []int32{
-	13, // 0: kagent.runtime.v1.StoredTask.task:type_name -> lf.a2a.v1.Task
-	13, // 1: kagent.runtime.v1.TaskStoreServiceCreateTaskRequest.task:type_name -> lf.a2a.v1.Task
+	16, // 0: kagent.runtime.v1.StoredTask.task:type_name -> lf.a2a.v1.Task
+	16, // 1: kagent.runtime.v1.TaskStoreServiceCreateTaskRequest.task:type_name -> lf.a2a.v1.Task
 	0,  // 2: kagent.runtime.v1.TaskStoreServiceGetTaskResponse.stored:type_name -> kagent.runtime.v1.StoredTask
-	13, // 3: kagent.runtime.v1.TaskStoreServiceUpdateTaskRequest.task:type_name -> lf.a2a.v1.Task
-	14, // 4: kagent.runtime.v1.TaskStoreServiceUpdateTaskRequest.event:type_name -> lf.a2a.v1.StreamResponse
-	15, // 5: kagent.runtime.v1.TaskStoreServiceListTasksRequest.request:type_name -> lf.a2a.v1.ListTasksRequest
-	16, // 6: kagent.runtime.v1.TaskStoreServiceListTasksResponse.result:type_name -> lf.a2a.v1.ListTasksResponse
-	17, // 7: kagent.runtime.v1.TaskStoreServiceGetWorkspaceResponse.workspace:type_name -> kagent.api.v1.Workspace
-	1,  // 8: kagent.runtime.v1.TaskStoreService.CreateTask:input_type -> kagent.runtime.v1.TaskStoreServiceCreateTaskRequest
-	3,  // 9: kagent.runtime.v1.TaskStoreService.GetTask:input_type -> kagent.runtime.v1.TaskStoreServiceGetTaskRequest
-	5,  // 10: kagent.runtime.v1.TaskStoreService.UpdateTask:input_type -> kagent.runtime.v1.TaskStoreServiceUpdateTaskRequest
-	7,  // 11: kagent.runtime.v1.TaskStoreService.ListTasks:input_type -> kagent.runtime.v1.TaskStoreServiceListTasksRequest
-	9,  // 12: kagent.runtime.v1.TaskStoreService.SettleTask:input_type -> kagent.runtime.v1.TaskStoreServiceSettleTaskRequest
-	11, // 13: kagent.runtime.v1.TaskStoreService.GetWorkspace:input_type -> kagent.runtime.v1.TaskStoreServiceGetWorkspaceRequest
-	2,  // 14: kagent.runtime.v1.TaskStoreService.CreateTask:output_type -> kagent.runtime.v1.TaskStoreServiceCreateTaskResponse
-	4,  // 15: kagent.runtime.v1.TaskStoreService.GetTask:output_type -> kagent.runtime.v1.TaskStoreServiceGetTaskResponse
-	6,  // 16: kagent.runtime.v1.TaskStoreService.UpdateTask:output_type -> kagent.runtime.v1.TaskStoreServiceUpdateTaskResponse
-	8,  // 17: kagent.runtime.v1.TaskStoreService.ListTasks:output_type -> kagent.runtime.v1.TaskStoreServiceListTasksResponse
-	10, // 18: kagent.runtime.v1.TaskStoreService.SettleTask:output_type -> kagent.runtime.v1.TaskStoreServiceSettleTaskResponse
-	12, // 19: kagent.runtime.v1.TaskStoreService.GetWorkspace:output_type -> kagent.runtime.v1.TaskStoreServiceGetWorkspaceResponse
-	14, // [14:20] is the sub-list for method output_type
-	8,  // [8:14] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	16, // 3: kagent.runtime.v1.TaskStoreServiceUpdateTaskRequest.task:type_name -> lf.a2a.v1.Task
+	17, // 4: kagent.runtime.v1.TaskStoreServiceUpdateTaskRequest.event:type_name -> lf.a2a.v1.StreamResponse
+	18, // 5: kagent.runtime.v1.TaskStoreServiceListTasksRequest.request:type_name -> lf.a2a.v1.ListTasksRequest
+	19, // 6: kagent.runtime.v1.TaskStoreServiceListTasksResponse.result:type_name -> lf.a2a.v1.ListTasksResponse
+	20, // 7: kagent.runtime.v1.TaskStoreServiceGetWorkspaceResponse.workspace:type_name -> kagent.api.v1.Workspace
+	13, // 8: kagent.runtime.v1.TaskStoreServiceGetWorkspaceResponse.preparation:type_name -> kagent.runtime.v1.WorkspacePreparation
+	20, // 9: kagent.runtime.v1.WorkspacePreparation.workspace:type_name -> kagent.api.v1.Workspace
+	13, // 10: kagent.runtime.v1.TaskStoreServiceCompleteWorkspacePreparationRequest.assignment:type_name -> kagent.runtime.v1.WorkspacePreparation
+	21, // 11: kagent.runtime.v1.TaskStoreServiceCompleteWorkspacePreparationRequest.observed_at:type_name -> google.protobuf.Timestamp
+	1,  // 12: kagent.runtime.v1.TaskStoreService.CreateTask:input_type -> kagent.runtime.v1.TaskStoreServiceCreateTaskRequest
+	3,  // 13: kagent.runtime.v1.TaskStoreService.GetTask:input_type -> kagent.runtime.v1.TaskStoreServiceGetTaskRequest
+	5,  // 14: kagent.runtime.v1.TaskStoreService.UpdateTask:input_type -> kagent.runtime.v1.TaskStoreServiceUpdateTaskRequest
+	7,  // 15: kagent.runtime.v1.TaskStoreService.ListTasks:input_type -> kagent.runtime.v1.TaskStoreServiceListTasksRequest
+	9,  // 16: kagent.runtime.v1.TaskStoreService.SettleTask:input_type -> kagent.runtime.v1.TaskStoreServiceSettleTaskRequest
+	11, // 17: kagent.runtime.v1.TaskStoreService.GetWorkspace:input_type -> kagent.runtime.v1.TaskStoreServiceGetWorkspaceRequest
+	14, // 18: kagent.runtime.v1.TaskStoreService.CompleteWorkspacePreparation:input_type -> kagent.runtime.v1.TaskStoreServiceCompleteWorkspacePreparationRequest
+	2,  // 19: kagent.runtime.v1.TaskStoreService.CreateTask:output_type -> kagent.runtime.v1.TaskStoreServiceCreateTaskResponse
+	4,  // 20: kagent.runtime.v1.TaskStoreService.GetTask:output_type -> kagent.runtime.v1.TaskStoreServiceGetTaskResponse
+	6,  // 21: kagent.runtime.v1.TaskStoreService.UpdateTask:output_type -> kagent.runtime.v1.TaskStoreServiceUpdateTaskResponse
+	8,  // 22: kagent.runtime.v1.TaskStoreService.ListTasks:output_type -> kagent.runtime.v1.TaskStoreServiceListTasksResponse
+	10, // 23: kagent.runtime.v1.TaskStoreService.SettleTask:output_type -> kagent.runtime.v1.TaskStoreServiceSettleTaskResponse
+	12, // 24: kagent.runtime.v1.TaskStoreService.GetWorkspace:output_type -> kagent.runtime.v1.TaskStoreServiceGetWorkspaceResponse
+	15, // 25: kagent.runtime.v1.TaskStoreService.CompleteWorkspacePreparation:output_type -> kagent.runtime.v1.TaskStoreServiceCompleteWorkspacePreparationResponse
+	19, // [19:26] is the sub-list for method output_type
+	12, // [12:19] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_kagent_runtime_v1_task_store_proto_init() }
@@ -835,7 +1313,7 @@ func file_kagent_runtime_v1_task_store_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kagent_runtime_v1_task_store_proto_rawDesc), len(file_kagent_runtime_v1_task_store_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   13,
+			NumMessages:   16,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
