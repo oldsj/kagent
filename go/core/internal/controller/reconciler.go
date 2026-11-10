@@ -19,6 +19,7 @@ import (
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/util/workqueue"
 
@@ -44,6 +45,7 @@ type AgentReconciliation struct {
 	EgressGrant        egress.Access // Requested union, including conflicting grants.
 	EgressIssues       []translator.EgressGrantIssue
 	EgressConflict     string
+	SessionIdleTTL     *database.SessionIdleTTLPolicy // Nil while the Harness is unresolved.
 	Target             *compiledTarget
 	Warnings           []string
 	CompilationFailure *ReconciliationFailure
@@ -109,6 +111,11 @@ func newAgentReconciliations(
 		if !agent.DeletionTimestamp.IsZero() {
 			return state
 		}
+		// Lifecycle policy still applies when unrelated inputs fail compilation.
+		harness := krt.FetchOne(ctx, collections.Harnesses, krt.FilterObjectName(types.NamespacedName{Namespace: agent.Namespace, Name: agent.Spec.HarnessRef.Name}))
+		if harness != nil {
+			state.SessionIdleTTL = resolvedSessionIdleTTL((*harness).Spec.SessionIdleTTL)
+		}
 		resolution := translator.CompileEgressPolicies(ctx, collections, agent.Namespace, agent.Spec.EgressPolicyRefs)
 		state.EgressGrant, state.EgressIssues = resolution.Access, resolution.Issues
 		state.Target, state.Warnings, state.CompilationFailure = compileAgentTarget(ctx, collections, agent, settings, images)
@@ -142,6 +149,20 @@ func newAgentReconciliations(
 		state.Golden, state.PreparationFailure = observed.Golden, observed.Failure
 		return state
 	}, opts.WithName("AgentReconciliations")...)
+}
+
+// resolvedSessionIdleTTL distinguishes an omitted override from an unresolved
+// Harness, rounding positive durations up to whole seconds.
+func resolvedSessionIdleTTL(override *metav1.Duration) *database.SessionIdleTTLPolicy {
+	policy := &database.SessionIdleTTLPolicy{}
+	if override != nil {
+		seconds := int64(override.Duration / time.Second)
+		if override.Duration%time.Second != 0 {
+			seconds++
+		}
+		policy.Seconds = &seconds
+	}
+	return policy
 }
 
 func compileAgentTarget(ctx krt.HandlerContext, collections translator.Collections, agent *kagentv1alpha3.Agent, settings *configv1.RuntimeDefaultsConfig, images *configv1.HarnessImagesConfig) (*compiledTarget, []string, *ReconciliationFailure) {
@@ -395,6 +416,7 @@ func (r *Reconciler) reconcileAgent(ctx context.Context, key string) error {
 	definition := database.AgentDefinition{
 		Namespace: state.Agent.Namespace, AgentName: state.Agent.Name,
 		AgentUID: string(state.Agent.UID), DesiredRevision: state.desiredRevision(), EgressGrant: grants,
+		SessionIdleTTL: state.SessionIdleTTL,
 	}
 
 	// Store the desired edge before creating compute so a concurrent collector

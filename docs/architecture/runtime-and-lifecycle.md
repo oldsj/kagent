@@ -125,8 +125,14 @@ Substrate settlement and the complete multi-replica rollout remain acceptance wo
 Sessions expire after seven days without task activity by default, using the same
 bounded deletion workflow as Sandboxes. `config.sessions.idleTtl` in Helm configures
 the controller. Values use protobuf durations (`604800s` for seven days,
-`2592000s` for thirty); `0s` disables the worker, including retries, and negative values
-are rejected. There is no per-agent override or maximum TTL.
+`2592000s` for thirty); `0s` disables default admission, and negative values are
+rejected. `Harness.spec.sessionIdleTTL` overrides the default for every Agent using
+that Harness: omitted inherits it, `0s` never expires, and a positive duration
+replaces it, even when the controller default is zero. Subsecond durations round up
+to the next second. The override is mutable lifecycle policy stored on
+`agent_definition`, so edits apply to existing Sessions without changing their pinned
+runtime revision. While the Harness cannot be resolved, the last stored override
+stays in force. There is no maximum TTL beyond the duration type's range.
 
 Idle time is measured from the later of session creation and the latest stored
 A2A event's database timestamp. Forks retain original event timestamps, so their

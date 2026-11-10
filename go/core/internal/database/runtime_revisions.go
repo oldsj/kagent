@@ -23,24 +23,33 @@ import (
 // Kubernetes Agent identity. Updating an existing definition revives it if retired and
 // preserves its latest successful revision. It atomically retires older identities
 // at the same names and rejects revisions whose deletion has started. Grants
-// are canonicalized before writing; errors may include an uncertain commit outcome.
+// are canonicalized before writing. An unresolved idle TTL policy preserves the
+// stored value; a resolved one replaces it, including NULL for no override.
+// Errors may include an uncertain commit outcome.
 func (c *Client) UpsertAgentDefinition(ctx context.Context, definition AgentDefinition) error {
 	grants, err := canonicalStoredGrants(definition.EgressGrant)
 	if err != nil {
 		return fmt.Errorf("validate source grants: %w", err)
+	}
+	var ttlSeconds *int64
+	if definition.SessionIdleTTL != nil {
+		ttlSeconds = definition.SessionIdleTTL.Seconds
 	}
 	return c.withTx(ctx, func(tx pgx.Tx) error {
 		if err := retireAgentIdentities(ctx, tx, definition.Namespace, definition.AgentName, definition.AgentUID); err != nil {
 			return err
 		}
 		if err := execSQL(ctx, tx, `
-			INSERT INTO agent_definition (namespace, agent_name, agent_uid, desired_revision, grant_destinations, grant_credentials)
-			VALUES ($1, $2, $3, $4, $5, $6)
+			INSERT INTO agent_definition (namespace, agent_name, agent_uid, desired_revision, grant_destinations, grant_credentials, session_idle_ttl_seconds)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
 			ON CONFLICT (namespace, agent_uid) DO UPDATE SET
 			    agent_name = EXCLUDED.agent_name, desired_revision = EXCLUDED.desired_revision,
 			    grant_destinations = EXCLUDED.grant_destinations, grant_credentials = EXCLUDED.grant_credentials,
+			    session_idle_ttl_seconds = CASE WHEN $8 THEN EXCLUDED.session_idle_ttl_seconds
+			        ELSE agent_definition.session_idle_ttl_seconds END,
 			    retired_at = NULL, updated_at = NOW()
-		`, definition.Namespace, definition.AgentName, definition.AgentUID, definition.DesiredRevision, grants.Destinations, grants.Credentials); err != nil {
+		`, definition.Namespace, definition.AgentName, definition.AgentUID, definition.DesiredRevision, grants.Destinations, grants.Credentials,
+			ttlSeconds, definition.SessionIdleTTL != nil); err != nil {
 			return err
 		}
 
