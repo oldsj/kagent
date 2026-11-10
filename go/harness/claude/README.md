@@ -165,6 +165,12 @@ over stdio; it opens no listener.
   reports before serving a Session. Until the control-plane client lands on
   this branch the reporter only logs.
 
+The deferral and replay behavior the driver depends on can be checked against
+a real CLI and bridge, offline against a fake model API: set
+`KAGENT_TEST_CLAUDE_CLI` to the pinned CLI and `KAGENT_TEST_CLAUDE_SDK_RUNNER`
+to a `runner.mjs` beside an installed SDK, then run
+`go test ./harness/claude/internal/driver -run TestRealBridge`.
+
 The SDK version in [`sdk-runner/package.json`](sdk-runner/package.json) must be
 the release built for the pinned Claude CLI (SDK `0.3.N` with Claude Code
 `2.1.N`); a test enforces it, and the bridge drives the image's CLI rather than
