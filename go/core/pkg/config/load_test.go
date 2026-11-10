@@ -236,3 +236,31 @@ func TestYAMLConfigReadsOnlyFirstDocument(t *testing.T) {
 	require.NoError(t, config.Decode([]byte("logging: {level: debug}\n---\n["), cfg))
 	require.Equal(t, "debug", cfg.GetLogging().GetLevel())
 }
+
+func TestRuntimePayloads(t *testing.T) {
+	const payload = "registry.example/runtime-claude@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+	for _, tc := range []struct {
+		name, input, wantErr string
+	}{
+		{name: "a digest-pinned payload per provider and platform", input: "runtimePayloads: {payloads: [{provider: claude, platform: linux/arm64, image: '" + payload + "', cliVersion: 2.1.285}]}"},
+		{name: "a tag-pinned payload", input: "runtimePayloads: {payloads: [{provider: claude, platform: linux/arm64, image: 'registry.example/runtime:latest', cliVersion: 2.1.285}]}", wantErr: "image"},
+		{name: "an unsupported provider", input: "runtimePayloads: {payloads: [{provider: kagent, platform: linux/arm64, image: '" + payload + "', cliVersion: 2.1.285}]}", wantErr: "provider"},
+		{name: "a registry allowlist entry with a path", input: "server: {auth: {sessionPolicy: {namespace: kagent, agents: [claude], developmentEnvironmentRegistries: ['registry.example/team']}}}", wantErr: "development_environment_registries"},
+	} {
+		t.Run("Given "+tc.name+", when the controller config is validated, assert the expected outcome", func(t *testing.T) {
+			cfg := &configv1.ControllerConfig{}
+			require.NoError(t, config.Decode([]byte(tc.input), cfg))
+			config.DefaultController(cfg)
+			setLogins(cfg)
+
+			err := config.Validate(cfg)
+
+			if tc.wantErr != "" {
+				require.ErrorContains(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, "2.1.285", cfg.GetRuntimePayloads().GetPayloads()[0].GetCliVersion())
+		})
+	}
+}

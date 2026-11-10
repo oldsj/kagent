@@ -42,6 +42,8 @@ type Policy struct {
 	namespace string
 	agents    []string
 	rules     []credentialRule
+	// registries are exact host[:port] authorities development images may use.
+	registries []string
 }
 
 // New validates the configured policy. A Git rule must be exactly the trusted
@@ -65,7 +67,12 @@ func New(config *configv1.SessionPolicy) (*Policy, error) {
 			return nil, errors.New("session policy has a duplicate cleartext MCP origin")
 		}
 	}
-	policy := &Policy{namespace: config.GetNamespace(), agents: slices.Clone(config.GetAgents())}
+	for i, registry := range config.GetDevelopmentEnvironmentRegistries() {
+		if !validRegistry(registry) || slices.Contains(config.GetDevelopmentEnvironmentRegistries()[:i], registry) {
+			return nil, errors.New("session policy development environment registries must be unique exact host[:port] authorities")
+		}
+	}
+	policy := &Policy{namespace: config.GetNamespace(), agents: slices.Clone(config.GetAgents()), registries: slices.Clone(config.GetDevelopmentEnvironmentRegistries())}
 	for _, rule := range config.GetCredentials() {
 		origin, err := url.Parse(rule.GetOrigin())
 		_, patternErr := path.Match(rule.GetSecretNamePattern(), "probe")
@@ -154,6 +161,28 @@ func (p *Policy) CheckCreateSession(ctx context.Context, agent *apiv1.ResourceRe
 			return ErrDenied
 		}
 		seen[key] = true
+	}
+	return nil
+}
+
+// validRegistry accepts a bare host with an optional port: no scheme, path,
+// credentials or wildcard.
+func validRegistry(registry string) bool {
+	parsed, err := url.Parse("https://" + registry)
+	return err == nil && registry != "" && parsed.Host == registry && parsed.User == nil && parsed.Path == "" &&
+		!strings.ContainsAny(registry, "*/@") && parsed.Hostname() != ""
+}
+
+// CheckDevelopmentEnvironment admits a development image only from an exact
+// allowlisted registry for an allowlisted Agent. Internal controller work is
+// not exempt, and an empty registry list denies every selection.
+func (p *Policy) CheckDevelopmentEnvironment(_ context.Context, agent *apiv1.ResourceReference, environment *apiv1.DevelopmentEnvironment) error {
+	if agent.GetNamespace() != p.namespace || !slices.Contains(p.agents, agent.GetName()) {
+		return ErrDenied
+	}
+	registry, _, found := strings.Cut(environment.GetImage(), "/")
+	if !found || !slices.Contains(p.registries, registry) {
+		return ErrDenied
 	}
 	return nil
 }

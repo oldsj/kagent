@@ -31,6 +31,7 @@ const (
 
 type store interface {
 	CreateSession(context.Context, *apiv1.Session, string) (*apiv1.Session, bool, error)
+	GetSessionRequest(ctx context.Context, creator, requestID string) (*apiv1.Session, error)
 	GetSession(context.Context, string, string) (*apiv1.Session, error)
 	GetSessionByID(context.Context, string) (*apiv1.Session, error)
 	ListSessions(context.Context, database.SessionQuery) ([]*apiv1.Session, error)
@@ -70,6 +71,8 @@ type Service struct {
 	workflow     sessionWorkflow
 	shareMaxTTL  time.Duration
 	createPolicy CreatePolicy
+
+	environmentPreparer EnvironmentPreparer
 }
 
 // CreatePolicy is the operator's allowlist for Session creation. It decides
@@ -77,6 +80,9 @@ type Service struct {
 // authorizer's job.
 type CreatePolicy interface {
 	CheckCreateSession(ctx context.Context, agent *apiv1.ResourceReference, credentials []*apiv1.SessionCredential) error
+	// CheckDevelopmentEnvironment admits a development image selection. It
+	// applies to every caller, internal controller work included.
+	CheckDevelopmentEnvironment(ctx context.Context, agent *apiv1.ResourceReference, environment *apiv1.DevelopmentEnvironment) error
 }
 
 // WithCreatePolicy refuses Session creation the policy does not admit. Without
@@ -112,6 +118,13 @@ func NewService(store store, authorizer auth.Authorizer, workflow sessionWorkflo
 // check out a repository before the first turn; its host must be one of the
 // Agent's Git origins.
 func (s *Service) Create(ctx context.Context, agent *apiv1.ResourceReference, requestID, name string, requested *apiv1.Workspace, credentials ...*apiv1.SessionCredential) (*apiv1.Session, error) {
+	return s.CreateWithEnvironment(ctx, agent, requestID, name, requested, nil, credentials...)
+}
+
+// CreateWithEnvironment is Create with an optional development environment.
+// A selection runs the Agent's harness from the operator's runtime payload in
+// the selected image; nil keeps the Agent's own revision.
+func (s *Service) CreateWithEnvironment(ctx context.Context, agent *apiv1.ResourceReference, requestID, name string, requested *apiv1.Workspace, environment *apiv1.DevelopmentEnvironment, credentials ...*apiv1.SessionCredential) (*apiv1.Session, error) {
 	if err := validateCreate(agent, requestID); err != nil {
 		return nil, err
 	}
@@ -144,10 +157,17 @@ func (s *Service) Create(ctx context.Context, agent *apiv1.ResourceReference, re
 	if err != nil {
 		return nil, serviceerrors.NewInternal("Failed to generate Session identifier", err)
 	}
-	session, _, err := s.store.CreateSession(ctx, &apiv1.Session{
+	request := &apiv1.Session{
 		Id: id.String(), Creator: creator, Name: name, Agent: &apiv1.AgentProvenance{Ref: agent},
 		Workspace: requested, Credentials: credentials,
-	}, requestID)
+	}
+	if environment != nil {
+		if request.PreparedRevision, request.RuntimeComposition, err = s.prepareEnvironment(ctx, agent, creator, requestID, environment); err != nil {
+			return nil, err
+		}
+		request.DevelopmentEnvironment = environment
+	}
+	session, _, err := s.store.CreateSession(ctx, request, requestID)
 	if errors.Is(err, database.ErrIdempotencyConflict) {
 		return nil, serviceerrors.NewAlreadyExists("request_id was already used for a different Session", err)
 	}
@@ -162,6 +182,9 @@ func (s *Service) Create(ctx context.Context, agent *apiv1.ResourceReference, re
 	}
 	if errors.Is(err, database.ErrNotFound) {
 		return nil, serviceerrors.NewFailedPrecondition("Agent does not have a ready prepared revision", err)
+	}
+	if environment != nil && errors.Is(err, database.ErrConflict) {
+		return nil, serviceerrors.NewAborted("Agent revision changed while preparing the development environment; retry", err)
 	}
 	if err != nil {
 		return nil, serviceerrors.NewInternal("Failed to reserve Session", err)

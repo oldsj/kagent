@@ -2,6 +2,7 @@ package controlauth_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -119,4 +120,71 @@ func TestCheckCreateSession(t *testing.T) {
 		require.ErrorIs(t, bare.CheckCreateSession(caller(), agent, []*apiv1.SessionCredential{mcp}), controlauth.ErrDenied)
 		require.NoError(t, bare.CheckCreateSession(caller(), agent, nil))
 	})
+}
+
+const devImage = "/dev@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+
+func TestCheckDevelopmentEnvironment(t *testing.T) {
+	newPolicy := func(t *testing.T, registries ...string) *controlauth.Policy {
+		t.Helper()
+		config := validConfig()
+		config.DevelopmentEnvironmentRegistries = registries
+		policy, err := controlauth.New(config)
+		require.NoError(t, err)
+		return policy
+	}
+	agent := &apiv1.ResourceReference{Namespace: "kagent", Name: "claude"}
+	environment := func(image string) *apiv1.DevelopmentEnvironment {
+		return &apiv1.DevelopmentEnvironment{Image: image, Platform: "linux/arm64", PolicyIdentity: "project/v1"}
+	}
+
+	t.Run("Given an allowlisted registry, when an allowlisted Agent selects an image from it, assert that the selection is admitted", func(t *testing.T) {
+		policy := newPolicy(t, "registry.example:5000")
+
+		err := policy.CheckDevelopmentEnvironment(caller(), agent, environment("registry.example:5000"+devImage))
+
+		require.NoError(t, err)
+	})
+
+	scenarios := []struct {
+		name       string
+		registries []string
+		agent      *apiv1.ResourceReference
+		image      string
+	}{
+		{"no allowlisted registries", nil, agent, "registry.example" + devImage},
+		{"an image from another registry", []string{"registry.example"}, agent, "other.example" + devImage},
+		{"an image on the allowlisted host with another port", []string{"registry.example"}, agent, "registry.example:5000" + devImage},
+		{"an image without a registry authority", []string{"registry.example"}, agent, "dev@sha256:1111111111111111111111111111111111111111111111111111111111111111"},
+		{"an Agent outside the allowlist", []string{"registry.example"}, &apiv1.ResourceReference{Namespace: "kagent", Name: "other"}, "registry.example" + devImage},
+	}
+	for _, scenario := range scenarios {
+		t.Run("Given "+scenario.name+", when a development image is selected, assert that the selection is denied", func(t *testing.T) {
+			policy := newPolicy(t, scenario.registries...)
+
+			err := policy.CheckDevelopmentEnvironment(caller(), scenario.agent, environment(scenario.image))
+
+			require.ErrorIs(t, err, controlauth.ErrDenied)
+		})
+	}
+
+	t.Run("Given no allowlisted registries, when internal controller work selects an image, assert that it is not exempt", func(t *testing.T) {
+		policy := newPolicy(t)
+		internal := auth.AuthSessionTo(context.Background(), auth.ControlPlaneSession{})
+
+		err := policy.CheckDevelopmentEnvironment(internal, agent, environment("registry.example"+devImage))
+
+		require.ErrorIs(t, err, controlauth.ErrDenied)
+	})
+
+	for _, registry := range []string{"https://registry.example", "registry.example/team", "user@registry.example", "*.example", ""} {
+		t.Run("Given a registry entry "+strings.ReplaceAll(registry, "/", "∕")+", when the policy is loaded, assert that it is rejected", func(t *testing.T) {
+			config := validConfig()
+			config.DevelopmentEnvironmentRegistries = []string{registry}
+
+			_, err := controlauth.New(config)
+
+			require.Error(t, err)
+		})
+	}
 }

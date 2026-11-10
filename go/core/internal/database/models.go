@@ -78,6 +78,17 @@ type RuntimeRevision struct {
 	ActorTemplateName       string
 	ActorTemplateUID        string
 	ActorTemplateSpecDigest string
+	// Composition and BaseRevision are set together for a composed variant of
+	// BaseRevision; both are empty for an Agent's own revisions.
+	Composition  *RevisionComposition
+	BaseRevision string
+}
+
+// RevisionComposition is the development image and runtime payload a composed
+// variant revision runs. Sessions pinned to the variant report both.
+type RevisionComposition struct {
+	Environment *apiv1.DevelopmentEnvironment
+	Runtime     *apiv1.RuntimeComposition
 }
 
 // SessionQuery narrows a page of sessions to an optional Agent.

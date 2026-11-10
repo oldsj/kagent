@@ -77,6 +77,11 @@ func (c *Client) ForkSession(ctx context.Context, checkpointID, userID, requestI
 		if err != nil {
 			return fmt.Errorf("get checkpoint context: %w", err)
 		}
+		// A fork runs the same development image and payload as its source.
+		_, composition, err := getRevisionComposition(ctx, tx, *checkpoint.PreparedRevision)
+		if err != nil {
+			return err
+		}
 		historyID := uuid.New()
 		now := timestamppb.Now()
 		// Session credentials identify the source binding and must not be inherited.
@@ -91,6 +96,9 @@ func (c *Client) ForkSession(ctx context.Context, checkpointID, userID, requestI
 			State:            apiv1.RuntimeState_RUNTIME_STATE_CREATING,
 			Operation:        apiv1.RuntimeOperation_RUNTIME_OPERATION_CREATE,
 			CreatedAt:        now, UpdatedAt: now,
+		}
+		if composition != nil {
+			session.DevelopmentEnvironment, session.RuntimeComposition = composition.Environment, composition.Runtime
 		}
 		row, err = insertSessionRecords(ctx, tx, session, requestID, historyID, &checkpoint.ID)
 		if err != nil {

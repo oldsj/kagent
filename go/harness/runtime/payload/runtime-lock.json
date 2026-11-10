@@ -1,0 +1,4 @@
+{
+  "claude": {"version": "2.1.285", "checksums": {"amd64": "7b4414af1bc06eb6d91730759bd01c4c02a4976d0b8526237e9a6d8c33eaf102", "arm64": "31efc4136bc678575f4c6730e248d34f89dbfea0468be1c5d012af199cd62ee8"}},
+  "codex": {"version": "0.161.0", "checksums": {"amd64": "04d8ab9dbcb9df0edf3c67dca5072a374babfdf762a9bc4ae649ae140b8e2cf0", "arm64": "3c02e2ae34be0d06e62557e98fc5c0a783bec5a2fed406fe00e565803bf84ee8"}}
+}

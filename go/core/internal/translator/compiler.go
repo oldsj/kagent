@@ -177,6 +177,10 @@ func (c *Compiler) compileConfiguration(ctx context.Context, agent *v1alpha3.Age
 	result.CPU = c.settings.GetCpu()
 	result.Memory = c.settings.GetMemory()
 	result.SandboxClass = (*workerPool).Spec.DefaultSandboxClass()
+	result.Harness = harnessType(harness)
+	if template := (*workerPool).Spec.Template; template != nil {
+		result.WorkerPoolPlatform = WorkerPoolPlatform(template.NodeSelector)
+	}
 	// Shared agents and plugin selections can contribute the same image.
 	// Normalize once after the complete harness configuration has been compiled.
 	slices.Sort(result.SkillImages)

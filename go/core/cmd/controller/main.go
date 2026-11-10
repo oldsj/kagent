@@ -26,6 +26,7 @@ import (
 	"syscall"
 
 	configv1 "github.com/kagent-dev/kagent/go/api/gen/kagent/config/v1"
+	"github.com/kagent-dev/kagent/go/core/internal/controller"
 	authimpl "github.com/kagent-dev/kagent/go/core/internal/httpserver/auth"
 	"github.com/kagent-dev/kagent/go/core/internal/service/controlauth"
 	"github.com/kagent-dev/kagent/go/core/pkg/app"
@@ -64,6 +65,9 @@ func run(path string, check bool, level string) error {
 		if _, err := controlauth.New(policy); err != nil {
 			return fmt.Errorf("invalid server.auth.session_policy: %w", err)
 		}
+	}
+	if err := controller.ValidateRuntimePayloads(cfg.GetRuntimePayloads()); err != nil {
+		return fmt.Errorf("invalid runtime_payloads: %w", err)
 	}
 	config.ResolveControllerPaths(cfg, path)
 	paths := []string{cfg.GetDatabase().GetReadWrite().GetUrlFile(), cfg.GetPush().GetSigningPrivateKeyFile()}

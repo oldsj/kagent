@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [kagent-controller, kagent-controller-dev, kagent-claude-harness, kagent-codex-harness]
+        image: [kagent-controller, kagent-controller-dev, kagent-claude-harness, kagent-codex-harness, kagent-claude-runtime, kagent-codex-runtime]
         arch: [amd64, arm64]
         include:
           - arch: amd64
@@ -40,6 +40,15 @@ jobs:
           - image: kagent-codex-harness
             file: go/harness/codex/Dockerfile
             build-args: ''
+          # Runtime payloads (go/harness/runtime/payload) that composed Sessions
+          # mount at /opt/mainloop-runtime; the operator payload catalog pins
+          # their digests per provider and platform.
+          - image: kagent-claude-runtime
+            file: go/harness/runtime/payload/Dockerfile
+            build-args: PROVIDER=claude
+          - image: kagent-codex-runtime
+            file: go/harness/runtime/payload/Dockerfile
+            build-args: PROVIDER=codex
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -113,7 +122,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [kagent-controller, kagent-controller-dev, kagent-claude-harness, kagent-codex-harness]
+        image: [kagent-controller, kagent-controller-dev, kagent-claude-harness, kagent-codex-harness, kagent-claude-runtime, kagent-codex-runtime]
     steps:
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0

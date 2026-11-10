@@ -161,6 +161,13 @@ config:
   # Requires kubernetes.leaderElection.
   # credentialRefresh:
   #   chatgptImage: ghcr.io/oldsj/kagent-codex-harness@sha256:...
+  # Runtime payloads composed with a caller-selected development image: the
+  # Agent's harness CLI and launcher, mounted read-only at /opt/mainloop-runtime.
+  # One digest-pinned image per provider (claude or codex) and platform; the
+  # Agent's WorkerPool must pin kubernetes.io/arch to that platform.
+  # runtimePayloads:
+  #   payloads:
+  #     - {provider: claude, platform: linux/arm64, image: "ghcr.io/oldsj/kagent-claude-runtime@sha256:...", cliVersion: 2.1.285}
   server:
     auth:
       # insecure, trusted-proxy, or service-account. service-account accepts only
@@ -188,6 +195,10 @@ config:
       #     - {purpose: git-read, origin: "http://mainloop-git-read.mainloop.svc.cluster.local", secretNamePattern: "mainloop-git-read-*", key: authorization, header: authorization}
       #     - {purpose: git-push, origin: "http://mainloop-git-push.mainloop.svc.cluster.local", secretNamePattern: "mainloop-git-push-*", key: authorization, header: authorization}
       #     - {purpose: mcp, origin: "http://mainloop-mcp.mainloop.svc.cluster.local", secretNamePattern: "mainloop-mcp-*", key: authorization, header: authorization}
+      #   # Exact host[:port] registries whose digest-pinned images callers may
+      #   # select as a Session development environment. Empty denies selection,
+      #   # including for internal controller work. Requires runtimePayloads.
+      #   developmentEnvironmentRegistries: [registry.example.com]
     # Serve gRPC reflection for tools such as grpcurl. Callers must pass the
     # configured authentication. `kagent install` enables it.
     grpcReflection: false
