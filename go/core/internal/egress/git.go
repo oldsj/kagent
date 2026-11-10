@@ -43,9 +43,13 @@ func gitRestrictedOrigin(origin string) bool {
 	if err != nil || u.Hostname() == "" {
 		return true
 	}
-	// A leftmost-label wildcard covers every host under its suffix.
-	host := strings.TrimPrefix(workspace.NormalizeHost(u.Hostname()), "*.")
-	return workspace.DirectGitHubHost(host) || workspace.GitProxyHost(host)
+	host := workspace.NormalizeHost(u.Hostname())
+	// A leftmost-label wildcard covers every host under its suffix, so it is
+	// restricted when that suffix reaches GitHub or any Git proxy listener.
+	if suffix, ok := strings.CutPrefix(host, "*."); ok {
+		return workspace.DirectGitHubHost(suffix) || workspace.CoversGitProxyHost(suffix)
+	}
+	return workspace.DirectGitHubHost(host) || workspace.IsGitProxyHost(host)
 }
 
 func legacyGitCredential(uri string) bool {

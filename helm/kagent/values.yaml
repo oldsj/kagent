@@ -185,7 +185,11 @@ config:
       # Allowlist for Session creation by API callers: which Agents they may use
       # and which Secrets they may bind as Session credentials. Without it, any
       # authenticated caller may bind any Secret key in the Agent's namespace.
-      # git-read and git-push rules must be exactly the trusted proxy tuples.
+      # git-read and git-push rules must be exactly a known Mainloop Git
+      # instance's proxy tuples (instances: mainloop, mainloop-dev). Listing an
+      # instance's tuples approves it; a mainloop-dev instance uses
+      # http://mainloop-git-{read,push}.mainloop-dev.svc.cluster.local with
+      # secretNamePattern mainloop-dev-git-{read,push}-*.
       # sessionPolicy:
       #   namespace: kagent
       #   agents: [claude, codex]
