@@ -161,6 +161,31 @@ func TestServiceCreateUsesAuthenticatedOwnerAndGeneratedUUID(t *testing.T) {
 	}
 }
 
+type refusingCreatePolicy struct{ err error }
+
+func (p refusingCreatePolicy) CheckCreateSession(context.Context, *apiv1.ResourceReference, []*apiv1.SessionCredential) error {
+	return p.err
+}
+
+func TestServiceCreateAppliesTheCreatePolicyBeforeReservingAnything(t *testing.T) {
+	store := &serviceTestStore{}
+	service := NewService(store, serviceTestAuthorizer{}, serviceTestWorkflow{}, WithCreatePolicy(refusingCreatePolicy{err: errors.New("not on the allowlist")}))
+
+	_, err := service.Create(serviceTestContext("alice"), &apiv1.ResourceReference{Namespace: "team-a", Name: "assistant"}, "request-1", "", nil)
+
+	if !serviceerrors.IsCode(err, serviceerrors.CodePermissionDenied) {
+		t.Fatalf("Create() error = %v, want permission denied", err)
+	}
+	if store.createInput != nil {
+		t.Fatalf("a refused Session was reserved: %v", store.createInput)
+	}
+
+	admitted := NewService(store, serviceTestAuthorizer{}, serviceTestWorkflow{}, WithCreatePolicy(refusingCreatePolicy{}))
+	if _, err := admitted.Create(serviceTestContext("alice"), &apiv1.ResourceReference{Namespace: "team-a", Name: "assistant"}, "request-1", "", nil); err != nil {
+		t.Fatalf("Create() with an admitting policy = %v", err)
+	}
+}
+
 func TestServiceCreateMapsStoreErrors(t *testing.T) {
 	for _, test := range []struct {
 		name string

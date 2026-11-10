@@ -454,7 +454,30 @@ neither Git listener. Both proxy fields absent retain the standalone direct Git
 configuration. Production activation must select the proxy profile on every
 Git-enabled Harness and retire direct revisions deliberately.
 
-This check covers what a revision compiles to. It does not cover origins a
-later `EgressPolicy` grant adds, and it does not restrict which Secrets a caller
-may bind as Session credentials for the proxy origins; that caller policy is a
-separate control.
+The same rule holds after compilation. A proxy or no-Git native revision is
+recorded as Git-restricted, and `EgressPolicy` grants never add GitHub host
+families, Git proxy hosts (wildcards included), credentials on those hosts, or
+the legacy Git Secret to its Actors. The store drops them where grants meet a
+revision's pinned access, so the rule also covers Actors still pinned to an
+older revision, and the Agent's status reports the conflict. Explicit standalone
+direct Git is not restricted.
+
+### Session policy
+
+`config.server.auth.sessionPolicy` is the operator's allowlist for Session
+creation by API callers. It names one namespace and the Agents in it that
+callers may use, and the credential rules a `SessionCredential` must match
+exactly: Secret name glob, key, origin and header. `git-read` and `git-push`
+rules are accepted only as the fixed proxy tuples (`mainloop-git-read-*` and
+`mainloop-git-push-*`, key and header `authorization`, the exact proxy origin),
+so a configuration mistake cannot widen which Secrets reach the proxies. An
+`mcp` rule may use any `https` origin, or an `http` origin listed under
+`cleartextMcpOrigins` (exact in-cluster service origins only), and never a Git
+proxy. With no rules, Sessions cannot carry credentials.
+
+The policy applies to every caller except internal controller work such as
+scheduled runs; runtime Actors are subject to it. A refusal is
+`PermissionDenied` and reserves nothing. The controller rejects an invalid
+policy at startup and under `--check-config`. Without a policy, the paragraph
+above about trusted callers applies: any authenticated caller may bind any
+Secret key in the Agent's namespace.

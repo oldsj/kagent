@@ -60,6 +60,7 @@ import (
 	"github.com/kagent-dev/kagent/go/core/internal/service/agentidentity"
 	"github.com/kagent-dev/kagent/go/core/internal/service/bootstrap"
 	"github.com/kagent-dev/kagent/go/core/internal/service/checkpoint"
+	"github.com/kagent-dev/kagent/go/core/internal/service/controlauth"
 	"github.com/kagent-dev/kagent/go/core/internal/service/kubecrud"
 	memoryservice "github.com/kagent-dev/kagent/go/core/internal/service/memory"
 	modelservice "github.com/kagent-dev/kagent/go/core/internal/service/model"
@@ -387,7 +388,15 @@ func Run(ctx context.Context, input *configv1.ControllerConfig, opts Options) er
 		return fmt.Errorf("register session expiration worker: %w", err)
 	}
 	shareMaxTTL := cfg.GetSessions().GetShareMaxTtl().AsDuration()
-	sessions := sessionsvc.NewService(store, authorizer, sessionWorkflow, sessionsvc.WithShareMaxTTL(shareMaxTTL))
+	sessionOptions := []sessionsvc.Option{sessionsvc.WithShareMaxTTL(shareMaxTTL)}
+	if configured := cfg.GetServer().GetAuth().GetSessionPolicy(); configured != nil {
+		policy, err := controlauth.New(configured)
+		if err != nil {
+			return fmt.Errorf("invalid server.auth.session_policy: %w", err)
+		}
+		sessionOptions = append(sessionOptions, sessionsvc.WithCreatePolicy(policy))
+	}
+	sessions := sessionsvc.NewService(store, authorizer, sessionWorkflow, sessionOptions...)
 	checkpoints := checkpoint.NewService(store, authorizer, actors, sessionWorkflow)
 	gatewayDialer, err := a2agateway.NewRuntimeDialer(
 		cfg.GetSubstrate(),

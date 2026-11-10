@@ -179,6 +179,53 @@ message AuthenticationConfig {
   }];
   string user_id_claim = 2;
   ServiceAccountAuthentication service_account = 3;
+  // Limits which Agents callers may create Sessions for and which Secrets they
+  // may bind as Session credentials. Unset applies no such limit.
+  SessionPolicy session_policy = 4;
+}
+
+// SessionPolicy is the operator's allowlist for Session creation by API
+// callers. Internal controller work, such as scheduled runs, is not subject to
+// it. Every other caller, runtime Actors included, is.
+message SessionPolicy {
+  // The only namespace whose Agents callers may use.
+  string namespace = 1 [(buf.validate.field).string = {
+    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+    max_len: 63
+  }];
+  repeated string agents = 2 [(buf.validate.field).repeated = {
+    min_items: 1
+    unique: true
+    items: {
+      string: {
+        min_len: 1
+        max_len: 253
+      }
+    }
+  }];
+  // A Session credential is accepted only when it matches one rule exactly.
+  // With no rules, Sessions cannot carry credentials.
+  repeated SessionCredentialRule credentials = 3;
+  // Exact in-cluster http:// origins an "mcp" rule may use. https needs no entry.
+  repeated string cleartext_mcp_origins = 4 [(buf.validate.field).repeated.unique = true];
+}
+
+message SessionCredentialRule {
+  // Glob over the Secret name in the policy namespace, for example
+  // mainloop-git-read-*.
+  string secret_name_pattern = 1 [(buf.validate.field).string.min_len = 1];
+  string key = 2 [(buf.validate.field).string.min_len = 1];
+  string origin = 3 [(buf.validate.field).string.min_len = 1];
+  string header = 4 [(buf.validate.field).string.const = "authorization"];
+  // git-read and git-push are fixed to the trusted Git proxy origins and
+  // Secret name patterns; mcp covers every other origin.
+  string purpose = 5 [(buf.validate.field).string = {
+    in: [
+      "git-read",
+      "git-push",
+      "mcp"
+    ]
+  }];
 }
 
 // Platform-owned invocation authentication for the fixed kagent-invocation audience,
