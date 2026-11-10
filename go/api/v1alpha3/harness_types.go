@@ -192,6 +192,13 @@ type HarnessWorkload struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.codex) || !has(self.workload) || (!has(self.workload.command) && !has(self.workload.args))",message="Codex harnesses do not support workload.command or workload.args"
 // +kubebuilder:validation:XValidation:rule="!has(self.git) || has(self.codex) || has(self.claude)",message="git is supported only by the codex and claude harnesses"
 type HarnessSpec struct {
+	// SessionIdleTTL overrides the controller's sessions.idleTtl for every
+	// Session of Agents using this Harness, including existing Sessions.
+	// Zero disables idle expiration.
+	// +kubebuilder:validation:XValidation:rule="duration(self) >= duration('0s')",message="sessionIdleTTL must be nonnegative"
+	// +optional
+	SessionIdleTTL *metav1.Duration `json:"sessionIdleTTL,omitempty"`
+
 	// +optional
 	Kagent *KagentHarness `json:"kagent,omitempty"`
 

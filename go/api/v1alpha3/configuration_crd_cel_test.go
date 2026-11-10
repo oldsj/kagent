@@ -257,6 +257,19 @@ func TestConfigurationCRDValidation(t *testing.T) {
 		wantReject string
 	}{
 		{
+			name:   "Harness accepts a zero sessionIdleTTL",
+			object: validHarness(namespace, "harness-zero-ttl", HarnessSpec{Claude: &ClaudeHarness{}, SessionIdleTTL: &metav1.Duration{}}),
+		},
+		{
+			name:   "Harness accepts a positive sessionIdleTTL",
+			object: validHarness(namespace, "harness-positive-ttl", HarnessSpec{Claude: &ClaudeHarness{}, SessionIdleTTL: &metav1.Duration{Duration: 30 * time.Second}}),
+		},
+		{
+			name:       "Harness rejects a negative sessionIdleTTL",
+			object:     validHarness(namespace, "harness-negative-ttl", HarnessSpec{Claude: &ClaudeHarness{}, SessionIdleTTL: &metav1.Duration{Duration: -time.Second}}),
+			wantReject: "sessionIdleTTL must be nonnegative",
+		},
+		{
 			name:       "Harness requires one runtime",
 			object:     validHarness(namespace, "harness-no-runtime", HarnessSpec{}),
 			wantReject: "exactly one of the fields in [kagent codex claude byo] must be set",
