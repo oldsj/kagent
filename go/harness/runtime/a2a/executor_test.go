@@ -849,3 +849,46 @@ func TestHealthArtifactsPrecedeTheStatusTheyDescribe(t *testing.T) {
 	}
 	require.Equal(t, []string{"health:epoch:1", "text", "health:epoch:2", string(a2atype.TaskStateCompleted)}, order)
 }
+
+// A consumer orders a task's history and artifacts by timeline position, and
+// falls back to an unordered listing when any one of them has none.
+func TestHealthArtifactsTakeTheirPlaceOnTheTimeline(t *testing.T) {
+	t.Run("Given a turn observed before and after its output, when the executor publishes it, assert that every artifact follows the previous one on the timeline", func(t *testing.T) {
+		health := func(sequence int64) runtime.HealthEvent {
+			return runtime.HealthEvent{SchemaVersion: runtime.HealthSchema, EventID: fmt.Sprintf("epoch:%d", sequence), Sequence: sequence, Kind: "turn"}
+		}
+		executor, err := New(fakeRunner{run: func(_ context.Context, _ runtime.Turn, sink runtime.EventSink) (runtime.Outcome, error) {
+			observer := sink.(runtime.HealthSink)
+			require.NoError(t, observer.Health(health(1)))
+			require.NoError(t, sink.TextDelta(runtime.TextDelta{Text: "hello"}))
+			require.NoError(t, sink.ToolCall(runtime.ToolCall{ID: "tool-1", Name: "Read"}))
+			require.NoError(t, observer.Health(health(2)))
+			require.NoError(t, sink.ToolResult(runtime.ToolResult{ID: "tool-1", Name: "Read", Result: "ok"}))
+			require.NoError(t, observer.Health(health(3)))
+			return runtime.Outcome{}, nil
+		}}, &fakeContinuation{}, tracing.RuntimeTelemetry{})
+		require.NoError(t, err)
+
+		events, errs := collect(executor.Execute(t.Context(), requestContext("task-1", "hello")))
+
+		require.Empty(t, errs)
+		var published []string
+		var previous time.Time
+		for _, event := range events {
+			update, ok := event.(*a2atype.TaskArtifactUpdateEvent)
+			if !ok {
+				continue
+			}
+			kind := "output"
+			if update.Artifact.Name == runtime.HealthSchema {
+				kind = "health"
+			}
+			published = append(published, kind)
+			position, ok := apia2a.TimelinePosition(update.Artifact)
+			require.Truef(t, ok, "%s artifact %s has no timeline position", kind, update.Artifact.ID)
+			require.Truef(t, position.After(previous), "%s artifact %s at %s does not follow %s", kind, update.Artifact.ID, position, previous)
+			previous = position
+		}
+		require.Equal(t, []string{"health", "output", "output", "health", "output", "health"}, published)
+	})
+}
