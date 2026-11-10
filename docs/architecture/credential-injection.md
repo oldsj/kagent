@@ -397,3 +397,33 @@ authority and Kubernetes API, before or after service DNAT) and denies ingress. 
 NetworkPolicy cannot restrict egress by DNS name; installations requiring
 host-only egress must additionally configure their CNI's FQDN policy.
 NetworkPolicy requires an enforcing CNI. Actor egress rules remain unchanged.
+
+## Per-Session credentials
+
+`CreateSessionRequest.credentials` accepts at most four `SessionCredential`
+bindings, each containing `origin`, `header`, and `secret_ref { name, key }`.
+The Secret belongs to the Agent's namespace and contains the complete header
+value, including `Bearer ` for bearer authorization. Session bindings use no
+additional prefix. The controller never reads the Secret value, and the runtime
+receives only a placeholder header configured on its RemoteMCPServer.
+
+The HTTP(S) origin must already be in the Session's pinned revision egress list.
+Paths, user information, queries, and fragments are rejected. A binding applies
+to that exact origin and header. Header names are case-insensitive. Duplicate
+origin/header bindings and collisions with revision credentials are rejected.
+References persist in `Session.credentials`; retrying a request ID with changed
+references conflicts. Checkpoint forks inherit no Session credentials.
+
+The controller applies them where it applies every Actor's egress policy: the
+policy for a Session's Actor is the revision's effective access (pinned inputs
+plus current EgressPolicy grants) with the Session's bindings added. It is
+recomputed on each application, so a grant change keeps the Session's bindings.
+If a later grant binds the same origin and header as a Session credential, the
+merge fails and that Actor's policy update is reported as an error rather than
+letting either credential silently win.
+
+Credential-bearing `CreateSession` is a trusted control-plane capability. A
+caller may reference any valid Secret key in the Agent namespace; same-namespace
+validation does not establish that the key belongs to that caller. Isolate these
+callers and authorize credential selection in the owning control plane before
+forwarding requests to kagent.

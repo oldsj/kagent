@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 
 	ateapipb "go.ate.dev/substrate/api/ateapi/v1"
 	"google.golang.org/grpc/codes"
@@ -32,6 +33,32 @@ func (c *Client) CheckActorEgressPolicy(ctx context.Context, atespace, revision 
 // concurrent applications cannot overwrite a newer policy with an old one.
 // Conflicts reload both; lifecycle paths never translate Kubernetes.
 // Substrate deletes the policy with its Actor.
+// actorAccess is the revision's effective access plus, for a Session's Actor,
+// that Session's own credential bindings. Sandbox Actors have none.
+func (c *Client) actorAccess(ctx context.Context, revision, actorName string) (egress.Access, error) {
+	access, err := c.cfg.EgressPolicies.GetRuntimeEgressPolicy(ctx, revision)
+	if err != nil {
+		return egress.Access{}, err
+	}
+	sessions, ok := c.cfg.EgressPolicies.(egress.SessionCredentialStore)
+	sessionID, isSession := strings.CutPrefix(actorName, sessionActorPrefix)
+	if !ok || !isSession {
+		return access, nil
+	}
+	namespace, requested, err := sessions.GetSessionCredentials(ctx, sessionID)
+	if err != nil {
+		return egress.Access{}, fmt.Errorf("load Session credentials: %w", err)
+	}
+	if len(requested) == 0 {
+		return access, nil
+	}
+	access.Credentials, err = egress.SessionCredentials(namespace, requested, access.Destinations, access.Credentials)
+	if err != nil {
+		return egress.Access{}, fmt.Errorf("merge Session credentials: %w", err)
+	}
+	return access, nil
+}
+
 func (c *Client) EnsureActorEgressPolicy(ctx context.Context, atespace, name, revision string) error {
 	ctx, cancel := c.callCtx(ctx)
 	defer cancel()
@@ -44,7 +71,7 @@ func (c *Client) EnsureActorEgressPolicy(ctx context.Context, atespace, name, re
 		if err != nil && status.Code(err) != codes.NotFound {
 			return err
 		}
-		access, err := c.cfg.EgressPolicies.GetRuntimeEgressPolicy(ctx, revision)
+		access, err := c.actorAccess(ctx, revision, name)
 		if err != nil {
 			return fmt.Errorf("load intended actor egress: %w", err)
 		}
@@ -72,7 +99,7 @@ func (c *Client) EnsureActorEgressPolicy(ctx context.Context, atespace, name, re
 		}
 		// A source update may have discovered this instance before its Actor
 		// existed. Recheck after applying so creation cannot miss that update.
-		latest, err := c.cfg.EgressPolicies.GetRuntimeEgressPolicy(ctx, revision)
+		latest, err := c.actorAccess(ctx, revision, name)
 		if err != nil {
 			return fmt.Errorf("reload intended actor egress: %w", err)
 		}

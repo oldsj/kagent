@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
+	apiv1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1"
 	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"github.com/kagent-dev/kagent/go/core/pkg/egresspolicy"
 )
@@ -182,4 +183,59 @@ func TestEnsureActorEgressPolicyRequiresPersistedPolicy(t *testing.T) {
 	require.ErrorIs(t, err, unavailable)
 	require.Zero(t, fake.created)
 	require.Zero(t, fake.updated)
+}
+
+type sessionEgressStore struct {
+	access      egress.Access
+	namespace   string
+	credentials []*apiv1.SessionCredential
+	asked       []string
+}
+
+func (s *sessionEgressStore) GetRuntimeEgressPolicy(context.Context, string) (egress.Access, error) {
+	return s.access, nil
+}
+
+func (s *sessionEgressStore) GetSessionCredentials(_ context.Context, sessionID string) (string, []*apiv1.SessionCredential, error) {
+	s.asked = append(s.asked, sessionID)
+	return s.namespace, s.credentials, nil
+}
+
+func TestEnsureActorEgressPolicyAddsSessionCredentials(t *testing.T) {
+	const sessionID = "11111111-1111-4111-8111-111111111111"
+	binding := &apiv1.SessionCredential{Origin: "http://mcp.team-a.svc.cluster.local", Header: "Authorization", SecretRef: &apiv1.SecretKeyReference{Name: "tokens", Key: "one"}}
+	newStore := func() *sessionEgressStore {
+		return &sessionEgressStore{
+			access:    egress.Access{Destinations: []string{"http://mcp.team-a.svc.cluster.local:80"}},
+			namespace: "team-a", credentials: []*apiv1.SessionCredential{binding},
+		}
+	}
+
+	t.Run("Given a Session with a credential, when its Actor's policy is applied, assert that the rule injects the Session's Secret", func(t *testing.T) {
+		fake, store := &egressPolicyFake{}, newStore()
+		client := &Client{ControlClient: fake, cfg: Config{ControlPlaneURL: testControlPlaneURL, EgressPolicies: store}}
+		require.NoError(t, client.EnsureActorEgressPolicy(t.Context(), "team-a", ActorName(sessionID), "revision"))
+		require.Contains(t, store.asked, sessionID)
+		headers := fake.policy.Rules[0].GetHttp().GetEffects().GetReplaceHeaders()
+		require.Len(t, headers, 1)
+		require.Equal(t, "authorization", headers[0].Header)
+		require.Equal(t, "ate-secret://k8s.io/default/team-a/tokens/one", headers[0].CredentialUri)
+		require.Empty(t, headers[0].Prefix, "the Secret holds the complete header value")
+	})
+
+	t.Run("Given a grant that later binds the same origin and header, when the policy is applied, assert that it fails instead of choosing one", func(t *testing.T) {
+		fake, store := &egressPolicyFake{}, newStore()
+		store.access.Credentials = []egress.Credential{{Origin: "http://mcp.team-a.svc.cluster.local:80", Header: "authorization", URI: "ate-secret://k8s.io/default/team-a/granted/token"}}
+		client := &Client{ControlClient: fake, cfg: Config{ControlPlaneURL: testControlPlaneURL, EgressPolicies: store}}
+		require.ErrorContains(t, client.EnsureActorEgressPolicy(t.Context(), "team-a", ActorName(sessionID), "revision"), "merge Session credentials")
+		require.Nil(t, fake.policy)
+	})
+
+	t.Run("Given an Actor that is not a Session's, when its policy is applied, assert that no Session is consulted", func(t *testing.T) {
+		fake, store := &egressPolicyFake{}, newStore()
+		client := &Client{ControlClient: fake, cfg: Config{ControlPlaneURL: testControlPlaneURL, EgressPolicies: store}}
+		require.NoError(t, client.EnsureActorEgressPolicy(t.Context(), "team-a", "sandbox-1", "revision"))
+		require.Empty(t, store.asked)
+		require.Empty(t, fake.policy.Rules[0].GetHttp().GetEffects().GetReplaceHeaders())
+	})
 }

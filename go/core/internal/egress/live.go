@@ -4,12 +4,21 @@ import (
 	"context"
 	"fmt"
 	"slices"
+
+	apiv1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1"
 )
 
 // PolicyStore reads effective policy from persisted revision inputs and source grants.
 // A missing or malformed policy is an error, never permission to retain old access.
 type PolicyStore interface {
 	GetRuntimeEgressPolicy(context.Context, string) (Access, error)
+}
+
+// SessionCredentialStore is implemented by policy stores that also hold
+// Sessions. It returns the Agent namespace and the credential bindings a Session
+// was created with; a Session without bindings returns none.
+type SessionCredentialStore interface {
+	GetSessionCredentials(ctx context.Context, sessionID string) (namespace string, credentials []*apiv1.SessionCredential, err error)
 }
 
 // EffectiveAccess retains the base and all grants compatible with this revision.

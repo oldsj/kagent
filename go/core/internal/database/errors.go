@@ -8,6 +8,8 @@ import (
 // Store errors describe resource-independent categories. Wrap them with resource
 // and operation context using %w; callers match them with errors.Is.
 var (
+	// ErrSessionCredentialNotAllowed reports invalid or conflicting Session bindings.
+	ErrSessionCredentialNotAllowed = errors.New("session credential is not allowed")
 	// ErrNotFound also covers records that are not visible to the given user.
 	ErrNotFound = errors.New("record not found")
 	// ErrConflict reports an operation blocked by current state or a concurrent change.

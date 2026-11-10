@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/kagent-dev/kagent/go/api/workspace"
+	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -48,10 +49,12 @@ func marshalSession(session *apiv1.Session) ([]byte, error) {
 	return data, nil
 }
 
-// sameSessionRequest reports whether two creation requests target the same Agent
-// and workspace. Names and other mutable fields do not affect retry identity.
+// sameSessionRequest reports whether two creation requests target the same Agent,
+// workspace, and credential references. Names and other mutable fields do not
+// affect retry identity.
 func sameSessionRequest(session, request *apiv1.Session) bool {
-	return proto.Equal(session.GetAgent().GetRef(), request.GetAgent().GetRef()) && proto.Equal(session.GetWorkspace(), request.GetWorkspace())
+	return proto.Equal(session.GetAgent().GetRef(), request.GetAgent().GetRef()) && proto.Equal(session.GetWorkspace(), request.GetWorkspace()) &&
+		proto.Equal(&apiv1.Session{Credentials: session.GetCredentials()}, &apiv1.Session{Credentials: request.GetCredentials()})
 }
 
 // CreateSession atomically reserves a session, its conversation history, and the
@@ -148,6 +151,9 @@ func insertPinnedSession(ctx context.Context, db pgx.Tx, request *apiv1.Session,
 	}
 	if err := checkWorkspaceOrigin(ctx, db, revisionID, request.GetWorkspace()); err != nil {
 		return sessionRow{}, err
+	}
+	if _, err := egress.SessionCredentials(pinned.Namespace, request.GetCredentials(), pinned.EgressDestinations, pinned.Credentials); err != nil {
+		return sessionRow{}, fmt.Errorf("%w: %v", ErrSessionCredentialNotAllowed, err)
 	}
 	session := proto.CloneOf(request)
 	session.Agent.Uid = pinned.AgentUID
