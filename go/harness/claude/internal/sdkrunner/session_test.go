@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -164,6 +165,123 @@ func TestPermissionFirstAnswerWins(t *testing.T) {
 		for _, op := range f.launcher.Ops() {
 			if op.Op == "perm" && op.ID == "p1" && op.Behavior == "allow" {
 				return true
+			}
+		}
+		return false
+	})
+}
+
+func TestReplayResumesTheConversationOnAFreshBridge(t *testing.T) {
+	t.Run("Given a running bridge, when a replay begins, assert that the turn is registered on a new bridge that resumes the conversation and sees none of the old one's events", func(t *testing.T) {
+		f := newFixture(t, sdkrunnertest.Echo("22222222-2222-2222-2222-222222222222"))
+		if err := f.session.Submit(context.Background(), "one", "u1", sdkrunner.OriginClient); err != nil {
+			t.Fatal(err)
+		}
+		first := f.launcher.Started(wait)
+		eventually(t, "the conversation to be bound", func() bool {
+			_, bound, _ := f.continuation.Load()
+			return bound
+		})
+
+		sub, err := f.session.BeginReplay(context.Background())
+
+		if err != nil {
+			t.Fatalf("BeginReplay() error = %v", err)
+		}
+		second := f.launcher.Started(wait)
+		if second == nil || second == first || second.Spec.Resume != "22222222-2222-2222-2222-222222222222" {
+			t.Fatalf("replay bridge = %+v, want a new bridge resuming the bound conversation", second)
+		}
+		if f.launcher.Launches() != 2 || !f.session.TurnActive() {
+			t.Fatalf("launches = %d, turn active = %v; want 2 and an active turn", f.launcher.Launches(), f.session.TurnActive())
+		}
+		for _, op := range f.launcher.Ops() {
+			if op.Op == "user" && op.UUID != "u1" {
+				t.Fatalf("a replay sent user message %q", op.UUID)
+			}
+		}
+		// The new bridge's events reach the turn; the old bridge's exit did not.
+		second.SDK(map[string]any{"type": "result", "subtype": "success", "result": "replayed"})
+		if item := next(t, sub); item.Kind != sdkrunner.ItemSDK || !strings.Contains(string(item.Raw), "replayed") {
+			t.Fatalf("first item = %+v, want the replay's own result", item)
+		}
+		if _, err := f.session.BeginReplay(context.Background()); err == nil {
+			t.Fatal("a second turn must not replace the active one")
+		}
+	})
+}
+
+func TestClientMessagesWaitForAPendingAnswer(t *testing.T) {
+	refused := errors.New("the conversation is waiting for an answer")
+	for _, scenario := range []struct {
+		name    string
+		gate    error
+		wantErr error
+		sent    int
+	}{
+		{name: "Given a deferred call waiting for its answer, when a client sends a message, assert that it is refused and never reaches Claude", gate: refused, wantErr: refused},
+		{name: "Given nothing waiting, when a client sends a message, assert that it reaches Claude", sent: 1},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			launcher := sdkrunnertest.NewLauncher(sdkrunnertest.Echo("22222222-2222-2222-2222-222222222222"))
+			session, err := sdkrunner.New(sdkrunner.Config{
+				Launcher: launcher,
+				Spec: func(sdkrunner.Profile) (sdkrunner.Spec, error) {
+					return sdkrunner.Spec{Cwd: "/data/workspace", Executable: "/usr/local/bin/claude"}, nil
+				},
+				Continuation: &sdkrunnertest.Continuation{}, Dir: t.TempDir(), StopGrace: time.Second,
+				ClientGate: func() error { return scenario.gate },
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = session.Close() })
+
+			err = session.SubmitFromClient(context.Background(), "hello", "u1")
+
+			if !errors.Is(err, scenario.wantErr) {
+				t.Fatalf("SubmitFromClient() error = %v, want %v", err, scenario.wantErr)
+			}
+			if scenario.sent == 1 {
+				eventually(t, "the message to reach the bridge", func() bool { return len(launcher.Ops()) > 1 })
+			}
+			users := 0
+			for _, op := range launcher.Ops() {
+				if op.Op == "user" {
+					users++
+				}
+			}
+			if users != scenario.sent {
+				t.Fatalf("user messages sent to Claude = %d, want %d", users, scenario.sent)
+			}
+		})
+	}
+}
+
+func TestPermissionAnswerCanReplaceTheToolInput(t *testing.T) {
+	f := newFixture(t, func(b *sdkrunnertest.Bridge, op sdkrunnertest.Op) {
+		if op.Op == "user" {
+			b.Emit(map[string]any{"k": "perm", "id": "p1", "toolName": "AskUserQuestion", "input": map[string]any{"questions": []any{}}, "toolUseID": "t1"})
+		}
+	})
+	sub, _ := f.session.BeginTurn()
+	if err := f.session.Submit(context.Background(), "ask", "u1", sdkrunner.OriginA2A); err != nil {
+		t.Fatal(err)
+	}
+	if item := next(t, sub); item.Kind != sdkrunner.ItemPerm {
+		t.Fatalf("item = %+v, want the permission request", item)
+	}
+
+	ok, err := f.session.AllowPermWith("p1", map[string]any{"answers": map[string]any{"Which?": "A"}}, sdkrunner.OriginA2A)
+
+	if !ok || err != nil {
+		t.Fatalf("AllowPermWith() = %v, %v", ok, err)
+	}
+	eventually(t, "the answer to reach the bridge", func() bool {
+		for _, op := range f.launcher.Ops() {
+			if op.Op == "perm" && op.ID == "p1" {
+				answers, _ := op.UpdatedInput["answers"].(map[string]any)
+				return op.Behavior == "allow" && answers["Which?"] == "A"
 			}
 		}
 		return false

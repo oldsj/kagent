@@ -221,9 +221,18 @@ func (r *deferredRecord) hookDecision() (string, map[string]any, error) {
 	return "allow", updated, nil
 }
 
+// replayFunc resumes the native conversation that holds tool as a deferred
+// call, without a new user message, and reports the turn's events to the sink.
+// A replay that never started its native process returns a processStartError.
+type replayFunc func(ctx context.Context, turn runtime.Turn, sink runtime.EventSink, tool *DeferredTool) (runtime.Outcome, error)
+
 // RestorePending reads DATA lazily, including after restoring into a golden
 // harness whose executor and ephemeral hook listener already exist.
 func (d *ProcessDriver) RestorePending() (string, string, runtime.PendingTurn, error) {
+	return d.restorePending(d.run)
+}
+
+func (d *ProcessDriver) restorePending(replay replayFunc) (string, string, runtime.PendingTurn, error) {
 	if d.config.ApprovalBroker == nil {
 		return "", "", nil, nil
 	}
@@ -247,10 +256,10 @@ func (d *ProcessDriver) RestorePending() (string, string, runtime.PendingTurn, e
 	if err != nil {
 		return "", "", nil, err
 	}
-	return r.TaskID, r.ContextID, &deferredTurn{driver: d, record: *r, request: request}, nil
+	return r.TaskID, r.ContextID, &deferredTurn{driver: d, record: *r, request: request, replay: replay}, nil
 }
 
-func (d *ProcessDriver) parkDeferred(turn runtime.Turn, session string, tool *DeferredTool) (runtime.Outcome, error) {
+func (d *ProcessDriver) parkDeferred(turn runtime.Turn, session string, tool *DeferredTool, replay replayFunc) (runtime.Outcome, error) {
 	b := d.config.ApprovalBroker
 	if b == nil || !b.protects(tool.Name) {
 		return runtime.Outcome{}, fmt.Errorf("unsupported Claude deferred tool")
@@ -265,13 +274,15 @@ func (d *ProcessDriver) parkDeferred(turn runtime.Turn, session string, tool *De
 	if err != nil {
 		return runtime.Outcome{}, err
 	}
-	return runtime.Outcome{Pending: &deferredTurn{driver: d, record: r, request: request}}, nil
+	return runtime.Outcome{Pending: &deferredTurn{driver: d, record: r, request: request, replay: replay}}, nil
 }
 
 type deferredTurn struct {
 	driver  *ProcessDriver
 	record  deferredRecord
 	request runtime.InputRequest
+	// replay is the owning driver's way to resume the deferred call.
+	replay replayFunc
 }
 
 func (p *deferredTurn) Request() runtime.InputRequest { return p.request }
@@ -306,6 +317,34 @@ func (d *ProcessDriver) cancelReplay(tool *DeferredTool) error {
 	}
 	r.Canceling = true
 	return saveDeferred(b.directory, d.config.MaxEventBytes, r)
+}
+
+// replayCanceling reports whether the journal marks tool's replay as a
+// cancellation, whose call the hooks refuse.
+func (d *ProcessDriver) replayCanceling(tool *DeferredTool) bool {
+	b := d.config.ApprovalBroker
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	r, err := loadDeferred(b.directory, d.config.MaxEventBytes)
+	return err == nil && r != nil && r.Canceling && r.Tool.ID == tool.ID
+}
+
+// AwaitingReplay reports whether a deferred tool call is still in Claude's
+// transcript without its answer: no decision has arrived, or its replay has
+// not reached the hook. A user message sent now would make Claude answer it
+// and drop the call.
+func (d *ProcessDriver) AwaitingReplay() (bool, error) {
+	b := d.config.ApprovalBroker
+	if b == nil {
+		return false, nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	r, err := loadDeferred(b.directory, d.config.MaxEventBytes)
+	if err != nil || r == nil {
+		return false, err
+	}
+	return r.Phase == phaseWaiting || r.Phase == phaseResuming, nil
 }
 
 // beginResume commits the response before native replay. Its lock covers only
@@ -385,7 +424,7 @@ func (p *deferredTurn) Resume(ctx context.Context, response runtime.InputRespons
 		telemetry.ToolExecutionStarted(runtime.ToolCall{ID: r.Tool.ID, Name: r.Tool.Name, Arguments: r.Tool.Input, MCPServer: server, MCPTool: tool})
 	}
 	sink = deferredResultSink{EventSink: sink, callID: r.Tool.ID, declined: !executing}
-	outcome, err = p.driver.run(ctx, runtime.Turn{TaskID: r.TaskID, ContextID: r.ContextID, ContinuationID: r.SessionID, Origin: r.Origin}, sink, &r.Tool)
+	outcome, err = p.replay(ctx, runtime.Turn{TaskID: r.TaskID, ContextID: r.ContextID, ContinuationID: r.SessionID, Origin: r.Origin}, sink, &r.Tool)
 	var startErr *processStartError
 	if errors.As(err, &startErr) {
 		if observed && executing {
@@ -447,7 +486,7 @@ func (p *deferredTurn) Cancel(ctx context.Context, sink runtime.ModelCallSink) (
 		return err
 	}
 	b := p.driver.config.ApprovalBroker
-	outcome, err := p.driver.run(ctx, runtime.Turn{TaskID: r.TaskID, ContextID: r.ContextID, ContinuationID: r.SessionID, Origin: r.Origin}, discardSink{ModelCallSink: sink}, &r.Tool)
+	outcome, err := p.replay(ctx, runtime.Turn{TaskID: r.TaskID, ContextID: r.ContextID, ContinuationID: r.SessionID, Origin: r.Origin}, discardSink{ModelCallSink: sink}, &r.Tool)
 	var startErr *processStartError
 	if errors.As(err, &startErr) {
 		// No cleanup process ran, so even cancellation remains retryable.

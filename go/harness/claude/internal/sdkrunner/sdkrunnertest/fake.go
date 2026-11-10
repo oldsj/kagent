@@ -22,9 +22,12 @@ type Op struct {
 	Ref      string          `json:"ref"`
 	ID       string          `json:"id"`
 	Behavior string          `json:"behavior"`
-	Model    string          `json:"model"`
-	Effort   string          `json:"effort"`
-	Mode     string          `json:"mode"`
+	Message  string          `json:"message"`
+	// UpdatedInput is the tool input a permission answer supplies.
+	UpdatedInput map[string]any `json:"updatedInput"`
+	Model        string         `json:"model"`
+	Effort       string         `json:"effort"`
+	Mode         string         `json:"mode"`
 }
 
 // Bridge is a running fake bridge. Handler scripts replies.
@@ -76,6 +79,9 @@ func (b *Bridge) Stop(time.Duration) error {
 // start, from the bridge's reader goroutine.
 type Launcher struct {
 	Handle func(b *Bridge, op Op)
+	// OnStart, when set, is called once a bridge has its start operation. A
+	// resumed conversation may act before any further operation arrives.
+	OnStart func(b *Bridge)
 
 	mu      sync.Mutex
 	bridges []*Bridge
@@ -109,6 +115,9 @@ func (l *Launcher) Launch(context.Context) (sdkrunner.Process, error) {
 			if op.Op == "start" {
 				_ = json.Unmarshal(op.Options, &b.Spec)
 				l.started <- b
+				if l.OnStart != nil {
+					l.OnStart(b)
+				}
 				continue
 			}
 			if l.Handle != nil {

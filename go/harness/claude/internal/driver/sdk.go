@@ -47,13 +47,6 @@ func (d *ProcessDriver) SDKSpec(profile sdkrunner.Profile, home string) (sdkrunn
 		}
 		spec.AppendSystemPrompt = string(prompt)
 	}
-	// The process driver's settings file carries the hooks that defer a tool
-	// and end its process. The bridge keeps one live query and answers prompts
-	// through canUseTool, so it takes only the ask rules.
-	var ask []string
-	if d.config.ApprovalBroker != nil {
-		ask = d.config.ApprovalBroker.askRules()
-	}
 	if d.config.Workspace != "" {
 		// As in Args: loads the checkout's CLAUDE.md and .claude/rules.
 		spec.AdditionalDirectories = []string{d.config.Workspace}
@@ -79,10 +72,9 @@ func (d *ProcessDriver) SDKSpec(profile sdkrunner.Profile, home string) (sdkrunn
 	}
 	switch profile {
 	case sdkrunner.ProfileManaged:
-		// Harness-owned user scope only. No harness hook is needed here, so
-		// every hook is disabled; compiled ask rules reach canUseTool.
+		// Harness-owned user scope only, as for the process driver.
 		spec.SettingSources = []string{settingSources}
-		settings, err := sdkSettingsJSON(ask, true)
+		settings, err := d.sdkSettingsJSON(true)
 		if err != nil {
 			return sdkrunner.Spec{}, err
 		}
@@ -97,8 +89,8 @@ func (d *ProcessDriver) SDKSpec(profile sdkrunner.Profile, home string) (sdkrunn
 		env["HOME"] = home
 		spec.SettingSources = []string{"user", "project"}
 		spec.PermissionMode = "auto"
-		// The compiled ask rules stay; the user's own hooks run.
-		settings, err := sdkSettingsJSON(ask, false)
+		// The harness hooks and ask rules stay; the user's own hooks run too.
+		settings, err := d.sdkSettingsJSON(false)
 		if err != nil {
 			return sdkrunner.Spec{}, err
 		}
@@ -109,21 +101,22 @@ func (d *ProcessDriver) SDKSpec(profile sdkrunner.Profile, home string) (sdkrunn
 	return spec, nil
 }
 
-// sdkSettingsJSON is the bridge's --settings layer: the compiled ask rules,
-// and for the managed profile a block on every hook.
-func sdkSettingsJSON(ask []string, disableHooks bool) (string, error) {
-	settings := map[string]any{}
-	if disableHooks {
-		settings["disableAllHooks"] = true
+// sdkSettingsJSON is the bridge's --settings layer. With an approval boundary
+// it is the process driver's own: the hooks that defer a protected call and
+// answer its replay, and the ask rules that fail closed when a call cannot be
+// deferred. Without one, the managed profile disables every hook.
+func (d *ProcessDriver) sdkSettingsJSON(managed bool) (string, error) {
+	if d.config.ApprovalBroker != nil {
+		settings, err := d.config.ApprovalBroker.SettingsJSON()
+		if err != nil {
+			return "", fmt.Errorf("encode Claude SDK runner settings: %w", err)
+		}
+		return string(settings), nil
 	}
-	if len(ask) != 0 {
-		settings["permissions"] = map[string]any{"ask": ask}
+	if managed {
+		return `{"disableAllHooks":true}`, nil
 	}
-	encoded, err := json.Marshal(settings)
-	if err != nil {
-		return "", fmt.Errorf("encode Claude SDK runner settings: %w", err)
-	}
-	return string(encoded), nil
+	return "{}", nil
 }
 
 // SDKDriver runs A2A turns as user messages in the Actor's live SDK
@@ -136,7 +129,18 @@ type SDKDriver struct {
 // NewSDKDriver wraps a configured process driver, whose configuration and
 // approval broker it keeps, around the shared SDK session.
 func NewSDKDriver(base *ProcessDriver, session *sdkrunner.Session) *SDKDriver {
+	if broker := base.config.ApprovalBroker; broker != nil {
+		// A deferred call ends its turn and must be parked durably. Only an A2A
+		// turn can do that; a client's own turn keeps its live prompt.
+		broker.DeferNewCallsWhen(session.TurnActive)
+	}
 	return &SDKDriver{ProcessDriver: base, session: session}
+}
+
+// RestorePending recovers a deferred tool call after a DATA restore. Its answer
+// replays through the SDK conversation, not through a `claude -p` process.
+func (d *SDKDriver) RestorePending() (string, string, runtime.PendingTurn, error) {
+	return d.restorePending(d.replay)
 }
 
 var errRunnerExited = errors.New("the Claude SDK runner exited during the turn")
@@ -151,7 +155,7 @@ func (d *SDKDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime.Eve
 	if err != nil {
 		return runtime.Outcome{}, err
 	}
-	t := &sdkTurn{driver: d, sub: sub, uuid: uuid.NewString(), budget: newActiveBudget(d.config.TurnTimeout)}
+	t := &sdkTurn{driver: d, sub: sub, turn: turn, uuid: uuid.NewString(), budget: newActiveBudget(d.config.TurnTimeout)}
 	owned := false
 	defer func() {
 		if !owned {
@@ -178,18 +182,81 @@ func (d *SDKDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime.Eve
 		return runtime.Outcome{}, fmt.Errorf("send prompt to Claude SDK runner: %w", err)
 	}
 	outcome, err := t.consume(ctx, sink)
-	owned = err == nil && outcome.Pending != nil
+	owned = err == nil && livePrompt(outcome)
+	return outcome, err
+}
+
+// livePrompt reports whether the outcome waits on a prompt held by the running
+// bridge. Such a turn keeps its subscription; a deferred call is parked on disk
+// and releases it.
+func livePrompt(outcome runtime.Outcome) bool {
+	_, live := outcome.Pending.(*sdkPendingTurn)
+	return live
+}
+
+// replay answers a deferred tool call. A fresh bridge resumes the conversation
+// without a new message, Claude runs the call's PreToolUse hook again, and the
+// approval broker returns the saved answer. The turn ends at the result that
+// follows, which names no user message.
+func (d *SDKDriver) replay(ctx context.Context, turn runtime.Turn, sink runtime.EventSink, tool *DeferredTool) (runtime.Outcome, error) {
+	sub, err := d.session.BeginReplay(ctx)
+	if err != nil {
+		// Nothing was replayed, so the input stays answerable.
+		return runtime.Outcome{}, &processStartError{err: fmt.Errorf("start Claude SDK runner for replay: %w", err)}
+	}
+	t := &sdkTurn{
+		driver: d, sub: sub, turn: turn, seed: tool, budget: newActiveBudget(d.config.TurnTimeout),
+		cleaning: d.replayCanceling(tool),
+	}
+	outcome, err := t.consume(ctx, sink)
+	if err != nil || !livePrompt(outcome) {
+		d.session.EndTurn(sub)
+	}
+	if err != nil && ctx.Err() != nil {
+		var cancellationErr *runtime.CancellationError
+		if !errors.As(err, &cancellationErr) {
+			err = &runtime.CancellationError{Err: err}
+		}
+	}
 	return outcome, err
 }
 
 type sdkTurn struct {
-	driver         *SDKDriver
-	sub            *sdkrunner.Subscription
-	uuid           string
+	driver *SDKDriver
+	sub    *sdkrunner.Subscription
+	// turn identifies the A2A task that owns a call deferred in this turn.
+	turn runtime.Turn
+	// uuid is the prompt this turn sent. A replay sends none.
+	uuid string
+	// seed is the deferred call a replay answers.
+	seed *DeferredTool
+	// cleaning is set while a canceled replay settles its transcript.
+	cleaning bool
+	// seedSettled is set once the replayed call has its result, after which
+	// interrupting Claude leaves a consistent transcript.
+	seedSettled    bool
 	budget         *activeBudget
 	parser         *parser
 	sessionStarted bool
 	pending        *sdkrunner.Perm
+	// deferred is the call Claude deferred in this turn, with its session.
+	deferred        *DeferredTool
+	deferredSession string
+	// interruptNow is set once a canceled replay's call has been refused.
+	interruptNow bool
+}
+
+// ownsResult reports whether a result ends this turn. A deferred result ends
+// the A2A turn that is active: the call it leaves in the transcript needs a
+// durable owner. A replay's result names no user message.
+func (t *sdkTurn) ownsResult(raw json.RawMessage, uuids []string) bool {
+	if sdkrunner.ResultDeferred(raw) {
+		return true
+	}
+	if t.seed != nil {
+		return len(uuids) == 0
+	}
+	return slices.Contains(uuids, t.uuid)
 }
 
 func (t *sdkTurn) consume(ctx context.Context, sink runtime.EventSink) (runtime.Outcome, error) {
@@ -198,8 +265,13 @@ func (t *sdkTurn) consume(ctx context.Context, sink runtime.EventSink) (runtime.
 	defer health.close(ctx)
 	if t.parser == nil {
 		t.parser = newParser(time.Now)
+		if t.seed != nil {
+			// The call was reported by the turn that deferred it.
+			t.parser.tools[t.seed.ID] = t.seed.Name
+			t.parser.emittedToolCalls[t.seed.ID] = struct{}{}
+		}
 		if observed {
-			t.parser.health = newHealthProducer(t.driver.config.Workspace, t.driver.config.ExpectedVersion, nil)
+			t.parser.health = newHealthProducer(t.driver.config.Workspace, t.driver.config.ExpectedVersion, t.seed)
 		}
 	}
 	if id := t.driver.session.SessionID(); id != "" && !t.sessionStarted {
@@ -215,6 +287,23 @@ func (t *sdkTurn) consume(ctx context.Context, sink runtime.EventSink) (runtime.
 				_ = t.interrupt(context.WithoutCancel(ctx))
 				return runtime.Outcome{}, runtime.NewTerminalFailure("Claude execution budget exceeded (approval wait time excluded)", err)
 			}
+			if ctx.Err() != nil && t.seed != nil && !t.cleaning {
+				// A replay must settle its transcript before cancellation is
+				// published, or the call would be replayed by the next turn. The
+				// hooks now refuse it and every further tool; drain the result.
+				t.cleaning = true
+				if err := t.driver.cancelReplay(t.seed); err != nil {
+					return runtime.Outcome{}, errors.Join(err, t.interrupt(context.WithoutCancel(ctx)))
+				}
+				cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cancellationCleanupTimeout)
+				defer cancel()
+				ctx, sink = cleanupCtx, discardSink{ModelCallSink: sink}
+				if t.seedSettled {
+					// The call already ran; only Claude's answer to it remains.
+					t.interruptReplay(ctx)
+				}
+				continue
+			}
 			if ctx.Err() != nil {
 				// Cancellation: interrupt the native turn and wait, bounded, for
 				// its result so the conversation is idle for the next turn.
@@ -226,6 +315,13 @@ func (t *sdkTurn) consume(ctx context.Context, sink runtime.EventSink) (runtime.
 		case sdkrunner.ItemExited:
 			return runtime.Outcome{}, errRunnerExited
 		case sdkrunner.ItemPerm:
+			answered, err := t.answerFromJournal(ctx, item.Perm)
+			if err != nil {
+				return runtime.Outcome{}, err
+			}
+			if answered {
+				continue
+			}
 			t.pending = item.Perm
 			t.budget.pause()
 			return runtime.Outcome{Pending: &sdkPendingTurn{turn: t}}, nil
@@ -233,11 +329,79 @@ func (t *sdkTurn) consume(ctx context.Context, sink runtime.EventSink) (runtime.
 			continue
 		case sdkrunner.ItemSDK:
 			outcome, done, err := t.translate(ctx, item.Raw, sink, health)
-			if err != nil || done {
-				return outcome, err
+			if err != nil {
+				return runtime.Outcome{}, err
 			}
+			if t.interruptNow {
+				// The canceled call is refused; stop Claude from answering it.
+				t.interruptNow = false
+				t.interruptReplay(ctx)
+			}
+			if !done {
+				continue
+			}
+			if t.deferred != nil {
+				if t.cleaning {
+					return runtime.Outcome{}, fmt.Errorf("Claude did not settle its canceled replay")
+				}
+				return t.park(ctx)
+			}
+			if t.cleaning {
+				// Interrupting a refused call ends in an error result. The journal,
+				// not this result, says whether the cancellation was consumed.
+				return runtime.Outcome{}, nil
+			}
+			return outcome, nil
 		}
 	}
+}
+
+// interruptReplay stops Claude's work after a canceled replay's call has
+// settled. A failure leaves the turn to end on its own result.
+func (t *sdkTurn) interruptReplay(ctx context.Context) {
+	if err := t.driver.session.Control(ctx, "interrupt", "", ""); err != nil {
+		logging.FromContext(ctx).WarnContext(ctx, "failed to interrupt a canceled claude replay", "error", err)
+	}
+}
+
+// answerFromJournal answers a permission prompt for a tool inside the approval
+// boundary, as the process driver's permission host does. Only the call whose
+// saved answer the hook has just released is allowed. Any other protected call
+// reached the prompt because Claude could not defer it, and is refused so that
+// Claude retries it alone.
+func (t *sdkTurn) answerFromJournal(ctx context.Context, perm *sdkrunner.Perm) (bool, error) {
+	session := t.driver.session
+	if t.cleaning {
+		_, err := session.AnswerPerm(perm.ID, "deny", false, "The task was canceled.", sdkrunner.OriginA2A)
+		return true, err
+	}
+	broker := t.driver.config.ApprovalBroker
+	if broker == nil || !broker.protects(perm.ToolName) {
+		return false, nil
+	}
+	output, err := broker.permissionDecision(&permissionPromptInput{ToolName: perm.ToolName, Input: perm.Input, ToolUseID: perm.ToolUseID})
+	if err != nil {
+		logging.FromContext(ctx).ErrorContext(ctx, "failed to resolve claude permission", "error", err)
+		output = permissionPromptOutput{Behavior: "deny", Message: "Durable approval could not be resolved."}
+	}
+	if output.Behavior == "allow" {
+		_, err = session.AllowPermWith(perm.ID, output.UpdatedInput, sdkrunner.OriginA2A)
+	} else {
+		_, err = session.AnswerPerm(perm.ID, "deny", false, output.Message, sdkrunner.OriginA2A)
+	}
+	return true, err
+}
+
+// park hands a deferred call to the durable journal. The bridge is stopped
+// first: Claude replays the call when the conversation is next resumed, and
+// that must happen under the turn that carries the answer.
+func (t *sdkTurn) park(ctx context.Context) (runtime.Outcome, error) {
+	tool, session := t.deferred, t.deferredSession
+	t.deferred = nil
+	if err := t.driver.session.StopAndWait(context.WithoutCancel(ctx)); err != nil {
+		return runtime.Outcome{}, fmt.Errorf("stop Claude SDK runner at a deferred tool: %w", err)
+	}
+	return t.driver.parkDeferred(t.turn, session, tool, t.driver.replay)
 }
 
 func (t *sdkTurn) next(ctx context.Context) (sdkrunner.Item, error) {
@@ -264,7 +428,7 @@ func (t *sdkTurn) next(ctx context.Context) (sdkrunner.Item, error) {
 // translate maps one SDK message. A result ends the turn only if it consumed
 // this turn's prompt; results of client turns pass by.
 func (t *sdkTurn) translate(ctx context.Context, raw json.RawMessage, sink runtime.EventSink, health *healthPublisher) (runtime.Outcome, bool, error) {
-	if isResult, uuids := sdkrunner.ResultUUIDs(raw); isResult && !slices.Contains(uuids, t.uuid) {
+	if isResult, uuids := sdkrunner.ResultUUIDs(raw); isResult && !t.ownsResult(raw, uuids) {
 		return runtime.Outcome{}, false, nil
 	}
 	var outcome *runtime.Outcome
@@ -276,7 +440,14 @@ func (t *sdkTurn) translate(ctx context.Context, raw json.RawMessage, sink runti
 		case EventBackgroundTasks:
 			return nil // The session tracks background work for activity.
 		case EventDeferred:
-			return fmt.Errorf("Claude SDK runner deferred a tool; its settings install no deferral hook")
+			t.deferred, t.deferredSession = event.Deferred, event.SessionID
+			outcome = &runtime.Outcome{}
+			return nil
+		case EventToolActivity:
+			if t.seed != nil && event.ToolPhase == "completed" && event.ToolID == t.seed.ID {
+				t.seedSettled = true
+				t.interruptNow = t.cleaning
+			}
 		case EventSessionStarted:
 			if t.sessionStarted {
 				return nil
@@ -325,7 +496,7 @@ func (t *sdkTurn) interrupt(ctx context.Context) error {
 			return nil
 		}
 		if item.Kind == sdkrunner.ItemSDK {
-			if isResult, uuids := sdkrunner.ResultUUIDs(item.Raw); isResult && slices.Contains(uuids, t.uuid) {
+			if isResult, uuids := sdkrunner.ResultUUIDs(item.Raw); isResult && t.ownsResult(item.Raw, uuids) {
 				return nil
 			}
 		}
@@ -372,7 +543,7 @@ func (p *sdkPendingTurn) Resume(ctx context.Context, response runtime.InputRespo
 	t.pending = nil
 	t.budget.resume()
 	outcome, err = t.consume(ctx, sink)
-	owned = err == nil && outcome.Pending != nil
+	owned = err == nil && livePrompt(outcome)
 	return outcome, err
 }
 

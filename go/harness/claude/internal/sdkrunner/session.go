@@ -66,6 +66,11 @@ type Config struct {
 	Logger    *slog.Logger
 	// Backlog bounds the in-memory event backlog.
 	Backlog int
+	// ClientGate refuses a client's user message with the returned error. The
+	// conversation takes no new message while a deferred tool call waits for
+	// its answer: Claude would answer the message and drop the call. Nil
+	// admits every message.
+	ClientGate func() error
 }
 
 // Meta is the session metadata sent to clients.
@@ -107,8 +112,10 @@ type Session struct {
 	// activityMu orders activity reports.
 	activityMu sync.Mutex
 
-	mu          sync.Mutex
-	proc        Process
+	mu   sync.Mutex
+	proc Process
+	// procDone is closed once the reader has settled proc's exit.
+	procDone    chan struct{}
 	state       string
 	meta        Meta
 	overrides   overrides
@@ -173,6 +180,11 @@ func (s *Session) profile() Profile {
 func (s *Session) Start(ctx context.Context) error {
 	s.startMu.Lock()
 	defer s.startMu.Unlock()
+	return s.startLocked(ctx)
+}
+
+// startLocked requires startMu.
+func (s *Session) startLocked(ctx context.Context) error {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -191,10 +203,11 @@ func (s *Session) Start(ctx context.Context) error {
 		s.mu.Unlock()
 		return err
 	}
+	done := make(chan struct{})
 	s.mu.Lock()
-	s.proc = proc
+	s.proc, s.procDone = proc, done
 	s.mu.Unlock()
-	go s.read(proc)
+	go s.read(proc, done)
 	return nil
 }
 
@@ -265,6 +278,77 @@ func (s *Session) Close() error {
 	return s.Stop()
 }
 
+// StopAndWait stops the bridge and returns once its exit has been settled, so
+// no event of that bridge reaches a turn registered afterwards.
+func (s *Session) StopAndWait(ctx context.Context) error {
+	s.startMu.Lock()
+	defer s.startMu.Unlock()
+	return s.stopAndWaitLocked(ctx)
+}
+
+// stopAndWaitLocked requires startMu, which keeps another start out.
+func (s *Session) stopAndWaitLocked(ctx context.Context) error {
+	s.mu.Lock()
+	proc, done := s.proc, s.procDone
+	s.mu.Unlock()
+	if proc == nil {
+		return nil
+	}
+	if err := proc.Stop(s.cfg.StopGrace); err != nil {
+		return err
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// BeginReplay registers the A2A turn on a fresh bridge that resumes the bound
+// conversation without a new user message. Claude replays a deferred tool call
+// when its conversation is resumed, so the turn must be registered before that
+// bridge starts and no other start may come between.
+func (s *Session) BeginReplay(ctx context.Context) (*Subscription, error) {
+	s.startMu.Lock()
+	defer s.startMu.Unlock()
+	if err := s.stopAndWaitLocked(ctx); err != nil {
+		return nil, fmt.Errorf("stop sdk runner before replay: %w", err)
+	}
+	s.mu.Lock()
+	if s.turn != nil {
+		s.mu.Unlock()
+		return nil, errors.New("another A2A turn is active")
+	}
+	sub := newSubscription()
+	s.turn = sub
+	s.mu.Unlock()
+	s.updateActivity()
+	if err := s.startLocked(ctx); err != nil {
+		s.EndTurn(sub)
+		return nil, err
+	}
+	return sub, nil
+}
+
+// TurnActive reports whether an A2A turn owns the conversation's events.
+func (s *Session) TurnActive() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.turn != nil
+}
+
+// SubmitFromClient sends a client's user message unless the client gate
+// refuses it.
+func (s *Session) SubmitFromClient(ctx context.Context, text, uuid string) error {
+	if s.cfg.ClientGate != nil {
+		if err := s.cfg.ClientGate(); err != nil {
+			return err
+		}
+	}
+	return s.Submit(ctx, text, uuid, OriginClient)
+}
+
 // Submit sends a user message into the conversation, starting the bridge.
 func (s *Session) Submit(ctx context.Context, text, uuid string, origin Origin) error {
 	if err := s.Start(ctx); err != nil {
@@ -312,6 +396,17 @@ func (s *Session) Control(ctx context.Context, what, value, ref string) error {
 // AnswerPerm resolves a pending permission request. It reports false when the
 // request is no longer pending, for example because another party answered.
 func (s *Session) AnswerPerm(id, behavior string, always bool, message string, by Origin) (bool, error) {
+	return s.answerPerm(id, behavior, always, message, nil, by)
+}
+
+// AllowPermWith allows a pending permission request with updatedInput in place
+// of the input Claude asked about. An AskUserQuestion call takes its answers
+// this way.
+func (s *Session) AllowPermWith(id string, updatedInput map[string]any, by Origin) (bool, error) {
+	return s.answerPerm(id, "allow", false, "", updatedInput, by)
+}
+
+func (s *Session) answerPerm(id, behavior string, always bool, message string, updatedInput map[string]any, by Origin) (bool, error) {
 	if behavior != "allow" && behavior != "deny" {
 		return false, fmt.Errorf("permission behavior must be allow or deny")
 	}
@@ -327,7 +422,11 @@ func (s *Session) AnswerPerm(id, behavior string, always bool, message string, b
 	}
 	s.mu.Unlock()
 	s.updateActivity()
-	return true, s.write(map[string]any{"op": "perm", "id": id, "behavior": behavior, "always": always, "message": message})
+	op := map[string]any{"op": "perm", "id": id, "behavior": behavior, "always": always, "message": message}
+	if updatedInput != nil {
+		op["updatedInput"] = updatedInput
+	}
+	return true, s.write(op)
 }
 
 // SessionID is the bound native session, once known.
@@ -383,7 +482,8 @@ func writeLine(w interface{ Write([]byte) (int, error) }, value any) error {
 }
 
 // read consumes one bridge's events until it exits.
-func (s *Session) read(proc Process) {
+func (s *Session) read(proc Process, done chan struct{}) {
+	defer close(done)
 	reader := bufio.NewReaderSize(proc.Stdout(), 64*1024)
 	var readErr error
 	for {
@@ -464,6 +564,7 @@ type sdkEnvelope struct {
 	Cwd               string          `json:"cwd"`
 	Version           string          `json:"claude_code_version"`
 	State             string          `json:"state"`
+	StopReason        string          `json:"stop_reason"`
 	UserMessageUUID   string          `json:"user_message_uuid"`
 	UserMessageUUIDs  []string        `json:"user_message_uuids"`
 	SlashCommandsJSON json.RawMessage `json:"slash_commands"`
@@ -483,6 +584,14 @@ func ResultUUIDs(m json.RawMessage) (isResult bool, uuids []string) {
 		uuids = []string{envelope.UserMessageUUID}
 	}
 	return true, uuids
+}
+
+// ResultDeferred reports whether m is the result that ends a turn at a
+// deferred tool call. Claude keeps the call in its transcript and replays it
+// when the conversation is next resumed.
+func ResultDeferred(m json.RawMessage) bool {
+	var envelope sdkEnvelope
+	return json.Unmarshal(m, &envelope) == nil && envelope.Type == "result" && envelope.StopReason == "tool_deferred"
 }
 
 func (s *Session) handle(line []byte) {
