@@ -284,6 +284,9 @@ Helm installs a `RemoteMCPServer` named `<fullname>-api` (`kagent-api` for the
 standard release) in the controller namespace. It points at the controller's
 `/mcp` endpoint using the configured service name, namespace, port, and TLS scheme.
 This registration exposes Session and checkpoint tools alongside sandbox tools.
+Set `controller.apiToolServer.enabled=false` to omit it. The controller discovers
+the server's tools without credentials, so an installation whose `/mcp` requires
+authentication and binds no AgentTemplate to `kagent-api` should disable it.
 AgentTemplates opt in through their existing tool bindings, for example:
 
 ```yaml
