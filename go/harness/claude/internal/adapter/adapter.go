@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 
+	apiworkspace "github.com/kagent-dev/kagent/go/api/workspace"
 	"github.com/kagent-dev/kagent/go/core/pkg/agentplugins"
 	"github.com/kagent-dev/kagent/go/core/pkg/env"
 	"github.com/kagent-dev/kagent/go/harness/claude/config"
@@ -31,6 +32,10 @@ type Input struct {
 	DurableDir   string
 	EphemeralDir string
 	Environment  []string
+	// SetupProfile, when set, appends that profile's fixed workspace
+	// preparation standing context to the system prompt and records the
+	// materialized setup so it can be observed later.
+	SetupProfile string
 }
 
 // New validates and materializes Claude-owned state, then constructs its driver.
@@ -38,6 +43,18 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 	cfg, err := config.Parse(input.ConfigJSON)
 	if err != nil {
 		return nil, err
+	}
+	if input.SetupProfile != "" {
+		standing, err := apiworkspace.Standing(input.SetupProfile)
+		if err != nil {
+			return nil, err
+		}
+		cfg.AppendSystemPrompt += "\n" + standing
+		// Startup may recreate missing ephemeral files, but must check any present
+		// files before normal materialization can replace them.
+		if err := checkRestoredSetup(input); err != nil {
+			return nil, err
+		}
 	}
 	agentsJSON, err := cfg.AgentsJSON()
 	if err != nil {
@@ -167,6 +184,12 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 	if err := utils.ReplacePrivateFile(mcpConfigPath, mcpJSON); err != nil {
 		_ = approvalBroker.Close()
 		return nil, fmt.Errorf("materialize Claude MCP configuration: %w", err)
+	}
+	if input.SetupProfile != "" {
+		if err := recordRuntimeSetup(input, mcpConfigPath, settingsPath, systemPromptPath); err != nil {
+			_ = approvalBroker.Close()
+			return nil, err
+		}
 	}
 
 	return driver.NewProcessDriver(driver.ProcessConfig{
