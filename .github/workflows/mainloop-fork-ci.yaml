@@ -53,7 +53,7 @@ jobs:
         run: |
           printf '%s\n' \
             'Runtime tests use isolated testcontainers PostgreSQL and fake Actor/gateway/native effects.' \
-            'Deferred: TestSandboxTemplateCatalog requires local Kubernetes envtest assets.' \
+            'Catalog tests run against envtest (a local kube-apiserver and etcd), not a cluster.' \
             'Deferred: TestPinnedCodexAcceptsGeneratedConfiguration launches the real Codex CLI/app-server.' \
             'No provider credentials, native agents, cluster operations, image publication or rollout.' \
             | tee -a "$GITHUB_STEP_SUMMARY"
@@ -61,10 +61,14 @@ jobs:
         run: go build ./...
       - name: Test runtime and policy fixtures
         run: go test -count=1 ./adk/pkg/taskstore ./core/internal/egress ./core/internal/substrate ./core/internal/service/taskstore
+      # TestSandboxTemplateCatalog and TestEgressPolicyCatalog in grpcserver
+      # start envtest, which needs these binaries.
+      - name: Install envtest binaries
+        run: echo "KUBEBUILDER_ASSETS=$(make -s envtest-path | tail -n1)" >> "$GITHUB_ENV"
       - name: Test PostgreSQL lifecycle, callbacks and control authentication
         # No -short: migration Up/Down and inline SQL must run.
         run: >-
-          go test -race -count=1 -skip '^TestSandboxTemplateCatalog$'
+          go test -race -count=1
           ./core/internal/database ./core/pkg/migrations
           ./core/internal/service/session ./core/internal/service/checkpoint
           ./core/internal/grpcserver ./core/internal/httpserver/auth ./core/pkg/auth
