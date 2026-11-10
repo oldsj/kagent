@@ -38,11 +38,13 @@ func (c *Client) GetRuntimeEgressPolicy(ctx context.Context, revision string) (e
 		TokenPassthroughTargets []egresspolicy.GatewayTarget
 		GrantDestinations       []string
 		GrantCredentials        []egress.Credential
+		GitEgressRestricted     bool
 	}
 	row, err := queryOne(ctx, c.db, `
   SELECT r.egress_destinations, r.credentials, r.token_passthrough_targets,
     COALESCE(ad.grant_destinations, sd.grant_destinations, '{}') AS grant_destinations,
-    COALESCE(ad.grant_credentials, sd.grant_credentials, '[]') AS grant_credentials
+    COALESCE(ad.grant_credentials, sd.grant_credentials, '[]') AS grant_credentials,
+    r.git_egress_restricted
   FROM runtime_revision r
   LEFT JOIN agent_revision a ON r.kind = 'agent' AND a.revision = r.revision
   LEFT JOIN sandbox_revision s ON r.kind = 'sandbox' AND s.revision = r.revision
@@ -61,6 +63,11 @@ func (c *Client) GetRuntimeEgressPolicy(ctx context.Context, revision string) (e
 	grants, err := egress.CanonicalAccess(row.GrantDestinations, row.GrantCredentials, nil)
 	if err != nil {
 		return egress.Access{}, fmt.Errorf("decode runtime egress grants %s: %w", revision, err)
+	}
+	if row.GitEgressRestricted {
+		// Enforced here, where grants meet every Actor of the revision, so it
+		// also covers Actors pinned to revisions older than the Agent's target.
+		grants, _ = egress.FilterGitRestricted(grants)
 	}
 	return egress.EffectiveAccess(base, grants)
 }

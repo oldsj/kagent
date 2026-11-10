@@ -1,0 +1,178 @@
+package payload
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+)
+
+// claudeDriverEnvironment mirrors the Claude harness's driver selector
+// (executor.DriverEnvName). The payload ships no Node or SDK bridge, so only
+// the default "process" driver can run from it. The launcher keeps its own copy
+// so the static launcher does not link the Claude executor.
+const claudeDriverEnvironment = "KAGENT_CLAUDE_DRIVER"
+
+// Launch validates the immutable payload and durable directories, then replaces
+// the launcher with the harness. The harness loads its configuration from the
+// bootstrap bundle after exec and checks its own CLI version, so the launcher
+// cannot and does not inspect harness configuration.
+// system is the actor's filesystem root ("/"); see prepareFilesystem.
+func Launch(root, system, data, platform string, check bool, environment []string, replace func(string, []string, []string) error) error {
+	selected := ""
+	selectedPresent := false
+	imagePath := ""
+	for _, entry := range environment {
+		name, value, _ := strings.Cut(entry, "=")
+		if name == "PATH" {
+			imagePath = value
+		}
+		if name == PlatformEnvironment {
+			if selectedPresent {
+				return fmt.Errorf("duplicate selected runtime platform")
+			}
+			selected = value
+			selectedPresent = true
+		}
+	}
+	if selected != "linux/amd64" && selected != "linux/arm64" {
+		return fmt.Errorf("%s must specify the selected runtime platform", PlatformEnvironment)
+	}
+	if selected != platform {
+		return fmt.Errorf("selected runtime platform %s does not match running platform %s", selected, platform)
+	}
+	manifest, err := ValidateManifest(root, selected)
+	if err != nil {
+		return err
+	}
+	if manifest.Provider == "claude" {
+		if err := requireProcessDriver(environment); err != nil {
+			return err
+		}
+	}
+	// Reject durable symlinks: neither a restored checkout nor native state can
+	// redirect runtime-owned directories onto the payload or identity projection.
+	for _, name := range append([]string{""}, runtimeDirectories...) {
+		path := filepath.Join(data, name)
+		if err := os.MkdirAll(path, 0700); err != nil {
+			return fmt.Errorf("create writable runtime directory %s: %w", path, err)
+		}
+		info, err := os.Lstat(path)
+		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("runtime directory %s must be a real directory", path)
+		}
+	}
+	probe, err := os.CreateTemp(data, ".runtime-write-check-")
+	if err != nil {
+		return fmt.Errorf("runtime data directory %s is not writable: %w", data, err)
+	}
+	probeName := probe.Name()
+	if err := probe.Close(); err != nil {
+		return fmt.Errorf("close runtime write check: %w", err)
+	}
+	if err := os.Remove(probeName); err != nil {
+		return fmt.Errorf("remove runtime write check: %w", err)
+	}
+	cleaned := launchEnvironment(root, data, selected, manifest.Provider, imagePath, environment)
+	// The harness images use /data as the working directory; the harnesses run
+	// their CLIs in /data/workspace themselves.
+	if err := os.Chdir(data); err != nil {
+		return fmt.Errorf("enter runtime data directory: %w", err)
+	}
+	if check {
+		command := exec.Command(filepath.Join(root, "bin", manifest.Provider), "--version")
+		command.Env = cleaned
+		output, err := command.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("runtime CLI linkage check: %w: %s", err, output)
+		}
+		if !strings.Contains(string(output), manifest.CLIVersion) {
+			return fmt.Errorf("runtime CLI version mismatch: %s", output)
+		}
+		fmt.Print(string(output))
+		return nil
+	}
+	for _, warning := range prepareFilesystem(system, data, owner{uid: os.Geteuid(), gid: os.Getegid(), lchown: os.Lchown}) {
+		fmt.Fprintln(os.Stderr, "runtime launch: warning:", warning)
+	}
+	harness := filepath.Join(root, "bin", "kagent-"+manifest.Provider)
+	return replace(harness, []string{harness}, cleaned)
+}
+
+// requireProcessDriver rejects the Claude Agent SDK driver, which needs Node
+// and the SDK bridge from the Claude harness image.
+func requireProcessDriver(environment []string) error {
+	for _, entry := range environment {
+		name, value, _ := strings.Cut(entry, "=")
+		if name == claudeDriverEnvironment && value != "" && value != "process" {
+			return fmt.Errorf("%s=%q is not supported by the runtime payload; only the default \"process\" driver runs from it", claudeDriverEnvironment, value)
+		}
+	}
+	return nil
+}
+
+// launchEnvironment returns the harness environment: the inherited one without
+// launcher-owned names, dynamic-loader overrides and shell startup hooks, plus
+// the launcher-owned values.
+func launchEnvironment(root, data, platform, provider, imagePath string, environment []string) []string {
+	owned := map[string]string{
+		PlatformEnvironment: platform,
+		"HOME":              filepath.Join(data, "home"),
+		"CLAUDE_CONFIG_DIR": filepath.Join(data, "claude"),
+		"CODEX_HOME":        filepath.Join(data, "codex"),
+		"XDG_CONFIG_HOME":   filepath.Join(data, "home", ".config"),
+		"XDG_CACHE_HOME":    filepath.Join(data, "cache"),
+		"XDG_DATA_HOME":     filepath.Join(data, "home", ".local", "share"),
+		"TMPDIR":            filepath.Join(data, "tmp"),
+		"PATH":              runtimePath(root, imagePath),
+		"GIT_EXEC_PATH":     root + "/libexec/git-core",
+		"GIT_TEMPLATE_DIR":  root + "/share/git-core/templates",
+		// Claude uses the payload's rg on PATH, as in the Claude harness image.
+		"USE_BUILTIN_RIPGREP": "0",
+		"DISABLE_UPDATES":     "1",
+	}
+	if provider == "claude" {
+		owned["IS_SANDBOX"] = "1"
+	}
+	cleaned := make([]string, 0, len(environment)+len(owned))
+	for _, variable := range environment {
+		name, _, _ := strings.Cut(variable, "=")
+		if _, reserved := owned[name]; !reserved && !strings.HasPrefix(name, "LD_") && name != "BASH_ENV" && name != "ENV" {
+			cleaned = append(cleaned, variable)
+		}
+	}
+	for name, value := range owned {
+		cleaned = append(cleaned, name+"="+value)
+	}
+	return cleaned
+}
+
+// defaultSystemPath is appended after the image's PATH so a minimal or empty
+// image PATH still finds the standard system tools.
+const defaultSystemPath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+// runtimePath puts the payload's helper directory first and keeps the image's
+// own PATH entries (such as a development image's toolchain directories) after
+// it. The system directories follow unless the image already lists them.
+// Empty and relative entries are dropped: they would resolve against the
+// workspace checkout.
+func runtimePath(root, imagePath string) string {
+	seen := map[string]bool{}
+	var dirs []string
+	add := func(dir string) {
+		if !filepath.IsAbs(dir) || seen[dir] {
+			return
+		}
+		seen[dir] = true
+		dirs = append(dirs, dir)
+	}
+	add(root + "/bin")
+	for dir := range strings.SplitSeq(imagePath, ":") {
+		add(dir)
+	}
+	for dir := range strings.SplitSeq(defaultSystemPath, ":") {
+		add(dir)
+	}
+	return strings.Join(dirs, ":")
+}

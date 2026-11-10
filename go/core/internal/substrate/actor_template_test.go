@@ -15,6 +15,7 @@ import (
 
 	"github.com/kagent-dev/kagent/go/api/bootstrap"
 	"github.com/kagent-dev/kagent/go/core/internal/translator"
+	"github.com/kagent-dev/kagent/go/harness/runtime/payload"
 )
 
 func TestActorTemplateSkillVolumeLimit(t *testing.T) {
@@ -294,4 +295,59 @@ func TestGoldenEgressPolicyIsPartOfTemplateIdentity(t *testing.T) {
 			require.NotEqual(t, mustSpecDigest(t, original), mustSpecDigest(t, changed))
 		})
 	}
+}
+
+func TestActorTemplateForComposedRevision(t *testing.T) {
+	newSpec := func(composition *translator.Composition) *translator.Revision {
+		return &translator.Revision{ControlPlaneURL: testControlPlaneURL, CPU: "1", Memory: "1Gi",
+			Namespace: "agents", AgentName: "coder", WorkerPoolName: "arm64", SnapshotLocation: "snapshots",
+			Image:      "dev.example/env@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+			Command:    []string{payload.Root + "/bin/launch"},
+			ConfigJSON: []byte(`{}`), Composition: composition,
+			AgentCard: &a2apb.AgentCard{Name: "coder", Version: "v1", Capabilities: &a2apb.AgentCapabilities{},
+				SupportedInterfaces: []*a2apb.AgentInterface{{Url: "http://127.0.0.1:80", ProtocolBinding: "GRPC", ProtocolVersion: "1.0"}}, DefaultInputModes: []string{"text"}, DefaultOutputModes: []string{"text"}},
+		}
+	}
+	build := func(t *testing.T, spec *translator.Revision) *ateapipb.ActorTemplate {
+		t.Helper()
+		id, err := spec.Digest()
+		require.NoError(t, err)
+		bundle, err := spec.BootstrapBundle(id)
+		require.NoError(t, err)
+		template, err := ActorTemplateForRevision(spec, id, bundle)
+		require.NoError(t, err)
+		return template
+	}
+
+	t.Run("Given a composed revision, when its ActorTemplate is built, assert that the payload is mounted at the runtime root with the composed capabilities", func(t *testing.T) {
+		composition := &translator.Composition{PayloadImage: "registry.example/runtime-claude@sha256:2222222222222222222222222222222222222222222222222222222222222222"}
+
+		template := build(t, newSpec(composition))
+
+		container := template.GetContainers()[0]
+		var reference, mountPath string
+		for _, volume := range template.GetVolumes() {
+			if volume.GetName() == runtimePayloadVolume {
+				reference = volume.GetImage().GetReference()
+			}
+		}
+		for _, mount := range container.GetVolumeMounts() {
+			if mount.GetName() == runtimePayloadVolume {
+				mountPath = mount.GetMountPath()
+			}
+		}
+		require.Equal(t, composition.PayloadImage, reference)
+		require.Equal(t, payload.Root, mountPath)
+		require.Equal(t, []string{"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID"}, container.GetSecurityContext().GetCapabilities().GetAdd())
+		require.Empty(t, container.GetSecurityContext().GetCapabilities().GetDrop())
+	})
+
+	t.Run("Given a single-image revision, when its ActorTemplate is built, assert that it has no payload volume and no added capabilities", func(t *testing.T) {
+		template := build(t, newSpec(nil))
+
+		for _, volume := range template.GetVolumes() {
+			require.NotEqual(t, runtimePayloadVolume, volume.GetName())
+		}
+		require.Nil(t, template.GetContainers()[0].GetSecurityContext())
+	})
 }

@@ -10,6 +10,8 @@ import (
 	"unicode/utf8"
 
 	ateapipb "go.ate.dev/substrate/api/ateapi/v1"
+
+	"github.com/kagent-dev/kagent/go/harness/runtime/payload"
 	"go.opentelemetry.io/otel/attribute"
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"google.golang.org/protobuf/proto"
@@ -38,6 +40,7 @@ const egressTrustVolume = "egress-trust"
 const egressTrustMount = "/run/kagent/egress"
 
 const actorIdentityVolume = "actor-identity"
+const runtimePayloadVolume = "runtime-payload"
 const actorIdentityMount = "/run/kagent/identity"
 
 var egressTrustEnvironment = map[string]struct{}{
@@ -154,6 +157,19 @@ func ActorTemplateForRevision(spec *translator.Revision, revisionID translator.R
 		template.Containers[0].VolumeMounts = append(template.Containers[0].VolumeMounts, &ateapipb.VolumeMount{
 			Name: name, MountPath: image.MountPath(),
 		})
+	}
+	if composition := spec.Composition; composition != nil {
+		// Image volumes are always read-only. The launcher, harness and CLI come
+		// from the payload; the development image only supplies the filesystem.
+		template.Volumes = append(template.Volumes, &ateapipb.Volume{
+			Name: runtimePayloadVolume, Image: &ateapipb.ImageVolumeSource{Reference: composition.PayloadImage},
+		})
+		template.Containers[0].VolumeMounts = append(template.Containers[0].VolumeMounts, &ateapipb.VolumeMount{
+			Name: runtimePayloadVolume, MountPath: payload.Root,
+		})
+		template.Containers[0].SecurityContext = &ateapipb.SecurityContext{
+			Capabilities: &ateapipb.Capabilities{Add: composition.ContainerCapabilities()},
+		}
 	}
 	if len(template.Volumes) > 32 || len(template.Containers[0].VolumeMounts) > 32 {
 		return nil, fmt.Errorf("runtime revision has %d volumes and %d container mounts; Substrate supports at most 32 volumes and 32 mounts per container", len(template.Volumes), len(template.Containers[0].VolumeMounts))

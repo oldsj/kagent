@@ -236,3 +236,95 @@ func TestYAMLConfigReadsOnlyFirstDocument(t *testing.T) {
 	require.NoError(t, config.Decode([]byte("logging: {level: debug}\n---\n["), cfg))
 	require.Equal(t, "debug", cfg.GetLogging().GetLevel())
 }
+
+func TestRuntimePayloads(t *testing.T) {
+	const payload = "registry.example/runtime-claude@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+	for _, tc := range []struct {
+		name, input, wantErr string
+	}{
+		{name: "a digest-pinned payload per provider and platform", input: "runtimePayloads: {payloads: [{provider: claude, platform: linux/arm64, image: '" + payload + "', cliVersion: 2.1.285}]}"},
+		{name: "a tag-pinned payload", input: "runtimePayloads: {payloads: [{provider: claude, platform: linux/arm64, image: 'registry.example/runtime:latest', cliVersion: 2.1.285}]}", wantErr: "image"},
+		{name: "an unsupported provider", input: "runtimePayloads: {payloads: [{provider: kagent, platform: linux/arm64, image: '" + payload + "', cliVersion: 2.1.285}]}", wantErr: "provider"},
+		{name: "a registry allowlist entry with a path", input: "server: {auth: {sessionPolicy: {namespace: kagent, agents: [claude], developmentEnvironmentRegistries: ['registry.example/team']}}}", wantErr: "development_environment_registries"},
+	} {
+		t.Run("Given "+tc.name+", when the controller config is validated, assert the expected outcome", func(t *testing.T) {
+			cfg := &configv1.ControllerConfig{}
+			require.NoError(t, config.Decode([]byte(tc.input), cfg))
+			config.DefaultController(cfg)
+			setLogins(cfg)
+
+			err := config.Validate(cfg)
+
+			if tc.wantErr != "" {
+				require.ErrorContains(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, "2.1.285", cfg.GetRuntimePayloads().GetPayloads()[0].GetCliVersion())
+		})
+	}
+}
+
+func TestSubstrateDeadlineBounds(t *testing.T) {
+	scenarios := []struct {
+		name, field, value string
+		wantErr            string
+	}{
+		{name: "Given a 20m lifecycle call deadline, when the config is validated, assert that it is accepted", field: "lifecycleCallTimeout", value: "1200s"},
+		{name: "Given a 2h attempt bound, when the config is validated, assert that it is accepted", field: "operationTimeout", value: "7200s"},
+		{name: "Given a call deadline under 1s, when the config is validated, assert that it is rejected", field: "callTimeout", value: "0.5s", wantErr: "call_timeout"},
+		{name: "Given a lifecycle call deadline above 1h, when the config is validated, assert that it is rejected", field: "lifecycleCallTimeout", value: "3601s", wantErr: "lifecycle_call_timeout"},
+		{name: "Given an attempt bound above 2h, when the config is validated, assert that it is rejected", field: "operationTimeout", value: "7201s", wantErr: "operation_timeout"},
+	}
+	for _, scenario := range scenarios {
+		t.Run(scenario.name, func(t *testing.T) {
+			cfg := &configv1.ControllerConfig{}
+			require.NoError(t, config.Decode([]byte("substrate: {"+scenario.field+": "+scenario.value+"}"), cfg))
+			config.DefaultController(cfg)
+			setLogins(cfg)
+
+			err := config.Validate(cfg)
+
+			if scenario.wantErr != "" {
+				require.ErrorContains(t, err, scenario.wantErr)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestSessionsQuiescenceDelayBounds(t *testing.T) {
+	scenarios := []struct {
+		name, delay string
+		want        time.Duration
+		wantErr     bool
+	}{
+		{name: "Given no quiescence delay, when the config loads, assert that suspension is immediate", delay: "", want: 0},
+		{name: "Given a 15m quiescence delay, when the config loads, assert that it is kept", delay: "900s", want: 15 * time.Minute},
+		{name: "Given the 30m maximum, when the config loads, assert that it is accepted", delay: "1800s", want: 30 * time.Minute},
+		{name: "Given a delay above 30m, when the config is validated, assert that it is rejected", delay: "1801s", wantErr: true},
+		{name: "Given a negative delay, when the config is validated, assert that it is rejected", delay: "-1s", wantErr: true},
+	}
+	for _, scenario := range scenarios {
+		t.Run(scenario.name, func(t *testing.T) {
+			input := "{}"
+			if scenario.delay != "" {
+				input = "sessions: {quiescenceDelay: " + scenario.delay + "}"
+			}
+			cfg := &configv1.ControllerConfig{}
+			require.NoError(t, config.Decode([]byte(input), cfg))
+			config.DefaultController(cfg)
+			setLogins(cfg)
+
+			err := config.Validate(cfg)
+
+			if scenario.wantErr {
+				require.ErrorContains(t, err, "quiescence_delay")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, scenario.want, cfg.GetSessions().GetQuiescenceDelay().AsDuration())
+		})
+	}
+}

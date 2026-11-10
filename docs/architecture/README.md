@@ -103,6 +103,7 @@ cleanup. Session lifecycle workers independently pause/suspend idle Actors.
 - [Configuration and compilation](configuration-and-compilation.md)
 - [Process configuration](process-configuration.md)
 - [Runtime and lifecycle](runtime-and-lifecycle.md)
+- [Runtime composition](runtime-composition.md)
 - [Client lifecycle retries](../lifecycle-retries.md)
 - [Standalone sandboxes](sandboxes.md)
 - [A2A gateway](a2a-gateway.md)

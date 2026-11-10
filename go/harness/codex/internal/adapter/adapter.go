@@ -84,7 +84,7 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 	environment := nativeEnvironment(input.Environment, codexHome, nativeDefaults)
 	cfg.Telemetry = effectiveTelemetry(cfg.Telemetry, environment)
 	cfg.Telemetry.CaptureContent = nativeDefaults.WithEnvironment(input.Environment).CaptureContent
-	configTOML, err := renderConfig(cfg, codexHome, slices.Contains(input.Environment, env.TestCodexDisableRetries+"=true"))
+	configTOML, err := renderConfig(cfg, codexHome, input.Workspace, slices.Contains(input.Environment, env.TestCodexDisableRetries+"=true"))
 	if err != nil {
 		return nil, err
 	}
@@ -121,17 +121,18 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 }
 
 type nativeConfig struct {
-	Model          string                         `toml:"model"`
-	ModelProvider  string                         `toml:"model_provider"`
-	ApprovalPolicy nativeApprovalPolicy           `toml:"approval_policy"`
-	SandboxMode    string                         `toml:"sandbox_mode"`
-	WebSearch      string                         `toml:"web_search"`
-	Features       nativeFeatures                 `toml:"features"`
-	Analytics      nativeAnalytics                `toml:"analytics"`
-	Otel           *nativeOtel                    `toml:"otel,omitempty"`
-	ModelProviders map[string]nativeModelProvider `toml:"model_providers,omitempty"`
-	Agents         map[string]nativeAgent         `toml:"agents,omitempty"`
-	MCPServers     map[string]nativeMCPServer     `toml:"mcp_servers,omitempty"`
+	Model            string                         `toml:"model"`
+	ModelProvider    string                         `toml:"model_provider"`
+	AutoCompactLimit int64                          `toml:"model_auto_compact_token_limit,omitempty"`
+	ApprovalPolicy   nativeApprovalPolicy           `toml:"approval_policy"`
+	SandboxMode      string                         `toml:"sandbox_mode"`
+	WebSearch        string                         `toml:"web_search"`
+	Features         nativeFeatures                 `toml:"features"`
+	Analytics        nativeAnalytics                `toml:"analytics"`
+	Otel             *nativeOtel                    `toml:"otel,omitempty"`
+	ModelProviders   map[string]nativeModelProvider `toml:"model_providers,omitempty"`
+	Agents           map[string]nativeAgent         `toml:"agents,omitempty"`
+	MCPServers       map[string]nativeMCPServer     `toml:"mcp_servers,omitempty"`
 }
 
 type nativeApprovalPolicy struct {
@@ -210,11 +211,13 @@ type nativeAgentConfig struct {
 
 // renderConfig translates the versioned Kagent contract into the pinned
 // Codex CLI's native TOML without copying credential values into durable state.
-func renderConfig(cfg config.Config, codexHome string, disableRetries bool) ([]byte, error) {
+// It ends with the workspace trust entry; see workspaceTrustEntry.
+func renderConfig(cfg config.Config, codexHome, workspaceDir string, disableRetries bool) ([]byte, error) {
 	native := nativeConfig{
 		Model: cfg.Model, ModelProvider: nativeProviderName(cfg.Provider),
-		ApprovalPolicy: nativeApprovalPolicy{Granular: nativeGranularApprovalPolicy{MCPElicitations: true}},
-		SandboxMode:    "danger-full-access", WebSearch: "cached",
+		AutoCompactLimit: cfg.AutoCompactTokenLimit,
+		ApprovalPolicy:   nativeApprovalPolicy{Granular: nativeGranularApprovalPolicy{MCPElicitations: true}},
+		SandboxMode:      "danger-full-access", WebSearch: "cached",
 		// DNS denials look like connection failures. Keep retries bounded even
 		// after the temporary zero provider retry budgets are removed.
 		Features:   nativeFeatures{DefaultModeRequestUserInput: true, UnboundedConnectionRetries: false},
@@ -279,7 +282,18 @@ func renderConfig(cfg config.Config, codexHome string, disableRetries bool) ([]b
 	if err != nil {
 		return nil, fmt.Errorf("encode Codex configuration: %w", err)
 	}
-	return contents, nil
+	return append(contents, workspaceTrustEntry(workspaceDir)...), nil
+}
+
+// workspaceTrustEntry is the exact bytes the pinned Codex CLI appends to
+// config.toml when thread/start runs in an untrusted Git checkout: a
+// [projects."<dir>"] table marking that directory trusted. Codex leaves an
+// already-trusted config.toml byte-for-byte unchanged. Without the entry,
+// Codex would rewrite this adapter-owned file on a new thread, and New's
+// rewrite on every start would drop it again, so a thread resumed after a
+// restart would run untrusted while a new one ran trusted.
+func workspaceTrustEntry(workspaceDir string) []byte {
+	return fmt.Appendf(nil, "\n[projects.%q]\ntrust_level = \"trusted\"\n", workspaceDir)
 }
 
 func nativeExporter(exporterConfig *config.OTLPExporter) *nativeOtelExporter {

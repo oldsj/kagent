@@ -257,6 +257,19 @@ func TestConfigurationCRDValidation(t *testing.T) {
 		wantReject string
 	}{
 		{
+			name:   "Harness accepts a zero sessionIdleTTL",
+			object: validHarness(namespace, "harness-zero-ttl", HarnessSpec{Claude: &ClaudeHarness{}, SessionIdleTTL: &metav1.Duration{}}),
+		},
+		{
+			name:   "Harness accepts a positive sessionIdleTTL",
+			object: validHarness(namespace, "harness-positive-ttl", HarnessSpec{Claude: &ClaudeHarness{}, SessionIdleTTL: &metav1.Duration{Duration: 30 * time.Second}}),
+		},
+		{
+			name:       "Harness rejects a negative sessionIdleTTL",
+			object:     validHarness(namespace, "harness-negative-ttl", HarnessSpec{Claude: &ClaudeHarness{}, SessionIdleTTL: &metav1.Duration{Duration: -time.Second}}),
+			wantReject: "sessionIdleTTL must be nonnegative",
+		},
+		{
 			name:       "Harness requires one runtime",
 			object:     validHarness(namespace, "harness-no-runtime", HarnessSpec{}),
 			wantReject: "exactly one of the fields in [kagent codex claude byo] must be set",
@@ -506,6 +519,19 @@ func TestConfigurationCRDValidation(t *testing.T) {
 				Git:    &HarnessGit{Origins: []string{"github.com"}},
 			}),
 			wantReject: "git is supported only by the codex and claude harnesses",
+		},
+		{
+			name: "Codex accepts an auto compact token limit",
+			object: validHarness(namespace, "codex-auto-compact", HarnessSpec{
+				Codex: &CodexHarness{AutoCompactTokenLimit: new(int64(120000))},
+			}),
+		},
+		{
+			name: "Codex rejects a non-positive auto compact token limit",
+			object: validHarness(namespace, "codex-auto-compact-zero", HarnessSpec{
+				Codex: &CodexHarness{AutoCompactTokenLimit: new(int64(0))},
+			}),
+			wantReject: "spec.codex.autoCompactTokenLimit",
 		},
 		{
 			name:   "SandboxTemplate allows empty literal environment values",

@@ -101,7 +101,14 @@ type KagentHarnessMemory struct {
 }
 
 // CodexHarness selects the Codex runtime adapter.
-type CodexHarness struct{}
+type CodexHarness struct {
+	// AutoCompactTokenLimit is the context size, in tokens, at which Codex
+	// compacts the conversation on its own. Codex applies its model-specific
+	// default when unset.
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	AutoCompactTokenLimit *int64 `json:"autoCompactTokenLimit,omitempty"`
+}
 
 // ClaudeHarness selects the Claude runtime adapter.
 type ClaudeHarness struct{}
@@ -114,6 +121,7 @@ type ClaudeHarness struct{}
 // +kubebuilder:validation:XValidation:rule="!has(self.pushProxyOrigin) || has(self.readProxyOrigin)",message="pushProxyOrigin requires readProxyOrigin"
 // +kubebuilder:validation:XValidation:rule="!has(self.readProxyOrigin) || (self.origins.size() == 1 && self.origins[0] == 'github.com')",message="Git proxies require the single canonical github.com origin"
 // +kubebuilder:validation:XValidation:rule="!has(self.readProxyOrigin) || !has(self.credentialSecretRef)",message="Git proxies cannot use credentialSecretRef"
+// +kubebuilder:validation:XValidation:rule="!has(self.readProxyOrigin) || !has(self.pushProxyOrigin) || (self.readProxyOrigin == 'http://mainloop-git-read.mainloop.svc.cluster.local' && self.pushProxyOrigin == 'http://mainloop-git-push.mainloop.svc.cluster.local') || (self.readProxyOrigin == 'http://mainloop-git-read.mainloop-dev.svc.cluster.local' && self.pushProxyOrigin == 'http://mainloop-git-push.mainloop-dev.svc.cluster.local')",message="readProxyOrigin and pushProxyOrigin must belong to the same Mainloop Git instance"
 type HarnessGit struct {
 	// Origins lists the HTTPS Git hosts sessions may clone from, for example
 	// github.com. Each is an exact DNS name without scheme, port, or path.
@@ -126,16 +134,18 @@ type HarnessGit struct {
 	Origins []string `json:"origins"`
 
 	// ReadProxyOrigin routes canonical GitHub checkouts through the trusted read
-	// listener. Authorization comes from per-Session references, never a GitHub
-	// credential. Omitted retains standalone direct Git behavior.
-	// +kubebuilder:validation:Enum="http://mainloop-git-read.mainloop.svc.cluster.local"
+	// listener of a known Mainloop Git instance. Authorization comes from
+	// per-Session references, never a GitHub credential. Omitted retains
+	// standalone direct Git behavior.
+	// +kubebuilder:validation:Enum="http://mainloop-git-read.mainloop.svc.cluster.local";"http://mainloop-git-read.mainloop-dev.svc.cluster.local"
 	// +optional
 	ReadProxyOrigin *string `json:"readProxyOrigin,omitempty"`
 
 	// PushProxyOrigin routes publication through the separate trusted push
-	// listener. Omitted leaves receive-pack on the read listener, which denies it.
-	// A transport origin does not grant publication authority.
-	// +kubebuilder:validation:Enum="http://mainloop-git-push.mainloop.svc.cluster.local"
+	// listener of the same Mainloop Git instance as ReadProxyOrigin. Omitted
+	// leaves receive-pack on the read listener, which denies it. A transport
+	// origin does not grant publication authority.
+	// +kubebuilder:validation:Enum="http://mainloop-git-push.mainloop.svc.cluster.local";"http://mainloop-git-push.mainloop-dev.svc.cluster.local"
 	// +optional
 	PushProxyOrigin *string `json:"pushProxyOrigin,omitempty"`
 
@@ -185,6 +195,13 @@ type HarnessWorkload struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.codex) || !has(self.workload) || (!has(self.workload.command) && !has(self.workload.args))",message="Codex harnesses do not support workload.command or workload.args"
 // +kubebuilder:validation:XValidation:rule="!has(self.git) || has(self.codex) || has(self.claude)",message="git is supported only by the codex and claude harnesses"
 type HarnessSpec struct {
+	// SessionIdleTTL overrides the controller's sessions.idleTtl for every
+	// Session of Agents using this Harness, including existing Sessions.
+	// Zero disables idle expiration.
+	// +kubebuilder:validation:XValidation:rule="duration(self) >= duration('0s')",message="sessionIdleTTL must be nonnegative"
+	// +optional
+	SessionIdleTTL *metav1.Duration `json:"sessionIdleTTL,omitempty"`
+
 	// +optional
 	Kagent *KagentHarness `json:"kagent,omitempty"`
 

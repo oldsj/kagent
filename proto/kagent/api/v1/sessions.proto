@@ -55,6 +55,37 @@ message Session {
   Workspace workspace = 16;
   // Secret references only; forks do not inherit these bindings.
   repeated SessionCredential credentials = 17;
+  // Output only. The development image this Session runs in, as selected at
+  // creation. Unset for Sessions on the Agent's single-image revision. Forks
+  // keep it.
+  DevelopmentEnvironment development_environment = 18;
+  // Output only. The operator's runtime payload pinned at creation; set exactly
+  // when development_environment is.
+  RuntimeComposition runtime_composition = 19;
+  // Output only. Set only by GetSession, from a fresh observation of the
+  // Session's runtime Actor. Absent means no association was verified by this
+  // read; it is never a creation or fork input.
+  RuntimeAssociation runtime_association = 20;
+  // Output only. Set on a fork created with a fresh conversation: its restored
+  // data keeps the workspace, but the runtime discards native conversation state.
+  bool fresh_conversation = 22;
+}
+
+// RuntimeAssociation is a bounded observation of the runtime Actor that serves
+// a Session, not a grant: callers recheck with their own fencing before
+// runtime work.
+message RuntimeAssociation {
+  // Stable identity of the Session's current runtime: a name-based UUID of the
+  // Session ID and the Actor UID. It changes only if the Actor is replaced.
+  string generation_id = 1;
+  string atespace = 2;
+  string actor_name = 3;
+  string actor_uid = 4;
+  // "active" while the observed Actor is the Session's recorded runtime.
+  string phase = 5;
+  // True while the Actor is running; false while it is suspended or otherwise
+  // not serving. A sleeping Session stays READY and reports false here.
+  bool current_active = 6;
 }
 
 // SecretKeyReference identifies a key in the Agent's namespace. The value is
@@ -110,6 +141,45 @@ message CreateSessionRequest {
   Workspace workspace = 6;
   // Per-session headers for origins already allowed by the Agent revision.
   repeated SessionCredential credentials = 7 [(buf.validate.field).repeated.max_items = 4];
+  // Optional development image to run the Agent's Claude or Codex harness in.
+  // The harness, its CLI and helpers come from the operator's runtime payload.
+  // Selection requires the controller's session policy to allow its registry.
+  DevelopmentEnvironment development_environment = 8;
+}
+
+// DevelopmentEnvironment selects the image a composed Session runs in.
+message DevelopmentEnvironment {
+  // Digest-pinned image reference.
+  string image = 1 [(buf.validate.field).string = {
+    max_len: 512
+    pattern: "^[A-Za-z0-9][A-Za-z0-9./_:-]*@sha256:[a-f0-9]{64}$"
+  }];
+  string platform = 2 [(buf.validate.field).string = {
+    in: [
+      "linux/amd64",
+      "linux/arm64"
+    ]
+  }];
+  // Caller-owned immutable identity of the policy the image was admitted
+  // under, such as a registration revision. It is part of the revision identity.
+  string policy_identity = 3 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 256
+    pattern: "^\\S(.*\\S)?$"
+  }];
+}
+
+// RuntimeComposition is the operator-resolved runtime payload a composed
+// Session runs its harness from.
+message RuntimeComposition {
+  // Digest-pinned payload image from the operator catalog.
+  string payload_image = 1;
+  // Harness provider the payload serves: claude or codex.
+  string provider = 2;
+  // Payload contract schema.
+  uint32 schema = 3;
+  // CLI version the payload carries.
+  string cli_version = 4;
 }
 
 message CreateSessionResponse {

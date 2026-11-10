@@ -98,15 +98,23 @@ func (g *gitRunner) checkout(ctx context.Context, c checkout) error {
 		if c.Credential || c.ReadURL == "" || c.PushURL == "" {
 			return errors.New("invalid Git proxy transport")
 		}
+		var proxyNamespace string
 		for i, rawURL := range []string{c.ReadURL, c.PushURL} {
 			u, err := url.Parse(rawURL)
 			if err != nil || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 				return errors.New("invalid Git proxy transport")
 			}
 			origin := u.Scheme + "://" + u.Host
-			if origin != apiworkspace.ReadProxyOrigin && (i == 0 || origin != apiworkspace.PushProxyOrigin) {
+			namespace, ok := apiworkspace.ParseGitProxyOrigin(origin, i == 0)
+			if i == 1 && !ok {
+				// Read-only mode (no push proxy) puts the push URL on the same
+				// instance's read origin.
+				namespace, ok = apiworkspace.ParseGitProxyOrigin(origin, true)
+			}
+			if !ok || (i == 1 && namespace != proxyNamespace) {
 				return errors.New("invalid Git proxy transport")
 			}
+			proxyNamespace = namespace
 			proxyOrigins = append(proxyOrigins, origin)
 		}
 	}

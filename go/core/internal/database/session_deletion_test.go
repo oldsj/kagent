@@ -29,7 +29,7 @@ func TestNormalDeletionAllowsSettledTurns(t *testing.T) {
 	for _, state := range []a2a.TaskState{a2a.TaskStateInputRequired, a2a.TaskStateAuthRequired, a2a.TaskStateCompleted, a2a.TaskStateFailed, a2a.TaskStateCanceled, a2a.TaskStateRejected} {
 		t.Run("Given a settled "+string(state)+" turn, when deletion is requested, assert that it is admitted", func(t *testing.T) {
 			client, session, task, version := deletionTaskFixture(t, state)
-			require.NoError(t, client.SettleSessionTask(t.Context(), session.Id, string(task.ID), version))
+			require.NoError(t, client.SettleSessionTask(t.Context(), session.Id, string(task.ID), version, 0))
 			operation, err := client.BeginSessionOperation(t.Context(), session.Id, apiv1.RuntimeOperation_RUNTIME_OPERATION_DELETE, false)
 			require.NoError(t, err)
 			require.Equal(t, apiv1.RuntimeState_RUNTIME_STATE_DELETING, operation.Instance.State)
@@ -90,7 +90,7 @@ func TestForceDeletionPreservesSavedBoundary(t *testing.T) {
 			retained, err := unmarshalSessionTask(stored.Data)
 			require.NoError(t, err)
 			require.Equal(t, state, retained.Status.State)
-			require.ErrorIs(t, client.SettleSessionTask(t.Context(), session.Id, string(task.ID), version), ErrNotFound)
+			require.ErrorIs(t, client.SettleSessionTask(t.Context(), session.Id, string(task.ID), version, 0), ErrNotFound)
 		})
 	}
 }
@@ -103,7 +103,7 @@ func TestForceDeletionPreservesConcurrentRuntimeSettlement(t *testing.T) {
 	require.NoError(t, err)
 
 	// The runtime acknowledges its saved result while actor deletion is in progress.
-	require.NoError(t, client.SettleSessionTask(t.Context(), session.Id, string(task.ID), version))
+	require.NoError(t, client.SettleSessionTask(t.Context(), session.Id, string(task.ID), version, 0))
 	finishAdmittedDeletion(t, client, operation)
 
 	stored, err := readSessionTask(t.Context(), client.db, row.HistoryID, string(task.ID))
@@ -167,7 +167,7 @@ func TestForceDeletionRevokesDispatch(t *testing.T) {
 
 func TestForceDeletionRetainsIdleLifecycleOwnership(t *testing.T) {
 	client, session, task, version := deletionTaskFixture(t, a2a.TaskStateCompleted)
-	require.NoError(t, client.SettleSessionTask(t.Context(), session.Id, string(task.ID), version))
+	require.NoError(t, client.SettleSessionTask(t.Context(), session.Id, string(task.ID), version, 0))
 	work, err := client.ClaimSessionQuiescence(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, session.Id, work.Session.Id)

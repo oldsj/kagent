@@ -30,6 +30,13 @@ type gitProxyFixture struct {
 
 func newGitProxyFixture(t *testing.T) *gitProxyFixture {
 	t.Helper()
+	return newGitInstanceProxyFixture(t, "mainloop")
+}
+
+// newGitInstanceProxyFixture serves only the listeners of one Mainloop Git
+// instance namespace.
+func newGitInstanceProxyFixture(t *testing.T, namespace string) *gitProxyFixture {
+	t.Helper()
 	raw, sha := originRepo(t)
 	f := &gitProxyFixture{bare: strings.TrimPrefix(raw, "file://"), sha: sha}
 	run(t, f.bare, "config", "http.receivepack", "true")
@@ -40,8 +47,8 @@ func newGitProxyFixture(t *testing.T) *gitProxyFixture {
 		f.mu.Lock()
 		f.requests = append(f.requests, proxyRequest{r.URL.Host, r.URL.Path, r.URL.RawQuery, r.Header.Get("Authorization")})
 		f.mu.Unlock()
-		readHost := "mainloop-git-read.mainloop.svc.cluster.local"
-		pushHost := "mainloop-git-push.mainloop.svc.cluster.local"
+		readHost := "mainloop-git-read." + namespace + ".svc.cluster.local"
+		pushHost := "mainloop-git-push." + namespace + ".svc.cluster.local"
 		if r.Method == http.MethodConnect || (r.URL.Host != readHost && r.URL.Host != pushHost) || !strings.HasPrefix(r.URL.Path, "/owner/repo.git/") {
 			http.Error(w, "denied authority", http.StatusForbidden)
 			return
@@ -261,6 +268,52 @@ func TestProxyRefModesUseRealGit(t *testing.T) {
 			if ref == "v1" || ref == f.sha {
 				require.Empty(t, run(t, b.dir, "branch", "--show-current"))
 			}
+		})
+	}
+}
+
+// A second Mainloop Git instance checks out and pushes through its own
+// listeners only.
+func TestProxyBootstrapOnDevInstance(t *testing.T) {
+	f := newGitInstanceProxyFixture(t, "mainloop-dev")
+	f.available.Store(true)
+	f.pushAvailable.Store(true)
+	read, push := apiworkspace.GitInstanceOrigins("mainloop-dev")
+	policy := apiworkspace.Git{Origins: []string{"github.com"}, ReadProxyOrigin: &read, PushProxyOrigin: &push}
+	next := &fakeRunner{}
+	b, err := New(next, Config{Dir: filepath.Join(t.TempDir(), "workspace"), StateDir: t.TempDir(), Policy: policy, Source: &fakeSource{request: &Request{Repo: "https://github.com/owner/repo", Ref: "main"}}, Environment: f.environment()})
+	require.NoError(t, err)
+	out, err := b.Run(t.Context(), runtime.Turn{}, nil)
+	require.NoError(t, err)
+	require.Nil(t, out.Failure)
+	require.Equal(t, read+"/owner/repo.git", run(t, b.dir, "remote", "get-url", "origin"))
+	require.Equal(t, push+"/owner/repo.git", run(t, b.dir, "remote", "get-url", "--push", "origin"))
+	agentCommit(t, b.dir)
+	_, err = b.git.git(t.Context(), b.dir, "push", "push", "origin", "HEAD:refs/heads/from-dev-instance")
+	require.NoError(t, err)
+	requests, receives := f.snapshot()
+	require.Positive(t, receives)
+	for _, r := range requests {
+		require.Contains(t, []string{"mainloop-git-read.mainloop-dev.svc.cluster.local", "mainloop-git-push.mainloop-dev.svc.cluster.local"}, r.host)
+	}
+}
+
+func TestProxyCheckoutRejectsCrossInstanceTransport(t *testing.T) {
+	g, err := newGitRunner(nil)
+	require.NoError(t, err)
+	devRead, devPush := apiworkspace.GitInstanceOrigins("mainloop-dev")
+	for name, urls := range map[string][2]string{
+		"dev read, mainloop push":   {devRead, apiworkspace.PushProxyOrigin},
+		"mainloop read, dev push":   {apiworkspace.ReadProxyOrigin, devPush},
+		"read-only on another read": {devRead, apiworkspace.ReadProxyOrigin},
+		"push origin as read":       {devPush, devPush},
+		"unknown host":              {"http://example.com", "http://example.com"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "workspace")
+			err := g.checkout(t.Context(), checkout{Proxy: true, Dir: dir, StateDir: t.TempDir(), ReadURL: urls[0] + "/owner/repo.git", PushURL: urls[1] + "/owner/repo.git", Ref: "main"})
+			require.EqualError(t, err, "invalid Git proxy transport")
+			require.NoDirExists(t, dir)
 		})
 	}
 }

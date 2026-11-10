@@ -128,6 +128,33 @@ message ControllerConfig {
   HarnessImagesConfig harness_images = 14;
   PushConfig push = 15;
   CredentialRefreshConfig credential_refresh = 16;
+  RuntimePayloadsConfig runtime_payloads = 17;
+}
+
+// RuntimePayloadsConfig is the operator catalog for composed Sessions. A
+// composed Session runs a caller-selected development image with the payload
+// for its harness and platform mounted read-only. Callers cannot choose the
+// payload. An empty catalog disables composition.
+message RuntimePayloadsConfig {
+  repeated RuntimePayload payloads = 1 [(buf.validate.field).repeated.max_items = 16];
+}
+
+message RuntimePayload {
+  string provider = 1 [(buf.validate.field).string = {
+    in: [
+      "claude",
+      "codex"
+    ]
+  }];
+  string platform = 2 [(buf.validate.field).string = {
+    in: [
+      "linux/amd64",
+      "linux/arm64"
+    ]
+  }];
+  string image = 3 [(buf.validate.field).string.pattern = "^[A-Za-z0-9][A-Za-z0-9./_:-]*@sha256:[a-f0-9]{64}$"];
+  // CLI release the payload carries; the harness checks it at startup.
+  string cli_version = 4 [(buf.validate.field).string.pattern = "^[0-9]+[.][0-9]+[.][0-9]+(?:[-+][0-9A-Za-z.-]+)?$"];
 }
 
 // CredentialRefreshConfig controls control-side refresh of subscription
@@ -179,6 +206,61 @@ message AuthenticationConfig {
   }];
   string user_id_claim = 2;
   ServiceAccountAuthentication service_account = 3;
+  // Limits which Agents callers may create Sessions for and which Secrets they
+  // may bind as Session credentials. Unset applies no such limit.
+  SessionPolicy session_policy = 4;
+}
+
+// SessionPolicy is the operator's allowlist for Session creation by API
+// callers. Internal controller work, such as scheduled runs, is not subject to
+// it. Every other caller, runtime Actors included, is.
+message SessionPolicy {
+  // The only namespace whose Agents callers may use.
+  string namespace = 1 [(buf.validate.field).string = {
+    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+    max_len: 63
+  }];
+  repeated string agents = 2 [(buf.validate.field).repeated = {
+    min_items: 1
+    unique: true
+    items: {
+      string: {
+        min_len: 1
+        max_len: 253
+      }
+    }
+  }];
+  // A Session credential is accepted only when it matches one rule exactly.
+  // With no rules, Sessions cannot carry credentials.
+  repeated SessionCredentialRule credentials = 3;
+  // Exact in-cluster http:// origins an "mcp" rule may use. https needs no entry.
+  repeated string cleartext_mcp_origins = 4 [(buf.validate.field).repeated.unique = true];
+  // Exact registry hosts, with an optional port, that development images may
+  // come from. Empty denies development environment selection.
+  repeated string development_environment_registries = 5 [(buf.validate.field).repeated = {
+    unique: true
+    items: {
+      string: {pattern: "^[A-Za-z0-9.-]+(:[0-9]{1,5})?$"}
+    }
+  }];
+}
+
+message SessionCredentialRule {
+  // Glob over the Secret name in the policy namespace, for example
+  // mainloop-git-read-*.
+  string secret_name_pattern = 1 [(buf.validate.field).string.min_len = 1];
+  string key = 2 [(buf.validate.field).string.min_len = 1];
+  string origin = 3 [(buf.validate.field).string.min_len = 1];
+  string header = 4 [(buf.validate.field).string.const = "authorization"];
+  // git-read and git-push are fixed to the trusted Git proxy origins and
+  // Secret name patterns; mcp covers every other origin.
+  string purpose = 5 [(buf.validate.field).string = {
+    in: [
+      "git-read",
+      "git-push",
+      "mcp"
+    ]
+  }];
 }
 
 // Platform-owned invocation authentication for the fixed kagent-invocation audience,
@@ -255,6 +337,24 @@ message SubstrateConfig {
     uri: true
     pattern: "^https://[^/?#]+"
   }];
+  // Deadline for each Substrate RPC other than Actor resume, suspend and
+  // revert. Defaults to 30s.
+  google.protobuf.Duration call_timeout = 6 [(buf.validate.field).duration = {
+    gte: {seconds: 1}
+    lte: {seconds: 3600}
+  }];
+  // Deadline for Actor resume, suspend and revert, which move snapshots and
+  // grow with the runtime's durable data. Defaults to 5m.
+  google.protobuf.Duration lifecycle_call_timeout = 7 [(buf.validate.field).duration = {
+    gte: {seconds: 1}
+    lte: {seconds: 3600}
+  }];
+  // Bound on one runtime lifecycle attempt and its execution claim. It must
+  // exceed lifecycle_call_timeout. Defaults to 10m.
+  google.protobuf.Duration operation_timeout = 8 [(buf.validate.field).duration = {
+    gte: {seconds: 1}
+    lte: {seconds: 7200}
+  }];
 }
 
 message SessionsConfig {
@@ -275,6 +375,14 @@ message SessionsConfig {
   google.protobuf.Duration quiescence_recovery_interval = 4 [(buf.validate.field).duration = {
     gt: {}
     lte: {seconds: 9223372036}
+  }];
+  // Delay after a turn settles before its idle runtime may be suspended, so
+  // background processes keep running. Zero (default) suspends immediately.
+  // A new turn supersedes the pending suspension. Due work is noticed within
+  // quiescence_recovery_interval.
+  google.protobuf.Duration quiescence_delay = 5 [(buf.validate.field).duration = {
+    gte: {}
+    lte: {seconds: 1800}
   }];
 }
 

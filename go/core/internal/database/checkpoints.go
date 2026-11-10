@@ -26,10 +26,15 @@ var (
 // ForkSession atomically creates a session and independent history from an owned
 // READY checkpoint, replaying only events through its saved boundary. The fork retains the
 // source revision and snapshot, with fresh context and task IDs. A repeated owner/requestID returns
-// the existing fork for the same checkpoint, or ErrIdempotencyConflict otherwise. The
-// boolean reports creation; callers provision the runtime separately. A deleted
-// fork returns ErrFailedPrecondition and retains its request identity.
-func (c *Client) ForkSession(ctx context.Context, checkpointID, userID, requestID, sessionID string) (*apiv1.Session, bool, error) {
+// the existing fork for the same checkpoint and conversation mode, or
+// ErrIdempotencyConflict otherwise. The boolean reports creation; callers
+// provision the runtime separately. A deleted fork returns ErrFailedPrecondition
+// and retains its request identity.
+//
+// A fresh fork restores the checkpoint's snapshot, and so keeps its workspace,
+// but copies no A2A history. It is marked so the runtime discards the native
+// agent conversation that the snapshot also carries.
+func (c *Client) ForkSession(ctx context.Context, checkpointID, userID, requestID, sessionID string, fresh bool) (*apiv1.Session, bool, error) {
 	checkpointUUID, err := uuid.Parse(checkpointID)
 	if err != nil {
 		return nil, false, fmt.Errorf("invalid checkpoint ID: %w", err)
@@ -37,14 +42,7 @@ func (c *Client) ForkSession(ctx context.Context, checkpointID, userID, requestI
 
 	existing, err := readSessionRequest(ctx, c.db, userID, requestID)
 	if err == nil {
-		if existing.SourceCheckpointID == nil || *existing.SourceCheckpointID != checkpointUUID {
-			return nil, false, ErrIdempotencyConflict
-		}
-		session, err := toSession(existing)
-		if err == nil && session.State == apiv1.RuntimeState_RUNTIME_STATE_DELETED {
-			return nil, false, ErrFailedPrecondition
-		}
-		return session, false, err
+		return replayedFork(existing, checkpointUUID, fresh)
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return nil, false, fmt.Errorf("get fork request: %w", err)
@@ -77,6 +75,11 @@ func (c *Client) ForkSession(ctx context.Context, checkpointID, userID, requestI
 		if err != nil {
 			return fmt.Errorf("get checkpoint context: %w", err)
 		}
+		// A fork runs the same development image and payload as its source.
+		_, composition, err := getRevisionComposition(ctx, tx, *checkpoint.PreparedRevision)
+		if err != nil {
+			return err
+		}
 		historyID := uuid.New()
 		now := timestamppb.Now()
 		// Session credentials identify the source binding and must not be inherited.
@@ -87,14 +90,21 @@ func (c *Client) ForkSession(ctx context.Context, checkpointID, userID, requestI
 				Ref: &apiv1.ResourceReference{Namespace: revision.Namespace, Name: revision.AgentName},
 				Uid: revision.AgentUID,
 			},
-			PreparedRevision: *checkpoint.PreparedRevision,
-			State:            apiv1.RuntimeState_RUNTIME_STATE_CREATING,
-			Operation:        apiv1.RuntimeOperation_RUNTIME_OPERATION_CREATE,
-			CreatedAt:        now, UpdatedAt: now,
+			PreparedRevision:  *checkpoint.PreparedRevision,
+			State:             apiv1.RuntimeState_RUNTIME_STATE_CREATING,
+			Operation:         apiv1.RuntimeOperation_RUNTIME_OPERATION_CREATE,
+			FreshConversation: fresh,
+			CreatedAt:         now, UpdatedAt: now,
+		}
+		if composition != nil {
+			session.DevelopmentEnvironment, session.RuntimeComposition = composition.Environment, composition.Runtime
 		}
 		row, err = insertSessionRecords(ctx, tx, session, requestID, historyID, &checkpoint.ID)
 		if err != nil {
 			return err
+		}
+		if fresh {
+			return nil
 		}
 
 		events, err := readCheckpointEvents(ctx, tx, checkpoint.ID)
@@ -163,20 +173,32 @@ func (c *Client) ForkSession(ctx context.Context, checkpointID, userID, requestI
 		if err != nil {
 			return nil, false, fmt.Errorf("get concurrent fork request: %w", err)
 		}
-		if existing.SourceCheckpointID == nil || *existing.SourceCheckpointID != checkpointUUID {
-			return nil, false, ErrIdempotencyConflict
-		}
-		session, err := toSession(existing)
-		if err == nil && session.State == apiv1.RuntimeState_RUNTIME_STATE_DELETED {
-			return nil, false, ErrFailedPrecondition
-		}
-		return session, false, err
+		return replayedFork(existing, checkpointUUID, fresh)
 	}
 	if err != nil {
 		return nil, false, fmt.Errorf("fork Session: %w", err)
 	}
 	session, err := toSession(row)
 	return session, err == nil, err
+}
+
+// replayedFork resolves a repeated fork request: the same checkpoint and
+// conversation mode returns the existing fork; anything else is a conflict.
+func replayedFork(existing sessionRow, checkpointID uuid.UUID, fresh bool) (*apiv1.Session, bool, error) {
+	if existing.SourceCheckpointID == nil || *existing.SourceCheckpointID != checkpointID {
+		return nil, false, ErrIdempotencyConflict
+	}
+	session, err := toSession(existing)
+	if err != nil {
+		return nil, false, err
+	}
+	if session.GetFreshConversation() != fresh {
+		return nil, false, ErrIdempotencyConflict
+	}
+	if session.State == apiv1.RuntimeState_RUNTIME_STATE_DELETED {
+		return nil, false, ErrFailedPrecondition
+	}
+	return session, false, nil
 }
 
 // ReserveSessionCheckpoint captures the terminal task named by HeadTaskId,

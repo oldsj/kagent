@@ -41,6 +41,34 @@ func TestCompileGitProxy(t *testing.T) {
 	require.Nil(t, destinations)
 }
 
+func TestCompileGitProxyDevInstance(t *testing.T) {
+	devRead, devPush := workspace.GitInstanceOrigins("mainloop-dev")
+	spec := &v1alpha3.HarnessGit{Origins: []string{"github.com"}, ReadProxyOrigin: &devRead, PushProxyOrigin: &devPush}
+	policy, destinations, err := translator.CompileGit(spec)
+	require.NoError(t, err)
+	require.Equal(t, []string{devRead + ":80", devPush + ":80"}, destinations)
+	require.NoError(t, translator.ValidateGitEgress(policy, destinations, nil))
+	// A session must never be issued one instance's read origin paired with
+	// another instance's push origin.
+	mismatched := &v1alpha3.HarnessGit{Origins: []string{"github.com"}, ReadProxyOrigin: &devRead, PushProxyOrigin: new(workspace.PushProxyOrigin)}
+	_, _, err = translator.CompileGit(mismatched)
+	require.Error(t, err)
+}
+
+func TestValidateGitEgressPairsEachInstanceWithItsOwnProxies(t *testing.T) {
+	policy := &workspace.Git{Origins: []string{"github.com"}, ReadProxyOrigin: new(workspace.ReadProxyOrigin), PushProxyOrigin: new(workspace.PushProxyOrigin)}
+	devRead, devPush := workspace.GitInstanceOrigins("mainloop-dev")
+	devPolicy := &workspace.Git{Origins: []string{"github.com"}, ReadProxyOrigin: &devRead, PushProxyOrigin: &devPush}
+	require.NoError(t, translator.ValidateGitEgress(devPolicy, []string{devRead + ":80", devPush + ":80"}, nil))
+	require.Error(t, translator.ValidateGitEgress(policy, []string{devRead + ":80", workspace.PushProxyOrigin + ":80"}, nil))
+	require.Error(t, translator.ValidateGitEgress(devPolicy, []string{workspace.ReadProxyOrigin + ":80", devPush + ":80"}, nil))
+	require.Error(t, translator.ValidateGitEgress(nil, []string{devRead + ":80"}, nil))
+	// Every instance's proxy host is reserved, approved or not.
+	otherRead, _ := workspace.GitInstanceOrigins("other")
+	require.Error(t, translator.ValidateGitEgress(policy, []string{otherRead + ":80"}, nil))
+	require.Error(t, translator.ValidateGitEgress(policy, nil, []egress.Credential{{Origin: devRead, Header: "authorization", URI: "ate-secret://k8s.io/default/kagent/binding/key"}}))
+}
+
 func TestEffectiveGitEgress(t *testing.T) {
 	// Substrate 1.0 policies accept leftmost-label wildcards; IP literals and
 	// non-HTTP schemes are still rejected.
