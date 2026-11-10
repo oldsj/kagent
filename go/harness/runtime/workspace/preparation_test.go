@@ -227,9 +227,11 @@ type lostCallbackSource struct {
 	ready    bool
 	replies  []PreparationResult
 	fail     bool
+	reads    int
 }
 
 func (s *lostCallbackSource) Preparation(context.Context) (PreparationState, error) {
+	s.reads++
 	a := s.assigned
 	s.assigned = nil
 	return PreparationState{Required: true, Ready: s.ready, Assignment: a}, nil
@@ -297,6 +299,18 @@ func TestPreparationAdmissionHoldsTurnsUntilReady(t *testing.T) {
 	require.Equal(t, 1, installer.observations)
 	require.Empty(t, b.Ready(t.Context()))
 	require.Equal(t, 2, installer.observations)
+
+	// Once confirmed, polling stops: one more read reports ready, and later
+	// polls make no call. Turns still check admission.
+	require.NoError(t, b.PollPreparation(t.Context(), installer))
+	reads := source.reads
+	require.NoError(t, b.PollPreparation(t.Context(), installer))
+	require.Equal(t, reads, source.reads)
+	require.Equal(t, 1, installer.installs)
+	outcome, err = b.Run(t.Context(), runtime.Turn{}, nil)
+	require.NoError(t, err)
+	require.Nil(t, outcome.Failure)
+	require.Greater(t, source.reads, reads)
 }
 
 type unrequiredSource struct {
@@ -341,4 +355,47 @@ func TestPreparationWireRoundTrip(t *testing.T) {
 		CLIVersion: "1.2.3", Profile: "child", SetupDigest: "sd", ConfigDigest: "cd", MCPDigest: "md",
 	}
 	require.Equal(t, want, PreparationFromWire(PreparationToWire(want)))
+}
+
+// failingSource never reports the Session ready, as the control plane does
+// after a definite failure.
+type failingSource struct {
+	*fakeSource
+	assigned *Preparation
+	reads    int
+	replies  []PreparationResult
+}
+
+func (s *failingSource) Preparation(context.Context) (PreparationState, error) {
+	s.reads++
+	a := s.assigned
+	s.assigned = nil
+	return PreparationState{Required: true, Assignment: a}, nil
+}
+func (s *failingSource) CompletePreparation(_ context.Context, r PreparationResult) error {
+	s.replies = append(s.replies, r)
+	return nil
+}
+
+// Once a definite failure is acknowledged, polling stops and turns stay held.
+func TestPreparationStopsPollingAfterAcknowledgedFailure(t *testing.T) {
+	_, b, next, installer, input := preparationFixture(t, "agent")
+	input.ActionID = ""
+	source := &failingSource{fakeSource: &fakeSource{request: &input.Workspace}, assigned: &input}
+	b.source = source
+	require.NoError(t, b.PollPreparation(t.Context(), installer))
+	require.Len(t, source.replies, 1)
+	require.False(t, source.replies[0].Confirmed)
+	require.NoError(t, b.PollPreparation(t.Context(), installer))
+	reads := source.reads
+	require.NoError(t, b.PollPreparation(t.Context(), installer))
+	require.Equal(t, reads, source.reads)
+	require.Len(t, source.replies, 1)
+	require.Zero(t, installer.installs)
+
+	b.setupInstaller = installer
+	outcome, err := b.Run(t.Context(), runtime.Turn{}, nil)
+	require.NoError(t, err)
+	require.NotNil(t, outcome.Failure)
+	require.Zero(t, next.calls)
 }

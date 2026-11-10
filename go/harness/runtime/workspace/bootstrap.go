@@ -60,6 +60,9 @@ type Bootstrapper struct {
 	setupInstaller SetupInstaller
 	// noPreparation caches that the Session requires no preparation.
 	noPreparation bool
+	// settled caches that the Session's only preparation was settled, confirmed
+	// or failed, so the poll loop stops. Turn admission still checks.
+	settled bool
 }
 
 // Config configures New.

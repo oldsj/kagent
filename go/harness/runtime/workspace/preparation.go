@@ -194,7 +194,7 @@ func (b *Bootstrapper) PollPreparation(ctx context.Context, installer SetupInsta
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.noPreparation {
+	if b.noPreparation || b.settled {
 		return nil
 	}
 	state, err := source.Preparation(ctx)
@@ -203,6 +203,12 @@ func (b *Bootstrapper) PollPreparation(ctx context.Context, installer SetupInsta
 	}
 	if !state.Required {
 		b.noPreparation = true
+		return nil
+	}
+	// The control plane issues one preparation per Session and never changes
+	// it once settled, so a ready Session has nothing left to poll for.
+	if state.Ready && state.Assignment == nil {
+		b.settled = true
 		return nil
 	}
 	resultPath := filepath.Join(b.stateDir, resultFile)
@@ -228,7 +234,10 @@ func (b *Bootstrapper) PollPreparation(ctx context.Context, installer SetupInsta
 		if err != nil {
 			return err
 		}
+		// An acknowledged result settled the preparation, confirmed or not;
+		// after a definite failure the control plane keeps turns refused.
 		if ack, _ := os.ReadFile(ackPath); string(ack) == apiworkspace.Digest(data) {
+			b.settled = true
 			return nil
 		}
 		if err := json.Unmarshal(data, &result); err != nil {
@@ -253,7 +262,8 @@ func readResult(path string) ([]byte, error) {
 }
 
 // ServePreparations reads assignments on the runtime's existing channel until
-// the control plane reports that this Session needs none. The runtime context
+// the control plane reports that this Session needs none or its preparation
+// has settled. The runtime context
 // owns this loop; it owns no lifecycle retries or timeouts.
 func (b *Bootstrapper) ServePreparations(ctx context.Context, installer SetupInstaller) {
 	b.mu.Lock()
@@ -268,9 +278,9 @@ func (b *Bootstrapper) ServePreparations(ctx context.Context, installer SetupIns
 		for {
 			_ = b.PollPreparation(ctx, installer)
 			b.mu.Lock()
-			ordinary := b.noPreparation
+			done := b.noPreparation || b.settled
 			b.mu.Unlock()
-			if ordinary {
+			if done {
 				return
 			}
 			select {
