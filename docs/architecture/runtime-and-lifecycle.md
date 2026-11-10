@@ -92,6 +92,20 @@ suspends the Actor while the Session stays READY, and Substrate ingress resumes
 it for the next interaction. There are no public Session suspend/resume controls;
 standalone Sandboxes retain their explicit controls. Scheduled-run deadline cleanup
 can still suspend a Session internally when no scheduled task can be identified.
+
+Because a sleeping Session stays READY, `GetSession` reports whether its runtime
+is awake through `runtime_association`. On each authorized read of a READY
+Session with no lifecycle operation, the control plane looks up the Session's
+Actor and reports it only when it is still the recorded Actor of the expected
+template:
+- `generation_id` is a name-based UUID of the Session ID and the Actor UID
+- `phase` is `active`
+- `current_active` is true only while the Actor is running
+
+An absent association means this read verified nothing, not that the runtime
+is asleep. List and other reads never include it. It is an observation, not a
+grant: callers fence runtime work with their own checks.
+
 Deletion closes task admission,
 stops and deletes the Actor, then tombstones the session. The workflow
 entry points are in
