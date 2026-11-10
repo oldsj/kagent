@@ -14,6 +14,14 @@ const (
 	UsageMetadataKey            = MetadataPrefix + "usage"
 	// ThoughtMetadataKey marks a text part that summarizes the model's reasoning, not its answer.
 	ThoughtMetadataKey = MetadataPrefix + "thought"
+
+	// ModelMetadataKey and EffortMetadataKey carry the caller's optional
+	// per-turn model and reasoning-effort overrides on the message that starts
+	// a turn. Unlike the gateway-owned keys above, these are caller-supplied
+	// input, not derived state, so they live outside the kagent.dev/a2a/
+	// namespace and SanitizeCallerRequest never strips them.
+	ModelMetadataKey  = "kagent.dev/model"
+	EffortMetadataKey = "kagent.dev/effort"
 )
 
 // IsThought reports whether a part summarizes the model's reasoning rather than answering.
@@ -61,6 +69,25 @@ func TaskCreatedAt(task *a2atype.Task) (time.Time, bool) {
 	}
 	createdAt, err := time.Parse(time.RFC3339Nano, value)
 	return createdAt, err == nil
+}
+
+// TurnModel reads the optional per-turn model override from message metadata.
+func TurnModel(message *a2atype.Message) (string, bool) {
+	return stringMeta(message, ModelMetadataKey)
+}
+
+// TurnEffort reads the optional per-turn reasoning-effort override from
+// message metadata.
+func TurnEffort(message *a2atype.Message) (string, bool) {
+	return stringMeta(message, EffortMetadataKey)
+}
+
+func stringMeta(message *a2atype.Message, key string) (string, bool) {
+	if message == nil {
+		return "", false
+	}
+	value, ok := message.Metadata[key].(string)
+	return value, ok
 }
 
 // SanitizeCallerRequest removes private state and metadata owned by the gateway.

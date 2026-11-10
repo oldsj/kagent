@@ -159,11 +159,18 @@ func (d *ProcessDriver) Args(turn runtime.Turn) []string {
 		// The adapter supplies the checkout's skills as a plugin.
 		args = append(args, "--add-dir", d.config.Workspace)
 	}
+	model := turn.Model
+	if model == "" {
+		model = d.config.Model
+	}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	if turn.Effort != "" {
+		args = append(args, "--effort", turn.Effort)
+	}
 	if len(d.config.DisallowedTools) != 0 {
 		args = append(args, "--disallowedTools", strings.Join(d.config.DisallowedTools, ","))
-	}
-	if d.config.Model != "" {
-		args = append(args, "--model", d.config.Model)
 	}
 	if d.config.AppendSystemPromptFile != "" {
 		args = append(args, "--append-system-prompt-file", d.config.AppendSystemPromptFile)

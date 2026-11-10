@@ -78,6 +78,64 @@ func TestSDKDriverTranslatesItsTurnAndSkipsOtherResults(t *testing.T) {
 	}
 }
 
+func TestSDKDriverOverridesApplyToTheirTurnOnly(t *testing.T) {
+	launcher := sdkrunnertest.NewLauncher(func(b *sdkrunnertest.Bridge, op sdkrunnertest.Op) {
+		if op.Op == "user" {
+			b.SDK(sdkLine(t, `{"type":"result","subtype":"success","result":"ok","user_message_uuids":["`+op.UUID+`"]}`))
+		}
+	})
+	session, err := sdkrunner.New(sdkrunner.Config{
+		Launcher: launcher,
+		Spec: func(sdkrunner.Profile) (sdkrunner.Spec, error) {
+			return sdkrunner.Spec{Cwd: "/w", Executable: "claude"}, nil
+		},
+		Continuation: &sdkrunnertest.Continuation{}, Dir: t.TempDir(), StopGrace: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	base := NewProcessDriver(ProcessConfig{Model: "claude-sonnet-5-5", InterruptGrace: 200 * time.Millisecond, TurnTimeout: time.Minute})
+	driver := NewSDKDriver(base, session)
+
+	// controls returns the bridge ops each turn sends, in order, and clears them.
+	seen := 0
+	controls := func() string {
+		var sequence []string
+		ops := launcher.Ops()
+		for _, op := range ops[seen:] {
+			switch op.Op {
+			case "model":
+				sequence = append(sequence, "model="+op.Model)
+			case "effort":
+				sequence = append(sequence, "effort="+op.Effort)
+			case "user":
+				sequence = append(sequence, "user")
+			}
+		}
+		seen = len(ops)
+		return strings.Join(sequence, ",")
+	}
+	for _, step := range []struct {
+		name string
+		turn runtime.Turn
+		want string
+	}{
+		{"override", runtime.Turn{Prompt: "x", Model: "claude-opus-5-5", Effort: "high"}, "model=claude-opus-5-5,effort=high,user"},
+		// No keys: the configured model and the model's default effort, not
+		// the previous turn's override.
+		{"default", runtime.Turn{Prompt: "y"}, "model=claude-sonnet-5-5,effort=,user"},
+		{"effort only", runtime.Turn{Prompt: "z", Effort: "low"}, "model=claude-sonnet-5-5,effort=low,user"},
+	} {
+		if outcome, err := driver.Run(context.Background(), step.turn, &recordingSink{}); err != nil || outcome.Failure != nil {
+			t.Fatalf("%s: outcome = %+v err = %v", step.name, outcome, err)
+		}
+		if got := controls(); got != step.want {
+			t.Fatalf("%s: bridge ops = %s, want %s", step.name, got, step.want)
+		}
+	}
+}
+
 func TestSDKDriverFailureResult(t *testing.T) {
 	driver, _, _ := newSDKFixture(t, func(b *sdkrunnertest.Bridge, op sdkrunnertest.Op) {
 		if op.Op == "user" {

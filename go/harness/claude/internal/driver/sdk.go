@@ -161,6 +161,19 @@ func (d *SDKDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime.Eve
 	if err := d.session.Start(ctx); err != nil {
 		return runtime.Outcome{}, fmt.Errorf("start Claude SDK runner: %w", err)
 	}
+	// Overrides are strictly per turn, as in the process driver: every turn
+	// sets both controls, so a turn without an override runs on the configured
+	// model and the model's default effort, never on the previous turn's
+	// override or a setting a runner-port client chose.
+	model := turn.Model
+	if model == "" {
+		model = d.config.Model
+	}
+	for _, control := range []struct{ what, value string }{{"model", model}, {"effort", turn.Effort}} {
+		if err := d.session.Control(ctx, control.what, control.value, ""); err != nil {
+			return runtime.Outcome{}, fmt.Errorf("set Claude SDK runner %s: %w", control.what, err)
+		}
+	}
 	if err := d.session.Submit(ctx, turn.Prompt, t.uuid, sdkrunner.OriginA2A); err != nil {
 		return runtime.Outcome{}, fmt.Errorf("send prompt to Claude SDK runner: %w", err)
 	}

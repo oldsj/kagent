@@ -24,6 +24,12 @@ const (
 
 var nativeNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
+// EffortLevels are the reasoning-effort values a per-turn override may name.
+// The pinned App Server's turn/start accepts any effort the model advertises,
+// so this is the OpenAI set kagent's ModelConfig allows; a level the selected
+// model does not support fails that turn.
+var EffortLevels = []string{"none", "minimal", "low", "medium", "high", "xhigh"}
+
 // Config is compiler-owned input to the native adapter. Real model credentials
 // stay at the egress gateway; the Actor receives only placeholders.
 type Config struct {
