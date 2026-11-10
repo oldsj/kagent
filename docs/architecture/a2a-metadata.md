@@ -86,16 +86,19 @@ The Claude process driver passes a non-empty override as `--model`/`--effort`
 on that turn's `claude -p --resume` invocation. The Codex driver passes it as
 the `model`/`effort` fields of the App Server's `turn/start` call. Each turn
 runs its own native process, and Codex resumes the thread with the configured
-model and no effort, so on both an override applies to its turn only. Neither
+model and no effort, so an override applies to its turn only. Neither
 driver starts a new native session for an override: Claude resumes the
 Actor's one conversation through `--resume`, and Codex resumes its one thread
 through `thread/resume`.
 
 The Claude Agent SDK driver (`KAGENT_CLAUDE_DRIVER=sdk`) keeps one live
-conversation that runner-port clients share. It applies an override through
-the SDK's model and effort controls before sending the prompt, so, as with the
-model picker, the setting persists for later turns until changed. A turn that
-omits a key keeps the conversation's current setting.
+conversation that runner-port clients share. Before each turn's prompt it sets
+the conversation's model and effort through the SDK controls: the override if
+present, otherwise the configured model and the model's default effort. So on
+every driver an override applies to its turn only, and an absent or empty key
+means the harness default for that turn, never the previous turn's value. A
+model or effort a runner-port client chose also does not carry into the next
+A2A turn.
 
 ## Other metadata
 

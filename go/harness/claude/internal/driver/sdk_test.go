@@ -78,43 +78,61 @@ func TestSDKDriverTranslatesItsTurnAndSkipsOtherResults(t *testing.T) {
 	}
 }
 
-func TestSDKDriverAppliesTurnModelAndEffortBeforeThePrompt(t *testing.T) {
-	driver, launcher, _ := newSDKFixture(t, func(b *sdkrunnertest.Bridge, op sdkrunnertest.Op) {
+func TestSDKDriverOverridesApplyToTheirTurnOnly(t *testing.T) {
+	launcher := sdkrunnertest.NewLauncher(func(b *sdkrunnertest.Bridge, op sdkrunnertest.Op) {
 		if op.Op == "user" {
 			b.SDK(sdkLine(t, `{"type":"result","subtype":"success","result":"ok","user_message_uuids":["`+op.UUID+`"]}`))
 		}
 	})
-	turn := runtime.Turn{Prompt: "x", Model: "claude-opus-5-5", Effort: "high"}
-	if outcome, err := driver.Run(context.Background(), turn, &recordingSink{}); err != nil || outcome.Failure != nil {
-		t.Fatalf("outcome = %+v err = %v", outcome, err)
+	session, err := sdkrunner.New(sdkrunner.Config{
+		Launcher: launcher,
+		Spec: func(sdkrunner.Profile) (sdkrunner.Spec, error) {
+			return sdkrunner.Spec{Cwd: "/w", Executable: "claude"}, nil
+		},
+		Continuation: &sdkrunnertest.Continuation{}, Dir: t.TempDir(), StopGrace: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	var sequence []string
-	for _, op := range launcher.Ops() {
-		switch op.Op {
-		case "model":
-			sequence = append(sequence, "model="+op.Model)
-		case "effort":
-			sequence = append(sequence, "effort="+op.Effort)
-		case "user":
-			sequence = append(sequence, "user")
-		}
-	}
-	if got := strings.Join(sequence, ","); got != "model=claude-opus-5-5,effort=high,user" {
-		t.Fatalf("bridge ops = %s", got)
-	}
+	t.Cleanup(func() { _ = session.Close() })
+	base := NewProcessDriver(ProcessConfig{Model: "claude-sonnet-5-5", InterruptGrace: 200 * time.Millisecond, TurnTimeout: time.Minute})
+	driver := NewSDKDriver(base, session)
 
-	// A turn without overrides sends no control and keeps the session's setting.
-	if outcome, err := driver.Run(context.Background(), runtime.Turn{Prompt: "y"}, &recordingSink{}); err != nil || outcome.Failure != nil {
-		t.Fatalf("outcome = %+v err = %v", outcome, err)
-	}
-	var controls int
-	for _, op := range launcher.Ops() {
-		if op.Op == "model" || op.Op == "effort" {
-			controls++
+	// controls returns the bridge ops each turn sends, in order, and clears them.
+	seen := 0
+	controls := func() string {
+		var sequence []string
+		ops := launcher.Ops()
+		for _, op := range ops[seen:] {
+			switch op.Op {
+			case "model":
+				sequence = append(sequence, "model="+op.Model)
+			case "effort":
+				sequence = append(sequence, "effort="+op.Effort)
+			case "user":
+				sequence = append(sequence, "user")
+			}
 		}
+		seen = len(ops)
+		return strings.Join(sequence, ",")
 	}
-	if controls != 2 {
-		t.Fatalf("controls = %d, want only the first turn's two", controls)
+	for _, step := range []struct {
+		name string
+		turn runtime.Turn
+		want string
+	}{
+		{"override", runtime.Turn{Prompt: "x", Model: "claude-opus-5-5", Effort: "high"}, "model=claude-opus-5-5,effort=high,user"},
+		// No keys: the configured model and the model's default effort, not
+		// the previous turn's override.
+		{"default", runtime.Turn{Prompt: "y"}, "model=claude-sonnet-5-5,effort=,user"},
+		{"effort only", runtime.Turn{Prompt: "z", Effort: "low"}, "model=claude-sonnet-5-5,effort=low,user"},
+	} {
+		if outcome, err := driver.Run(context.Background(), step.turn, &recordingSink{}); err != nil || outcome.Failure != nil {
+			t.Fatalf("%s: outcome = %+v err = %v", step.name, outcome, err)
+		}
+		if got := controls(); got != step.want {
+			t.Fatalf("%s: bridge ops = %s, want %s", step.name, got, step.want)
+		}
 	}
 }
 

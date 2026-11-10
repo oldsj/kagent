@@ -56,11 +56,13 @@ test('relays turns, controls and permission answers', async () => {
 
   await runner.handle({ op: 'model', ref: 'r1', model: 'sonnet' });
   await runner.handle({ op: 'effort', ref: 'r2', effort: 'high' });
+  // An empty effort returns to the model's default.
+  await runner.handle({ op: 'effort', ref: 'r2b', effort: '' });
   await runner.handle({ op: 'mode', ref: 'r3', mode: 'bad' });
   await runner.handle({ op: 'interrupt', ref: 'r4' });
-  assert.deepEqual(calls.controls, ['model:sonnet', 'effort:high', 'interrupt']);
+  assert.deepEqual(calls.controls, ['model:sonnet', 'effort:high', 'effort:null', 'interrupt']);
   const acks = out.filter((o) => o.k === 'ack');
-  assert.deepEqual(acks.map((a) => [a.ref, a.error ?? null]), [['r1', null], ['r2', null], ['r3', 'nope'], ['r4', null]]);
+  assert.deepEqual(acks.map((a) => [a.ref, a.error ?? null]), [['r1', null], ['r2', null], ['r2b', null], ['r3', 'nope'], ['r4', null]]);
   runner.close();
   await tick();
   assert.equal(out.at(-1).k, 'ended');

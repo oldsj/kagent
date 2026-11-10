@@ -116,7 +116,8 @@ export function createRunner({ query, send }) {
           return;
         case 'interrupt': await q.interrupt(); return ack();
         case 'model': await q.setModel(op.model || undefined); return ack({ model: op.model });
-        case 'effort': await q.applyFlagSettings({ effortLevel: op.effort }); return ack({ effort: op.effort });
+        // An empty effort clears the override: null returns to the model's default.
+        case 'effort': await q.applyFlagSettings({ effortLevel: op.effort || null }); return ack({ effort: op.effort });
         case 'mode': await q.setPermissionMode(op.mode); return ack({ mode: op.mode });
         case 'perm': {
           const p = perms.get(op.id);
