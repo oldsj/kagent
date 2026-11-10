@@ -55,6 +55,7 @@ var (
 	E2ERuntimeImage           = RegisterStringVar("KAGENT_E2E_RUNTIME_IMAGE", "", "Required digest-pinned Go ADK image for sandbox E2E tests and lifecycle manifests.", ComponentTesting)
 	_                         = RegisterStringVar("KAGENT_E2E_BYO_IMAGE", "", "Digest-pinned BYO image substituted into E2E lifecycle manifests.", ComponentTesting)
 	_                         = RegisterStringVar("KAGENT_E2E_CLAUDE_IMAGE", "", "Digest-pinned Claude harness image substituted into E2E lifecycle manifests.", ComponentTesting)
+	E2EClaudeHarness          = RegisterStringVar("KAGENT_E2E_CLAUDE_HARNESS", "claude-e2e", "Harness the Claude E2E cases run on. Set claude-sdk-e2e to run them on the Agent SDK driver.", ComponentTesting)
 	_                         = RegisterStringVar("KAGENT_E2E_CODEX_IMAGE", "", "Digest-pinned Codex harness image substituted into E2E lifecycle manifests.", ComponentTesting)
 	E2ESandboxNamespace       = RegisterStringVar("KAGENT_E2E_SANDBOX_NAMESPACE", "kagent", "Namespace for sandbox E2E resources.", ComponentTesting)
 	E2ESandboxWorkerPool      = RegisterStringVar("KAGENT_E2E_SANDBOX_WORKER_POOL", "kagent-default", "Worker pool used by sandbox E2E resources.", ComponentTesting)
