@@ -294,6 +294,10 @@ func persistSessionOperationResult(ctx context.Context, tx pgx.Tx, row sessionRo
 			if err := releaseAgentRuntimeReferences(ctx, tx, row.ID); err != nil {
 				return nil, err
 			}
+		case apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_SUSPEND, apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_RESUME:
+			if err := settleRuntimeActivity(ctx, tx, row.ID, result.Operation); err != nil {
+				return nil, err
+			}
 		}
 	}
 	result.State, result.Operation, err = next.lifecycle()
@@ -364,4 +368,23 @@ func toSessionOperation(row sessionRow) (*SessionOperation, error) {
 		return nil, err
 	}
 	return &SessionOperation{RuntimeOperation: runtimeOperationFor(row.runtimeInstanceRow, session), SourceCheckpointID: row.SourceCheckpointID}, nil
+}
+
+// settleRuntimeActivity keeps a reporting runtime's activity boundary in step
+// with explicit lifecycle work. A suspension satisfies the boundary. A resume
+// opens one that becomes due after the quiescence delay recorded with the last
+// report, so a resumed runtime that no client uses is suspended again. Sessions
+// whose runtime never reported have no row and keep their behaviour.
+func settleRuntimeActivity(ctx context.Context, tx pgx.Tx, sessionID uuid.UUID, completed apiv1alpha1.RuntimeOperation) error {
+	if completed == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_SUSPEND {
+		return execSQL(ctx, tx, `
+			UPDATE session_activity SET pending = FALSE WHERE session_id = $1 AND executor_id IS NULL
+		`, sessionID)
+	}
+	return execSQL(ctx, tx, `
+		UPDATE session_activity SET pending = TRUE, report_seq = report_seq + 1,
+		    idle_due_at = clock_timestamp() + GREATEST(idle_due_at - active_until, INTERVAL '0'),
+		    active_until = clock_timestamp()
+		WHERE session_id = $1 AND executor_id IS NULL
+	`, sessionID)
 }

@@ -4,6 +4,7 @@ package kagent.api.v1alpha1;
 
 import "a2a.proto";
 import "buf/validate/validate.proto";
+import "google/protobuf/duration.proto";
 import "google/protobuf/timestamp.proto";
 import "kagent/api/v1alpha1/common.proto";
 
@@ -27,6 +28,13 @@ service TaskStoreService {
   // response when it asked for none. The runtime calls it before the first turn.
   rpc GetWorkspace(TaskStoreServiceGetWorkspaceRequest) returns (TaskStoreServiceGetWorkspaceResponse);
   rpc CompleteWorkspacePreparation(TaskStoreServiceCompleteWorkspacePreparationRequest) returns (TaskStoreServiceCompleteWorkspacePreparationResponse);
+  // ReportActivity tells the control plane whether anything is using the
+  // Session runtime outside A2A tasks, such as an attached client. A report
+  // observes the Actor running: it adopts a wake the control plane did not
+  // issue and holds idle quiescence until the lease ends. An idle report, or
+  // an expired lease, makes the runtime eligible for idle quiescence after the
+  // configured quiescence delay. Reports are idempotent.
+  rpc ReportActivity(TaskStoreServiceReportActivityRequest) returns (TaskStoreServiceReportActivityResponse);
 }
 
 message StoredTask {
@@ -157,3 +165,16 @@ message TaskStoreServiceCompleteWorkspacePreparationRequest {
 }
 
 message TaskStoreServiceCompleteWorkspacePreparationResponse {}
+
+message TaskStoreServiceReportActivityRequest {
+  string session_id = 1 [(buf.validate.field).string.uuid = true];
+  // True while a client, turn, or background work uses the runtime.
+  bool active = 2;
+}
+
+message TaskStoreServiceReportActivityResponse {
+  // How long an active report holds idle quiescence.
+  google.protobuf.Duration lease = 1;
+  // When an active runtime should report again to keep its lease.
+  google.protobuf.Duration renew_after = 2;
+}

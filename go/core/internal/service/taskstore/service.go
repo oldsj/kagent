@@ -24,6 +24,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 type Store interface {
@@ -202,6 +203,22 @@ func (s *Service) settleTaskOperation(ctx context.Context, input *apiv1alpha1.Ta
 	return &apiv1alpha1.TaskStoreServiceSettleTaskResponse{}, nil
 }
 
+// reportActivityOperation records whether the runtime is in use outside A2A
+// tasks. runtimeCall has just observed the Actor RUNNING with the Session's
+// recorded identity, which is what lets the store adopt a wake it did not issue.
+func (s *Service) reportActivityOperation(ctx context.Context, input *apiv1alpha1.TaskStoreServiceReportActivityRequest) (*apiv1alpha1.TaskStoreServiceReportActivityResponse, error) {
+	if _, err := s.session(ctx, input.SessionId); err != nil {
+		return nil, err
+	}
+	if err := s.store.RecordRuntimeActivity(ctx, input.SessionId, input.Active, database.RuntimeActivityLease, s.quiesceDelay); err != nil {
+		return nil, storageError(err)
+	}
+	return &apiv1alpha1.TaskStoreServiceReportActivityResponse{
+		Lease:      durationpb.New(database.RuntimeActivityLease),
+		RenewAfter: durationpb.New(database.RuntimeActivityRenewAfter),
+	}, nil
+}
+
 func storageError(err error) error {
 	switch {
 	case errors.Is(err, database.ErrNotFound):
@@ -278,6 +295,12 @@ func (s *Service) ListTasks(ctx context.Context, input *apiv1alpha1.TaskStoreSer
 func (s *Service) SettleTask(ctx context.Context, input *apiv1alpha1.TaskStoreServiceSettleTaskRequest) (*apiv1alpha1.TaskStoreServiceSettleTaskResponse, error) {
 	return runtimeCall(ctx, s, input.GetSessionId(), func(inner *Service) (*apiv1alpha1.TaskStoreServiceSettleTaskResponse, error) {
 		return inner.settleTaskOperation(ctx, input)
+	})
+}
+
+func (s *Service) ReportActivity(ctx context.Context, input *apiv1alpha1.TaskStoreServiceReportActivityRequest) (*apiv1alpha1.TaskStoreServiceReportActivityResponse, error) {
+	return runtimeCall(ctx, s, input.GetSessionId(), func(inner *Service) (*apiv1alpha1.TaskStoreServiceReportActivityResponse, error) {
+		return inner.reportActivityOperation(ctx, input)
 	})
 }
 

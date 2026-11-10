@@ -309,6 +309,26 @@ func (s *Store) GetWorkspace(ctx context.Context) (*apiv1alpha1.Workspace, error
 	return response.GetWorkspace(), nil
 }
 
+// ReportActivity tells the control plane whether anything uses this runtime
+// outside A2A tasks, and returns when an active runtime should report again.
+// It makes one attempt; activity.Reporter owns renewal and retries.
+func (s *Store) ReportActivity(ctx context.Context, active bool) (time.Duration, error) {
+	id, err := s.sessionID()
+	if err != nil {
+		return 0, err
+	}
+	rpcCtx, cancel, err := s.callContext(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer cancel()
+	response, err := s.client.TaskStoreService().ReportActivity(rpcCtx, &apiv1alpha1.TaskStoreServiceReportActivityRequest{SessionId: id, Active: active})
+	if err != nil {
+		return 0, err
+	}
+	return response.GetRenewAfter().AsDuration(), nil
+}
+
 // SessionID returns the Session this runtime serves, from its local identity.
 func (s *Store) SessionID() (string, error) { return s.sessionID() }
 

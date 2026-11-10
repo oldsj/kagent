@@ -52,6 +52,11 @@ class TaskStoreServiceStub:
                 request_serializer=kagent_dot_api_dot_v1alpha1_dot_task__store__pb2.TaskStoreServiceCompleteWorkspacePreparationRequest.SerializeToString,
                 response_deserializer=kagent_dot_api_dot_v1alpha1_dot_task__store__pb2.TaskStoreServiceCompleteWorkspacePreparationResponse.FromString,
                 _registered_method=True)
+        self.ReportActivity = channel.unary_unary(
+                '/kagent.api.v1alpha1.TaskStoreService/ReportActivity',
+                request_serializer=kagent_dot_api_dot_v1alpha1_dot_task__store__pb2.TaskStoreServiceReportActivityRequest.SerializeToString,
+                response_deserializer=kagent_dot_api_dot_v1alpha1_dot_task__store__pb2.TaskStoreServiceReportActivityResponse.FromString,
+                _registered_method=True)
 
 
 class TaskStoreServiceServicer:
@@ -109,6 +114,18 @@ class TaskStoreServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ReportActivity(self, request, context):
+        """ReportActivity tells the control plane whether anything is using the
+        Session runtime outside A2A tasks, such as an attached client. A report
+        observes the Actor running: it adopts a wake the control plane did not
+        issue and holds idle quiescence until the lease ends. An idle report, or
+        an expired lease, makes the runtime eligible for idle quiescence after the
+        configured quiescence delay. Reports are idempotent.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_TaskStoreServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -146,6 +163,11 @@ def add_TaskStoreServiceServicer_to_server(servicer, server):
                     servicer.CompleteWorkspacePreparation,
                     request_deserializer=kagent_dot_api_dot_v1alpha1_dot_task__store__pb2.TaskStoreServiceCompleteWorkspacePreparationRequest.FromString,
                     response_serializer=kagent_dot_api_dot_v1alpha1_dot_task__store__pb2.TaskStoreServiceCompleteWorkspacePreparationResponse.SerializeToString,
+            ),
+            'ReportActivity': grpc.unary_unary_rpc_method_handler(
+                    servicer.ReportActivity,
+                    request_deserializer=kagent_dot_api_dot_v1alpha1_dot_task__store__pb2.TaskStoreServiceReportActivityRequest.FromString,
+                    response_serializer=kagent_dot_api_dot_v1alpha1_dot_task__store__pb2.TaskStoreServiceReportActivityResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -340,6 +362,33 @@ class TaskStoreService:
             '/kagent.api.v1alpha1.TaskStoreService/CompleteWorkspacePreparation',
             kagent_dot_api_dot_v1alpha1_dot_task__store__pb2.TaskStoreServiceCompleteWorkspacePreparationRequest.SerializeToString,
             kagent_dot_api_dot_v1alpha1_dot_task__store__pb2.TaskStoreServiceCompleteWorkspacePreparationResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ReportActivity(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kagent.api.v1alpha1.TaskStoreService/ReportActivity',
+            kagent_dot_api_dot_v1alpha1_dot_task__store__pb2.TaskStoreServiceReportActivityRequest.SerializeToString,
+            kagent_dot_api_dot_v1alpha1_dot_task__store__pb2.TaskStoreServiceReportActivityResponse.FromString,
             options,
             channel_credentials,
             insecure,

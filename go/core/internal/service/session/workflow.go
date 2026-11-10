@@ -27,6 +27,8 @@ type workflowStore interface {
 	SettleAbandonedSessionBoundaries(context.Context, time.Duration, int) (int, error)
 	FinishSessionQuiescence(context.Context, *database.SessionQuiescence, *database.SessionTaskSnapshot) error
 	FinishLostSessionQuiescence(context.Context, *database.SessionQuiescence) error
+	ClaimSessionActivityQuiescence(context.Context, time.Duration) (*database.SessionActivityQuiescence, error)
+	FinishSessionActivityQuiescence(context.Context, *database.SessionActivityQuiescence) error
 	GetSessionForRuntime(context.Context, string, string) (*apiv1alpha1.Session, error)
 	GetSessionCheckpointSnapshot(context.Context, string, string) (*database.SessionTaskSnapshot, string, error)
 	GetRuntimeRevision(context.Context, string) (*database.RuntimeRevision, error)

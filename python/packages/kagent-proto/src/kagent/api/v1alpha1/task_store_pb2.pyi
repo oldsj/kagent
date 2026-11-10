@@ -2,6 +2,7 @@ import datetime
 
 import a2a_pb2 as _a2a_pb2
 from buf.validate import validate_pb2 as _validate_pb2
+from google.protobuf import duration_pb2 as _duration_pb2
 from google.protobuf import timestamp_pb2 as _timestamp_pb2
 from kagent.api.v1alpha1 import common_pb2 as _common_pb2
 from google.protobuf import descriptor as _descriptor
@@ -196,3 +197,19 @@ class TaskStoreServiceCompleteWorkspacePreparationRequest(_message.Message):
 class TaskStoreServiceCompleteWorkspacePreparationResponse(_message.Message):
     __slots__ = ()
     def __init__(self) -> None: ...
+
+class TaskStoreServiceReportActivityRequest(_message.Message):
+    __slots__ = ("session_id", "active")
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    ACTIVE_FIELD_NUMBER: _ClassVar[int]
+    session_id: str
+    active: bool
+    def __init__(self, session_id: _Optional[str] = ..., active: _Optional[bool] = ...) -> None: ...
+
+class TaskStoreServiceReportActivityResponse(_message.Message):
+    __slots__ = ("lease", "renew_after")
+    LEASE_FIELD_NUMBER: _ClassVar[int]
+    RENEW_AFTER_FIELD_NUMBER: _ClassVar[int]
+    lease: _duration_pb2.Duration
+    renew_after: _duration_pb2.Duration
+    def __init__(self, lease: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., renew_after: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ...) -> None: ...

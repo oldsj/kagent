@@ -43,3 +43,7 @@ func (s *taskStoreServer) GetWorkspace(ctx context.Context, req *apiv1alpha1.Tas
 func (s *taskStoreServer) CompleteWorkspacePreparation(ctx context.Context, request *apiv1alpha1.TaskStoreServiceCompleteWorkspacePreparationRequest) (*apiv1alpha1.TaskStoreServiceCompleteWorkspacePreparationResponse, error) {
 	return s.service.CompleteWorkspacePreparation(ctx, request)
 }
+
+func (s *taskStoreServer) ReportActivity(ctx context.Context, req *apiv1alpha1.TaskStoreServiceReportActivityRequest) (*apiv1alpha1.TaskStoreServiceReportActivityResponse, error) {
+	return s.service.ReportActivity(ctx, req)
+}

@@ -29,6 +29,8 @@ type callbackStore struct {
 	revoked      bool
 	task         *a2a.Task
 	quiesceDelay time.Duration
+	activity     []bool
+	lease        time.Duration
 }
 
 func (s *callbackStore) WithRuntimeGeneration(_ context.Context, g database.RuntimeGeneration, fn func(database.RuntimeTaskStore) error) error {
@@ -73,11 +75,19 @@ func (s *callbackStore) SettleSessionTask(_ context.Context, _ string, id string
 	return nil
 }
 
+func (s *callbackStore) RecordRuntimeActivity(_ context.Context, _ string, active bool, lease, delay time.Duration) error {
+	s.effects++
+	s.activity = append(s.activity, active)
+	s.lease, s.quiesceDelay = lease, delay
+	return nil
+}
+
 type callbackActors struct {
 	binding     database.RuntimeGeneration
 	reads       int
 	uid         string
 	unavailable bool
+	state       ateapipb.ActorState
 }
 
 func (s *callbackActors) GetActor(context.Context, string, string) (*ateapipb.Actor, error) {
@@ -85,12 +95,16 @@ func (s *callbackActors) GetActor(context.Context, string, string) (*ateapipb.Ac
 	if s.unavailable {
 		return nil, fmt.Errorf("unavailable")
 	}
-	return &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Atespace: s.binding.Atespace, Name: s.binding.ActorName, Uid: s.uid}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING}}, nil
+	state := s.state
+	if state == ateapipb.ActorState_ACTOR_STATE_UNSPECIFIED {
+		state = ateapipb.ActorState_ACTOR_STATE_RUNNING
+	}
+	return &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Atespace: s.binding.Atespace, Name: s.binding.ActorName, Uid: s.uid}, Status: &ateapipb.ActorStatus{State: state}}, nil
 }
 
 func TestEveryCallbackChecksGenerationBeforeData(t *testing.T) {
-	for _, method := range []string{"CreateTask", "GetTask", "UpdateTask", "ListTasks", "SettleTask", "GetWorkspace"} {
-		for _, failure := range []string{"own", "foreign Session", "stale UID", "lookup unavailable", "revoked"} {
+	for _, method := range []string{"CreateTask", "GetTask", "UpdateTask", "ListTasks", "SettleTask", "GetWorkspace", "ReportActivity"} {
+		for _, failure := range []string{"own", "foreign Session", "stale UID", "lookup unavailable", "revoked", "not running"} {
 			t.Run(method+"/"+failure, func(t *testing.T) {
 				id := uuid.New()
 				binding := database.RuntimeGeneration{ID: uuid.New(), SessionID: id, Atespace: "team-a", ActorName: "session-" + id.String() + "-0123456789abcdef", ActorUID: "uid-a", Phase: "active"}
@@ -110,6 +124,8 @@ func TestEveryCallbackChecksGenerationBeforeData(t *testing.T) {
 					actors.unavailable = true
 				case "revoked":
 					store.revoked = true
+				case "not running":
+					actors.state = ateapipb.ActorState_ACTOR_STATE_SUSPENDING
 				}
 				ctx := auth.AuthSessionTo(t.Context(), runtimeSession{binding: binding})
 				service := NewService(store, actors, 0)
@@ -128,6 +144,8 @@ func TestEveryCallbackChecksGenerationBeforeData(t *testing.T) {
 					_, err = service.SettleTask(ctx, &apiv1alpha1.TaskStoreServiceSettleTaskRequest{SessionId: requested, TaskId: "own-task", Version: 1})
 				case "GetWorkspace":
 					_, err = service.GetWorkspace(ctx, &apiv1alpha1.TaskStoreServiceGetWorkspaceRequest{SessionId: requested})
+				case "ReportActivity":
+					_, err = service.ReportActivity(ctx, &apiv1alpha1.TaskStoreServiceReportActivityRequest{SessionId: requested, Active: true})
 				}
 				if failure == "own" {
 					require.NoError(t, err)
@@ -167,6 +185,26 @@ func TestSettlementPreservesConfiguredDelayInsideAuthorization(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 15*time.Minute, store.quiesceDelay)
 	require.Equal(t, 1, store.gates)
+}
+
+func TestReportActivityGrantsLeaseWithConfiguredDelay(t *testing.T) {
+	id := uuid.New()
+	binding := database.RuntimeGeneration{ID: uuid.New(), SessionID: id, Atespace: "team", ActorName: "issued", ActorUID: "uid", Phase: "active"}
+	store := &callbackStore{binding: binding}
+	actors := &callbackActors{binding: binding, uid: "uid"}
+	service := NewService(store, actors, 15*time.Minute)
+	ctx := auth.AuthSessionTo(t.Context(), runtimeSession{binding: binding})
+	for _, active := range []bool{true, false} {
+		response, err := service.ReportActivity(ctx, &apiv1alpha1.TaskStoreServiceReportActivityRequest{SessionId: id.String(), Active: active})
+		require.NoError(t, err)
+		require.Equal(t, database.RuntimeActivityLease, response.GetLease().AsDuration())
+		require.Equal(t, database.RuntimeActivityRenewAfter, response.GetRenewAfter().AsDuration())
+		require.Less(t, response.GetRenewAfter().AsDuration(), response.GetLease().AsDuration()/2, "one lost renewal must not end the lease")
+	}
+	require.Equal(t, []bool{true, false}, store.activity)
+	require.Equal(t, database.RuntimeActivityLease, store.lease)
+	require.Equal(t, 15*time.Minute, store.quiesceDelay)
+	require.Equal(t, 2, actors.reads, "each report is a fresh Actor observation")
 }
 
 func TestPreparationCallbackCannotUsePublicOrUnconfiguredAuthority(t *testing.T) {
