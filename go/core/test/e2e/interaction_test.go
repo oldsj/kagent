@@ -212,7 +212,7 @@ func sendToolDecision(t *testing.T, fixture *interactionFixture, prompt, wantToo
 	fixture.ctx = metadata.AppendToOutgoingContext(fixture.ctx, strings.ToLower(a2atype.SvcParamExtensions), kagenta2a.HITLExtensionURI)
 	_, _, waiting := fixture.send(t, prompt)
 	if waiting.Status.State != a2atype.TaskStateInputRequired {
-		t.Fatalf("A2A task state = %s, want INPUT_REQUIRED", waiting.Status.State)
+		t.Fatalf("A2A task state = %s, text = %q, want INPUT_REQUIRED", waiting.Status.State, taskText(waiting))
 	}
 	request, err := kagenta2a.ParseToolApprovalRequest(waiting.Status.Message)
 	if err != nil {
@@ -790,13 +790,18 @@ func newInteractionFixtureForTemplate(t *testing.T, harness testHarness, target,
 
 func newInteractionFixtureForHarnessTemplate(t *testing.T, target, harnessName, templateName string) *interactionFixture {
 	t.Helper()
+	return newInteractionFixtureForRequest(t, target, &apiv1.CreateSessionRequest{
+		Agent: &apiv1.ResourceReference{Namespace: "kagent", Name: templateName}, RequestId: uuid.NewString(),
+	})
+}
+
+// newInteractionFixtureForRequest creates the Session that request describes.
+func newInteractionFixtureForRequest(t *testing.T, target string, request *apiv1.CreateSessionRequest) *interactionFixture {
+	t.Helper()
 	conn := newControllerConn(t, target)
 	ctx, cancel := context.WithTimeout(metadata.AppendToOutgoingContext(t.Context(), "x-user-id", "e2e", a2atype.SvcParamVersion, string(a2atype.Version)), 4*time.Minute)
 	t.Cleanup(cancel)
 	sessions := apiv1.NewSessionServiceClient(conn)
-	request := &apiv1.CreateSessionRequest{
-		Agent: &apiv1.ResourceReference{Namespace: "kagent", Name: templateName}, RequestId: uuid.NewString(),
-	}
 	var created *apiv1.CreateSessionResponse
 	err := wait.PollUntilContextTimeout(ctx, time.Second, time.Minute, true, func(ctx context.Context) (bool, error) {
 		var err error
@@ -1219,7 +1224,7 @@ func createMCPReferenceTemplate(t *testing.T, harness testHarness, server *v1alp
 			}}},
 		},
 	}
-	createAndWaitInteractionTemplateForHarness(t, kube, template, harness.name)
+	createAndWaitInteractionTemplateForHarness(t, kube, template, harness.harnessRef())
 	return template.Name, toolName
 }
 
@@ -1309,7 +1314,7 @@ func createInteractionModel(t *testing.T, kube ctrlclient.Client, modelURL strin
 
 func createAndWaitInteractionTemplate(t *testing.T, harness testHarness, kube ctrlclient.Client, template *v1alpha3.AgentTemplate) {
 	t.Helper()
-	createAndWaitInteractionTemplateForHarness(t, kube, template, harness.name)
+	createAndWaitInteractionTemplateForHarness(t, kube, template, harness.harnessRef())
 }
 
 func createAndWaitInteractionTemplateForHarness(t *testing.T, kube ctrlclient.Client, template *v1alpha3.AgentTemplate, harnessName string) {

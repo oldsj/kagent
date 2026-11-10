@@ -106,7 +106,8 @@ func ComposeRevision(base Revision, selection Composition) (Revision, error) {
 	if base.WorkerPoolPlatform != selection.Platform {
 		return Revision{}, fmt.Errorf("WorkerPool %s must pin kubernetes.io/arch to the selected platform %s", base.WorkerPoolName, selection.Platform)
 	}
-	if err := checkComposedEnvironment(base.Environment); err != nil {
+	environment := withoutLauncherSandbox(base.Environment, selection.Provider)
+	if err := checkComposedEnvironment(environment); err != nil {
 		return Revision{}, err
 	}
 	if len(base.Command) != 0 || len(base.Args) != 0 {
@@ -140,8 +141,17 @@ func ComposeRevision(base Revision, selection Composition) (Revision, error) {
 	composed.Image = selection.DevelopmentImage
 	composed.Command = []string{payload.Root + "/bin/launch"}
 	composed.ConfigJSON = configJSON
-	composed.Environment = append(slices.Clone(base.Environment), corev1.EnvVar{Name: payload.PlatformEnvironment, Value: selection.Platform})
+	composed.Environment = append(environment, corev1.EnvVar{Name: payload.PlatformEnvironment, Value: selection.Platform})
 	return composed, nil
+}
+
+// withoutLauncherSandbox drops the IS_SANDBOX=1 every Claude revision compiles
+// with: the payload launcher sets the same value for Claude itself. Any other
+// IS_SANDBOX value is left for checkComposedEnvironment to refuse.
+func withoutLauncherSandbox(environment []corev1.EnvVar, provider HarnessType) []corev1.EnvVar {
+	return slices.DeleteFunc(slices.Clone(environment), func(variable corev1.EnvVar) bool {
+		return provider == HarnessTypeClaude && variable.Name == claudeconfig.SandboxEnvName && variable.Value == "1" && variable.ValueFrom == nil
+	})
 }
 
 // checkComposedEnvironment rejects Harness environment that would redirect the

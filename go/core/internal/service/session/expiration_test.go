@@ -86,7 +86,7 @@ func TestWaitingSessionExpirationDeletesRuntime(t *testing.T) {
 			session, err := workflow.Create(t.Context(), session)
 			require.NoError(t, err)
 			request := stageQuiescenceTask(t, store.Client, session, state)
-			require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, request.TaskId, request.Version))
+			require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, request.TaskId, request.Version, 0))
 			work, err := store.ClaimSessionQuiescence(t.Context())
 			require.NoError(t, err)
 			snapshot, err := workflow.Quiesce(t.Context(), session)
@@ -134,7 +134,7 @@ func TestSessionExpirationRetainsCheckpointHistory(t *testing.T) {
 		require.ErrorIs(t, err, a2a.ErrTaskNotFound)
 	}
 	// A new fork after expiration reconstructs the retained conversation.
-	fork, created, err := store.ForkSession(t.Context(), checkpointID, source.Creator, uuid.NewString(), uuid.NewString())
+	fork, created, err := store.ForkSession(t.Context(), checkpointID, source.Creator, uuid.NewString(), uuid.NewString(), false)
 	require.NoError(t, err)
 	require.True(t, created)
 	tasks, count, err := store.ListSessionTasks(t.Context(), fork.Id, "", "", nil, 100, nil)

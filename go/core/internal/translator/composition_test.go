@@ -92,6 +92,9 @@ func TestComposeRevision(t *testing.T) {
 		{"Harness environment that points into the payload", func(r *Revision, _ *Composition) {
 			r.Environment = append(r.Environment, corev1.EnvVar{Name: "TOOL", Value: payload.Root + "/bin/git"})
 		}, "reserved runtime paths"},
+		{"Harness environment that turns the Claude sandbox off", func(r *Revision, _ *Composition) {
+			r.Environment = append(r.Environment, corev1.EnvVar{Name: claudeconfig.SandboxEnvName, Value: "0"})
+		}, "conflicts with the composed runtime"},
 		{"the Claude SDK driver", func(r *Revision, _ *Composition) {
 			r.Environment = append(r.Environment, corev1.EnvVar{Name: "KAGENT_CLAUDE_DRIVER", Value: "sdk"})
 		}, "process driver"},
@@ -142,7 +145,7 @@ func claudeBaseRevision(t *testing.T) Revision {
 	return Revision{
 		AgentName: "coder", AgentUID: "uid", Namespace: "mainloop",
 		Image:       "ghcr.example/kagent-claude@sha256:3333333333333333333333333333333333333333333333333333333333333333",
-		Environment: []corev1.EnvVar{{Name: "LOG_LEVEL", Value: "info"}}, ConfigJSON: config,
+		Environment: []corev1.EnvVar{{Name: "LOG_LEVEL", Value: "info"}, {Name: claudeconfig.SandboxEnvName, Value: "1"}}, ConfigJSON: config,
 		WorkerPoolName: "arm64", Harness: HarnessTypeClaude, WorkerPoolPlatform: "linux/arm64",
 	}
 }
