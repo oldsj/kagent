@@ -22,4 +22,7 @@ type Config struct {
 	ClientCertFile string
 	DialTimeout    time.Duration
 	CallTimeout    time.Duration
+	// LifecycleCallTimeout bounds Actor resume, suspend and revert, which move
+	// snapshots. Zero falls back to CallTimeout.
+	LifecycleCallTimeout time.Duration
 }

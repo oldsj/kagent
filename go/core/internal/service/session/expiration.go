@@ -92,7 +92,7 @@ func (e *ExpirationWorker) Start(ctx context.Context) error {
 }
 
 func (e *ExpirationWorker) expire(ctx context.Context, id string, now time.Time) error {
-	ctx, cancel := context.WithTimeout(ctx, database.RuntimeOperationTimeout)
+	ctx, cancel := context.WithTimeout(ctx, e.workflow.operationTimeout)
 	defer cancel()
 	deletion, err := e.store.BeginIdleSessionDeletion(ctx, id, now, e.idleTTL)
 	if err != nil {

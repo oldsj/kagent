@@ -239,6 +239,12 @@ config:
     routerUrl: https://atenet-router.ate-system.svc:443
     # Must match Substrate's ateApi.actorJWTIssuer; discovery uses substrate.caFile.
     actorJwtIssuer: https://idp.ate-system.svc
+    # Substrate deadlines. Resume, suspend and revert move snapshots and grow
+    # with durable data; operationTimeout bounds each attempt and its execution
+    # claim and must exceed lifecycleCallTimeout.
+    callTimeout: 30s
+    lifecycleCallTimeout: 300s
+    operationTimeout: 600s
   logging:
     level: info
   metrics:
