@@ -54,7 +54,7 @@ var (
 	E2ECLI                    = RegisterStringVar("KAGENT_E2E_CLI", "", "CLI executable for catalog lifecycle E2E tests; make -C go e2e builds and supplies it.", ComponentTesting)
 	E2ERuntimeImage           = RegisterStringVar("KAGENT_E2E_RUNTIME_IMAGE", "", "Required digest-pinned Go ADK image for sandbox E2E tests and lifecycle manifests.", ComponentTesting)
 	_                         = RegisterStringVar("KAGENT_E2E_BYO_IMAGE", "", "Digest-pinned BYO image substituted into E2E lifecycle manifests.", ComponentTesting)
-	_                         = RegisterStringVar("KAGENT_E2E_CLAUDE_IMAGE", "", "Digest-pinned Claude harness image substituted into E2E lifecycle manifests.", ComponentTesting)
+	_                         = RegisterStringVar("KAGENT_E2E_CLAUDE_IMAGE", "", "Digest-pinned Claude harness image substituted into E2E lifecycle manifests and used by the Git instance proxy test Harness.", ComponentTesting)
 	_                         = RegisterStringVar("KAGENT_E2E_CODEX_IMAGE", "", "Digest-pinned Codex harness image substituted into E2E lifecycle manifests.", ComponentTesting)
 	E2EGitInstance            = RegisterStringVar("KAGENT_E2E_GIT_INSTANCE", "", "Mainloop Git instance namespace, such as mainloop-dev, for the Git instance proxy E2E test. The installed session policy must list that instance's git-read and git-push tuples and the git-instance-e2e Agent. Unset skips the test.", ComponentTesting)
 	E2ESandboxNamespace       = RegisterStringVar("KAGENT_E2E_SANDBOX_NAMESPACE", "kagent", "Namespace for sandbox E2E resources.", ComponentTesting)

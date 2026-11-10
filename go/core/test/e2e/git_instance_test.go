@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/cgi"
+	"os"
 	"os/exec"
 	"path/filepath"
 	goruntime "runtime"
@@ -118,6 +119,7 @@ func TestE2EGitInstanceProxy(t *testing.T) {
 	fixture := newInteractionFixtureForRequest(t, target, request())
 	streamed := sendStreaming(t, fixture, "Publish a commit through the Git instance.")
 	if streamed.state != a2atype.TaskStateCompleted || !strings.Contains(streamed.text, "GIT_INSTANCE_DONE") {
+		t.Logf("Git proxy requests: %+v", proxy.snapshot())
 		t.Fatalf("Git instance task state = %s, text = %q, failure = %q", streamed.state, streamed.text, streamed.failureText)
 	}
 	assertToolEvents(t, streamed.toolEvents, "Bash")
@@ -150,6 +152,11 @@ func gitInstanceHarness(t *testing.T, kube ctrlclient.Client, readOrigin, pushOr
 		t.Fatalf("read %s Harness: %v", claudeE2EHarness, err)
 	}
 	spec := *base.Spec.DeepCopy()
+	// The runtime checkout must accept the instance, so a cluster whose shared
+	// fixture predates it can name a current Claude Harness image.
+	if image := os.Getenv("KAGENT_E2E_CLAUDE_IMAGE"); image != "" {
+		spec.Workload.Image = &image
+	}
 	spec.Git = &v1alpha3.HarnessGit{Origins: []string{"github.com"}, ReadProxyOrigin: &readOrigin, PushProxyOrigin: &pushOrigin}
 	return &v1alpha3.Harness{ObjectMeta: metav1.ObjectMeta{GenerateName: "claude-git-instance-", Namespace: "kagent"}, Spec: spec}
 }
@@ -163,7 +170,12 @@ func createGitInstanceSecret(t *testing.T, kube ctrlclient.Client, prefix string
 		t.Fatal(err)
 	}
 	value := "Bearer " + hex.EncodeToString(token)
-	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{GenerateName: prefix, Namespace: "kagent"}, Data: map[string][]byte{"authorization": []byte(value)}}
+	// Mainloop labels its Git Secrets for actor egress; a credential provider
+	// grant that selects Secrets by label resolves only labelled ones.
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{GenerateName: prefix, Namespace: "kagent", Labels: map[string]string{"mainloop.dev/actor-egress": "true"}},
+		Data:       map[string][]byte{"authorization": []byte(value)},
+	}
 	if err := kube.Create(t.Context(), secret); err != nil {
 		t.Fatalf("create Git instance Secret: %v", err)
 	}
