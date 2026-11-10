@@ -105,8 +105,10 @@ it. Subsecond durations round up to the next second. The mutable TTL is stored o
 runtime revision. A positive override works even when the controller default is zero.
 There is no maximum TTL beyond the duration type's range.
 
-Idle time is measured from the later of session creation and the latest stored
-A2A event's database timestamp. Forks retain original event timestamps, so their
+Idle time is measured from the latest of session creation, the latest stored
+A2A event's database timestamp, and the latest runtime activity report (see
+[Runtime activity and wake](#runtime-activity-and-wake)); a live activity lease
+also blocks expiration. Forks retain original event timestamps, so their
 own creation time gives them a full idle lifetime. Reads, renames, lifecycle calls,
 and retried writes or settlement do not extend it. Running tasks and
 INPUT_REQUIRED/AUTH_REQUIRED turns never expire, even after that duration. Pending
@@ -348,6 +350,63 @@ sequenceDiagram
     Actor-->>Worker: settled native boundary
     Worker->>DB: record snapshot and finish idle claim
 ```
+
+## Runtime activity and wake
+
+Substrate ingress resumes a suspended Actor when a client connects, without a
+control-plane call. Task-boundary quiescence alone cannot see that use: a client
+attached to a runtime's own port runs no A2A task, so nothing would suspend the
+Actor again, and an explicitly suspended Session would keep reporting SUSPENDED
+while it runs. The runtime therefore reports its own activity, and kagent owns
+both the wake and the next suspend.
+
+`TaskStoreService.ReportActivity(session_id, active)` uses the runtime credential
+and the same fresh Actor observation as other TaskStore calls: the Actor must be
+RUNNING with the active generation's UID. A runtime reports `active=true` when
+anything outside A2A tasks uses it (attached clients, a running turn, a pending
+permission prompt, background work), renews at the returned `renew_after`
+(20s) while busy, and reports `active=false` once idle. The returned lease (60s)
+bounds a missed idle report: a runtime that stops renewing is treated as idle
+when the lease ends. Runtimes report only after they serve a Session, so warm-up
+and golden-snapshot creation never report. Go runtimes use
+`go/adk/pkg/activity.Reporter`, which deduplicates transitions, renews, backs off
+on transient failures, and stops after repeated PermissionDenied until the next
+transition. Runtimes that never report keep the task-boundary behavior.
+
+A report on an explicitly SUSPENDED Session with no pending operation adopts the
+wake: the Session moves to READY in the same transaction, keeping its A2A
+authority, credentials, and egress policy. A report during a pending lifecycle
+operation changes no lifecycle state; DELETING and DELETED Sessions refuse
+reports.
+
+Each report also maintains one activity boundary per Session in
+`session_activity`, due at the end of the lease plus `KAGENT_QUIESCE_DELAY`
+(the active lease ends immediately on an idle report). The quiescence worker
+claims a due boundary like a task boundary: under the same lease, recheck, and
+executor fencing, and only when no dispatch, unsettled task boundary, running
+task, checkpoint creation, or native preparation is outstanding. A held claim
+fences new execution through the shared settled-runtime check. The worker
+re-reads the Actor: a RUNNING Actor with an INPUT_REQUIRED/AUTH_REQUIRED turn is
+paused, any other RUNNING Actor is suspended with the `onQuiesce` scope, and a
+stopped Actor needs no runtime call. The Session stays READY. Activity suspends
+record no task snapshot, so they do not create forkable task checkpoints. A
+report that arrives while a claim is held keeps the boundary pending for the next
+claim instead of being lost.
+
+A live or not-yet-due activity boundary also holds task-boundary quiescence, so a
+turn that completes while a client stays attached is not suspended under it. A
+completed explicit Suspend satisfies the activity boundary; a completed explicit
+Resume reopens it at its last delay, so a resumed runtime that is never used is
+suspended again.
+
+The tradeoff is deliberate: a client that stays connected, such as an open
+browser tab, keeps the Session awake and renews its idle-expiration clock.
+
+Migration 8 adds `session_activity` without changing existing tables, so a
+binary rollback keeps schema 8. Older controllers neither serve
+`ReportActivity` (runtimes back off on Unimplemented) nor consult activity
+leases, so while an older replica runs, a task boundary can quiesce a runtime
+that still has a client attached.
 
 ## Cancellation and failed saves
 

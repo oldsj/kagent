@@ -20,9 +20,11 @@ func (c *Client) ListIdleSessions(ctx context.Context, now time.Time, defaultTTL
 		    SELECT created_at FROM session_task_event WHERE history_id = s.history_id
 		    ORDER BY sequence DESC LIMIT 1
 		) latest ON TRUE
+		LEFT JOIN session_activity a ON a.session_id = s.id
 		WHERE (s.deletion_reason = 'idle_timeout'
 		    OR (COALESCE(d.session_idle_ttl_seconds, $4::double precision) > 0
 		        AND (latest.created_at IS NULL OR latest.created_at <= $1::timestamptz - make_interval(secs => COALESCE(d.session_idle_ttl_seconds, $4::double precision)))
+		        AND (a.reported_at IS NULL OR a.reported_at <= $1::timestamptz - make_interval(secs => COALESCE(d.session_idle_ttl_seconds, $4::double precision)))
 		        AND r.state <> 'RUNTIME_STATE_DELETED'))
 		  AND ($2::text = '' OR s.id > $2::uuid)
 		ORDER BY s.id LIMIT $3
@@ -46,15 +48,17 @@ func (c *Client) BeginIdleSessionDeletion(ctx context.Context, id string, now ti
 			return notFoundOr(err)
 		}
 		type activity struct {
-			Reason      sessionDeletionReason
-			LastEventAt *time.Time
-			TTLSeconds  float64
+			Reason       sessionDeletionReason
+			LastEventAt  *time.Time
+			LastReportAt *time.Time
+			TTLSeconds   float64
 		}
 		latest, err := queryOne(ctx, tx, `
 			SELECT COALESCE(deletion_reason, '') AS reason,
 			    COALESCE(d.session_idle_ttl_seconds, $2::double precision) AS ttl_seconds,
 			    (SELECT created_at FROM session_task_event WHERE history_id = s.history_id
-			     ORDER BY sequence DESC LIMIT 1) AS last_event_at
+			     ORDER BY sequence DESC LIMIT 1) AS last_event_at,
+			    (SELECT reported_at FROM session_activity WHERE session_id = s.id) AS last_report_at
 			FROM session s
 			JOIN runtime_instance r USING (id)
 			LEFT JOIN agent_runtime_revision ar ON ar.revision = r.prepared_revision
@@ -72,6 +76,10 @@ func (c *Client) BeginIdleSessionDeletion(ctx context.Context, id string, now ti
 		// Forks retain original event times but receive a full idle lifetime.
 		if latest.LastEventAt != nil && latest.LastEventAt.After(idleSince) {
 			idleSince = *latest.LastEventAt
+		}
+		// Runtime activity outside A2A tasks, such as an attached client, counts too.
+		if latest.LastReportAt != nil && latest.LastReportAt.After(idleSince) {
+			idleSince = *latest.LastReportAt
 		}
 		if latest.Reason != sessionDeletionIdleTimeout {
 			if latest.TTLSeconds <= 0 || now.Sub(idleSince).Seconds() < latest.TTLSeconds {
@@ -103,7 +111,8 @@ func requireIdleSession(ctx context.Context, tx pgx.Tx, row sessionRow) error {
 	busy, err := queryOne(ctx, tx, `
 		SELECT EXISTS (SELECT 1 FROM session_task WHERE history_id = $1
 		    AND state NOT IN ('TASK_STATE_COMPLETED', 'TASK_STATE_CANCELED', 'TASK_STATE_FAILED', 'TASK_STATE_REJECTED'))
-	`, pgx.RowTo[bool], row.HistoryID)
+		    OR EXISTS (SELECT 1 FROM session_activity WHERE session_id = $2 AND active_until > clock_timestamp())
+	`, pgx.RowTo[bool], row.HistoryID, row.ID)
 	if err != nil {
 		return err
 	}

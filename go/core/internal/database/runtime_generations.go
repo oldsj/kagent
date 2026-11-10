@@ -117,6 +117,7 @@ type RuntimeTaskStore interface {
 	GetVersionedSessionTask(context.Context, string, string) (*a2a.Task, int64, error)
 	UpdateSessionTask(context.Context, string, int64, []byte, *a2a.Task, a2a.Event, string) (int64, error)
 	ListSessionTasks(context.Context, string, string, a2a.TaskState, *time.Time, int, *int) ([]*a2a.Task, int, error)
+	RecordRuntimeActivity(context.Context, string, bool, time.Duration, time.Duration) error
 }
 
 // WithRuntimeGeneration checks active authority in the same transaction that

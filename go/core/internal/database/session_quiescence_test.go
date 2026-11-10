@@ -59,7 +59,7 @@ func TestLegacySettlementAgainstMigration7(t *testing.T) {
 					SELECT max(version_id) FROM schema_migrations WHERE is_applied
 				`, pgx.RowTo[int64])
 				require.NoError(t, err)
-				require.EqualValues(t, 7, migrated, "binary rollback must keep schema 7")
+				require.GreaterOrEqual(t, migrated, int64(7), "binary rollback must keep schema 7 or later")
 				// This is the base's actual settlement implementation, not a SQL
 				// approximation or the new writer configured with delay zero.
 				for range 2 {

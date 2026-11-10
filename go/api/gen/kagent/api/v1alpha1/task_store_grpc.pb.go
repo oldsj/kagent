@@ -26,6 +26,7 @@ const (
 	TaskStoreService_SettleTask_FullMethodName                   = "/kagent.api.v1alpha1.TaskStoreService/SettleTask"
 	TaskStoreService_GetWorkspace_FullMethodName                 = "/kagent.api.v1alpha1.TaskStoreService/GetWorkspace"
 	TaskStoreService_CompleteWorkspacePreparation_FullMethodName = "/kagent.api.v1alpha1.TaskStoreService/CompleteWorkspacePreparation"
+	TaskStoreService_ReportActivity_FullMethodName               = "/kagent.api.v1alpha1.TaskStoreService/ReportActivity"
 )
 
 // TaskStoreServiceClient is the client API for TaskStoreService service.
@@ -50,6 +51,13 @@ type TaskStoreServiceClient interface {
 	// response when it asked for none. The runtime calls it before the first turn.
 	GetWorkspace(ctx context.Context, in *TaskStoreServiceGetWorkspaceRequest, opts ...grpc.CallOption) (*TaskStoreServiceGetWorkspaceResponse, error)
 	CompleteWorkspacePreparation(ctx context.Context, in *TaskStoreServiceCompleteWorkspacePreparationRequest, opts ...grpc.CallOption) (*TaskStoreServiceCompleteWorkspacePreparationResponse, error)
+	// ReportActivity tells the control plane whether anything is using the
+	// Session runtime outside A2A tasks, such as an attached client. A report
+	// observes the Actor running: it adopts a wake the control plane did not
+	// issue and holds idle quiescence until the lease ends. An idle report, or
+	// an expired lease, makes the runtime eligible for idle quiescence after the
+	// configured quiescence delay. Reports are idempotent.
+	ReportActivity(ctx context.Context, in *TaskStoreServiceReportActivityRequest, opts ...grpc.CallOption) (*TaskStoreServiceReportActivityResponse, error)
 }
 
 type taskStoreServiceClient struct {
@@ -130,6 +138,16 @@ func (c *taskStoreServiceClient) CompleteWorkspacePreparation(ctx context.Contex
 	return out, nil
 }
 
+func (c *taskStoreServiceClient) ReportActivity(ctx context.Context, in *TaskStoreServiceReportActivityRequest, opts ...grpc.CallOption) (*TaskStoreServiceReportActivityResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TaskStoreServiceReportActivityResponse)
+	err := c.cc.Invoke(ctx, TaskStoreService_ReportActivity_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // TaskStoreServiceServer is the server API for TaskStoreService service.
 // All implementations must embed UnimplementedTaskStoreServiceServer
 // for forward compatibility.
@@ -152,6 +170,13 @@ type TaskStoreServiceServer interface {
 	// response when it asked for none. The runtime calls it before the first turn.
 	GetWorkspace(context.Context, *TaskStoreServiceGetWorkspaceRequest) (*TaskStoreServiceGetWorkspaceResponse, error)
 	CompleteWorkspacePreparation(context.Context, *TaskStoreServiceCompleteWorkspacePreparationRequest) (*TaskStoreServiceCompleteWorkspacePreparationResponse, error)
+	// ReportActivity tells the control plane whether anything is using the
+	// Session runtime outside A2A tasks, such as an attached client. A report
+	// observes the Actor running: it adopts a wake the control plane did not
+	// issue and holds idle quiescence until the lease ends. An idle report, or
+	// an expired lease, makes the runtime eligible for idle quiescence after the
+	// configured quiescence delay. Reports are idempotent.
+	ReportActivity(context.Context, *TaskStoreServiceReportActivityRequest) (*TaskStoreServiceReportActivityResponse, error)
 	mustEmbedUnimplementedTaskStoreServiceServer()
 }
 
@@ -182,6 +207,9 @@ func (UnimplementedTaskStoreServiceServer) GetWorkspace(context.Context, *TaskSt
 }
 func (UnimplementedTaskStoreServiceServer) CompleteWorkspacePreparation(context.Context, *TaskStoreServiceCompleteWorkspacePreparationRequest) (*TaskStoreServiceCompleteWorkspacePreparationResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CompleteWorkspacePreparation not implemented")
+}
+func (UnimplementedTaskStoreServiceServer) ReportActivity(context.Context, *TaskStoreServiceReportActivityRequest) (*TaskStoreServiceReportActivityResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReportActivity not implemented")
 }
 func (UnimplementedTaskStoreServiceServer) mustEmbedUnimplementedTaskStoreServiceServer() {}
 func (UnimplementedTaskStoreServiceServer) testEmbeddedByValue()                          {}
@@ -330,6 +358,24 @@ func _TaskStoreService_CompleteWorkspacePreparation_Handler(srv interface{}, ctx
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TaskStoreService_ReportActivity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TaskStoreServiceReportActivityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskStoreServiceServer).ReportActivity(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskStoreService_ReportActivity_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskStoreServiceServer).ReportActivity(ctx, req.(*TaskStoreServiceReportActivityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // TaskStoreService_ServiceDesc is the grpc.ServiceDesc for TaskStoreService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -364,6 +410,10 @@ var TaskStoreService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CompleteWorkspacePreparation",
 			Handler:    _TaskStoreService_CompleteWorkspacePreparation_Handler,
+		},
+		{
+			MethodName: "ReportActivity",
+			Handler:    _TaskStoreService_ReportActivity_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

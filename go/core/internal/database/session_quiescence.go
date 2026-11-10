@@ -29,6 +29,8 @@ const DefaultQuiescenceClaimLease = DefaultRuntimeOperationTimeout
 // checkpoints, and explicit lifecycle operations until it finishes. Missing work,
 // including boundaries before their durable deadline, returns ErrNotFound.
 // Older writers leave a NULL deadline, which keeps immediate eligibility.
+// Reported runtime activity holds the claim until its idle deadline passes, so
+// a turn that settles while a client is attached does not suspend the runtime.
 //
 // A claim moves the event's deadline to now+lease, so one predicate covers first
 // claims and takeovers: once the lease ends, or the claim has no deadline (a
@@ -58,6 +60,8 @@ func (c *Client) ClaimSessionQuiescence(ctx context.Context, lease time.Duration
 			  AND i.operation = 'RUNTIME_OPERATION_NONE'
 			  AND (i.dispatch_expires_at IS NULL OR i.dispatch_expires_at <= clock_timestamp())
 			  AND NOT EXISTS (SELECT 1 FROM session_checkpoint WHERE source_session_id = i.id AND state = 'CREATING')
+			  AND NOT EXISTS (SELECT 1 FROM session_activity a WHERE a.session_id = i.id
+			      AND (a.idle_due_at > statement_timestamp() OR a.executor_id IS NOT NULL))
 			ORDER BY e.sequence LIMIT 1 FOR UPDATE OF i SKIP LOCKED
 		`, pgx.RowToStructByName[candidate])
 		if err != nil {
@@ -92,6 +96,8 @@ func (c *Client) ClaimSessionQuiescence(ctx context.Context, lease time.Duration
 			  AND (quiescence_due_at IS NULL OR quiescence_due_at <= statement_timestamp())
 			  AND NOT EXISTS (SELECT 1 FROM session WHERE id = $3 AND dispatch_expires_at > clock_timestamp())
 			  AND NOT EXISTS (SELECT 1 FROM session_checkpoint WHERE source_session_id = $3 AND state = 'CREATING')
+			  AND NOT EXISTS (SELECT 1 FROM session_activity WHERE session_id = $3
+			      AND (idle_due_at > clock_timestamp() OR executor_id IS NOT NULL))
 		`, result.Version, result.ExecutorID, session.ID, lease.Microseconds())
 		if err != nil {
 			return err

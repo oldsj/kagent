@@ -3,9 +3,11 @@ package session
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/kagent-dev/kagent/go/pkg/logging"
 
 	"github.com/kagent-dev/kagent/go/core/internal/database"
@@ -18,7 +20,8 @@ var _ manager.LeaderElectionRunnable = (*ActorWorkflow)(nil)
 // Every API replica can process idle work; PostgreSQL grants each claim once.
 func (*ActorWorkflow) NeedLeaderElection() bool { return false }
 
-// Start pauses or suspends idle sessions independently of task publication.
+// Start pauses or suspends idle sessions independently of task publication:
+// after a settled task boundary, and after reported runtime activity ends.
 // A periodic scan discovers settled work across API replicas and restarts.
 // Workers are bounded; task reads never wait for them.
 func (w *ActorWorkflow) Start(ctx context.Context) error {
@@ -35,6 +38,14 @@ func (w *ActorWorkflow) Start(ctx context.Context) error {
 				}
 				if !errors.Is(err, database.ErrNotFound) && ctx.Err() == nil {
 					logging.FromContext(ctx).ErrorContext(ctx, "claim runtime boundary", "error", err)
+				}
+				activity, err := w.store.ClaimSessionActivityQuiescence(ctx, w.quiescenceLease())
+				if err == nil {
+					w.quiesceInactiveSession(ctx, activity)
+					continue
+				}
+				if !errors.Is(err, database.ErrNotFound) && ctx.Err() == nil {
+					logging.FromContext(ctx).ErrorContext(ctx, "claim runtime activity boundary", "error", err)
 				}
 				select {
 				case <-ctx.Done():
@@ -121,4 +132,57 @@ func (w *ActorWorkflow) quiesceIdleSession(ctx context.Context, work *database.S
 		case <-time.After(delay):
 		}
 	}
+}
+
+// quiesceInactiveSession suspends a runtime whose reported activity ended, or
+// pauses it while a turn waits for input. The Session stays READY. An Actor
+// that is no longer running (idle work or an explicit lifecycle call already
+// stopped it) only settles the boundary. No task snapshot is recorded: no task
+// ended here, and the latest task keeps the snapshot of its own boundary.
+func (w *ActorWorkflow) quiesceInactiveSession(ctx context.Context, work *database.SessionActivityQuiescence) {
+	runtimeCtx, cancel := context.WithTimeout(ctx, w.attemptTimeout)
+	err := w.quiesceInactiveRuntime(runtimeCtx, work)
+	cancel()
+	if err != nil && !errors.Is(err, errActorCrashed) {
+		// The Substrate request may still complete, so admission stays closed until
+		// the claim lease ends and the next worker re-observes the Actor.
+		logging.FromContext(ctx).ErrorContext(ctx, "runtime activity boundary outcome unknown", "session_id", work.Session.Id, "error", err)
+		return
+	}
+	for delay := 100 * time.Millisecond; ; delay = min(2*delay, 5*time.Second) {
+		finishCtx, finishCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		err = w.store.FinishSessionActivityQuiescence(finishCtx, work)
+		finishCancel()
+		if err == nil || errors.Is(err, database.ErrNotFound) {
+			return
+		}
+		logging.FromContext(ctx).ErrorContext(ctx, "record runtime activity outcome", "session_id", work.Session.Id, "error", err)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(delay):
+		}
+	}
+}
+
+func (w *ActorWorkflow) quiesceInactiveRuntime(ctx context.Context, work *database.SessionActivityQuiescence) error {
+	generation, err := w.store.GetRuntimeGeneration(ctx, work.Session.GetId())
+	if err != nil || generation.Phase != "active" {
+		return fmt.Errorf("runtime generation unavailable")
+	}
+	actor, err := w.actors.GetActor(ctx, generation.Atespace, generation.ActorName)
+	if err != nil {
+		return fmt.Errorf("observe runtime Actor: %w", err)
+	}
+	if actor.GetMetadata().GetUid() != generation.ActorUID {
+		return fmt.Errorf("runtime Actor %s/%s was replaced", generation.Atespace, generation.ActorName)
+	}
+	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		return nil
+	}
+	if work.Waiting {
+		return w.Pause(ctx, work.Session)
+	}
+	_, err = w.Quiesce(ctx, work.Session)
+	return err
 }
