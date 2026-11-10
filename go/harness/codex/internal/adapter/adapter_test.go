@@ -501,7 +501,7 @@ func TestRenderConfigAutoCompactTokenLimit(t *testing.T) {
 			cfg := config.Production("gpt-5.2-codex", "work carefully")
 			cfg.Provider = config.Provider{Name: "openai"}
 			cfg.AutoCompactTokenLimit = tt.limit
-			contents, err := renderConfig(cfg, t.TempDir(), false)
+			contents, err := renderConfig(cfg, t.TempDir(), "/data/workspace", false)
 			if err != nil {
 				t.Fatal(err)
 			}
