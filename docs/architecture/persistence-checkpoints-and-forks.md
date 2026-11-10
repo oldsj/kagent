@@ -112,6 +112,13 @@ accepts only VOLUMES checkpoints, which cold-boot with fresh session identities;
 MEMORY and ROOTFS checkpoints return `FAILED_PRECONDITION`.
 The rest of this section describes forks of VOLUMES checkpoints.
 
+A fork requested with `fresh_conversation` restores the same snapshot, so it keeps the
+workspace and caches, but copies no A2A history and is marked `fresh_conversation`.
+The runtime reads the mark through `TaskStoreService.GetWorkspace` and discards the
+native agent conversation carried in the restored data before its first turn.
+A repeated request replays only with the same mode. The rest of this section describes
+default forks.
+
 Forking creates a new Session and context ID. It copies events through the
 saved cutoff and reconstructs task views without reading the source's current task
 views. During that copy, the store assigns fresh task IDs and rewrites typed A2A
