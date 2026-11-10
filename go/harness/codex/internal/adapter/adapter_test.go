@@ -87,7 +87,7 @@ func TestChatGPTMaterializesOnlySyntheticAuth(t *testing.T) {
 func TestChatGPTHTTPSKeepsSubscriptionAuth(t *testing.T) {
 	cfg := config.Production("gpt-6.1-sol", "Reply briefly")
 	cfg.Provider = config.Provider{Name: "chatgpt", AccountID: "test-account", ResponsesTransport: "https"}
-	contents, err := renderConfig(cfg, t.TempDir(), false)
+	contents, err := renderConfig(cfg, t.TempDir(), "/data/workspace", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestChatGPTBaseURLOverridesBackend(t *testing.T) {
 	}{{"", true}, {"https", false}} {
 		cfg := config.Production("gpt-6.1", "Reply briefly")
 		cfg.Provider = config.Provider{Name: "chatgpt", AccountID: "test-account", BaseURL: "https://codex.example.com/backend-api/codex", ResponsesTransport: test.transport}
-		contents, err := renderConfig(cfg, t.TempDir(), false)
+		contents, err := renderConfig(cfg, t.TempDir(), "/data/workspace", false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -342,7 +342,7 @@ func TestRenderConfigOmitsDisabledSignalExporter(t *testing.T) {
 			cfg := config.Production("gpt-5.2-codex", "work carefully")
 			cfg.Provider = config.Provider{Name: "openai"}
 			cfg.Telemetry = test.telemetry
-			contents, err := renderConfig(cfg, t.TempDir(), false)
+			contents, err := renderConfig(cfg, t.TempDir(), "/data/workspace", false)
 			if err != nil {
 				t.Fatal(err)
 			}
