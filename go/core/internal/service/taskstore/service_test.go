@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -23,6 +24,7 @@ type settlementStore struct {
 	err       error
 	commit    <-chan struct{}
 	committed bool
+	delay     time.Duration
 }
 
 var _ Store = (*settlementStore)(nil)
@@ -31,7 +33,8 @@ func (s *settlementStore) GetSessionForRuntime(_ context.Context, id, _ string) 
 	return &apiv1.Session{Id: id, A2AAuthority: substrate.ActorHost("team-a", substrate.ActorName(id), "")}, nil
 }
 
-func (s *settlementStore) SettleSessionTask(context.Context, string, string, int64) error {
+func (s *settlementStore) SettleSessionTask(_ context.Context, _, _ string, _ int64, delay time.Duration) error {
+	s.delay = delay
 	<-s.commit
 	s.committed = s.err == nil
 	return s.err
@@ -62,7 +65,7 @@ func TestSettleTaskWakesOnlyAfterCommit(t *testing.T) {
 					pushWakes <- struct{}{}
 				}
 				before := len(wakes)
-				service := NewService(store, wakes, pushWakes)
+				service := NewService(store, wakes, pushWakes, 0)
 				ctx, cancel := context.WithCancel(runtimeContext(t))
 				cancel() // A disconnected caller must not suppress the post-commit hint.
 				done := make(chan error, 1)
@@ -88,6 +91,20 @@ func TestSettleTaskWakesOnlyAfterCommit(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestSettleTaskAppliesConfiguredQuiesceDelay(t *testing.T) {
+	t.Run("Given a configured quiescence delay, when a runtime settles a task, assert that the store records that delay", func(t *testing.T) {
+		commit := make(chan struct{}, 1)
+		commit <- struct{}{}
+		store := &settlementStore{commit: commit}
+		service := NewService(store, nil, nil, 15*time.Minute)
+
+		_, err := service.SettleTask(runtimeContext(t), &runtimev1.TaskStoreServiceSettleTaskRequest{SessionId: "00000000-0000-0000-0000-000000000001", TaskId: "task", Version: 1})
+
+		require.NoError(t, err)
+		require.Equal(t, 15*time.Minute, store.delay)
+	})
 }
 
 type testActorVerifier struct{}

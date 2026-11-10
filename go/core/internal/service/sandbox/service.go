@@ -31,6 +31,8 @@ type Config struct {
 	DefaultTTL             time.Duration
 	MaxTTL                 time.Duration
 	ExpirationPollInterval time.Duration
+	// OperationTimeout bounds each lifecycle attempt. Zero uses the default.
+	OperationTimeout time.Duration
 }
 
 type Service struct {

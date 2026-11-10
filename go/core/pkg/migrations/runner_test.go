@@ -320,7 +320,7 @@ func TestBuiltinMigrationsRoundTrip(t *testing.T) {
 	for _, source := range sources {
 		expected := []int64{0, 1}
 		if source.Name == "core" {
-			expected = append(expected, 2, 3, 4, 5, 6, 7)
+			expected = append(expected, 2, 3, 4, 5, 6, 7, 8)
 		}
 		if versions := testVersions(t, dsn, source.TrackingTable); !slices.Equal(versions, expected) {
 			t.Fatalf("%s versions = %v, want %v", source.Name, versions, expected)
@@ -339,6 +339,9 @@ func TestBuiltinMigrationsRoundTrip(t *testing.T) {
 	}
 	if !testColumnExists(t, dsn, "agent_definition", "session_idle_ttl_seconds") {
 		t.Fatal("Harness idle TTL override is missing")
+	}
+	if !testColumnExists(t, dsn, "session_task_event", "quiescence_due_at") {
+		t.Fatal("session quiescence deadline is missing")
 	}
 	if !testColumnExists(t, dsn, "runtime_revision", "git_origins") {
 		t.Fatal("runtime revision Git origins are missing")

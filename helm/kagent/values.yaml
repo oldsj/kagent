@@ -231,6 +231,10 @@ config:
     recoveryInterval: 60s
   sessions:
     idleTtl: 604800s
+    # Delay after a turn settles before its idle runtime is suspended, so
+    # background processes keep running (0s to 1800s; 0s suspends at once).
+    # Raise it only after every older controller replica has exited.
+    quiescenceDelay: 0s
     shareMaxTtl: 0s
   sandboxes:
     guestImage: ""
@@ -243,6 +247,12 @@ config:
     routerUrl: https://atenet-router.ate-system.svc:443
     # Must match Substrate's ateApi.actorJWTIssuer; discovery uses substrate.caFile.
     actorJwtIssuer: https://idp.ate-system.svc
+    # Substrate deadlines. Resume, suspend and revert move snapshots and grow
+    # with durable data; operationTimeout bounds each attempt and its execution
+    # claim and must exceed lifecycleCallTimeout.
+    callTimeout: 30s
+    lifecycleCallTimeout: 300s
+    operationTimeout: 600s
   logging:
     level: info
   metrics:
@@ -277,6 +287,11 @@ controller:
   # Mount rotating Substrate PodIdentity/ServiceDNS credentials.
   substrateClientCertificate:
     enabled: false
+  # Register the controller's /mcp endpoint as the RemoteMCPServer <fullname>-api.
+  # The controller discovers its tools without credentials, so disable this when
+  # the endpoint requires authentication and no AgentTemplate binds the server.
+  apiToolServer:
+    enabled: true
   push:
     signing:
       # Optional operator-managed Secret with an unencrypted PKCS#8 Ed25519 key

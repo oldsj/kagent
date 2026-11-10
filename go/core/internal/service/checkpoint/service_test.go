@@ -144,11 +144,12 @@ func (s *testStore) UpdateCheckpointName(_ context.Context, _, _, name string) (
 	return s.prepared, nil
 }
 
-func (s *testStore) ForkSession(_ context.Context, _ string, userID, _ string, sessionID string) (*apiv1.Session, bool, error) {
+func (s *testStore) ForkSession(_ context.Context, _ string, userID, _ string, sessionID string, fresh bool) (*apiv1.Session, bool, error) {
 	if s.forked == nil {
 		s.forked = &apiv1.Session{
 			Id: sessionID, Creator: userID,
-			State: apiv1.RuntimeState_RUNTIME_STATE_CREATING,
+			State:             apiv1.RuntimeState_RUNTIME_STATE_CREATING,
+			FreshConversation: fresh,
 		}
 		return s.forked, true, nil
 	}
@@ -431,7 +432,7 @@ func TestForkCreatesSessionFromRetainedCheckpointAfterSourceDeletion(t *testing.
 	service := NewService(store, &restrictiveAuthorizer{resource: "Checkpoint", verb: auth.VerbCreate}, tags, workflow)
 	ctx := auth.AuthSessionTo(context.Background(), testSession{userID: "alice"})
 
-	session, err := service.Fork(ctx, checkpoint.GetId(), "fork-request")
+	session, err := service.Fork(ctx, checkpoint.GetId(), "fork-request", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -439,7 +440,7 @@ func TestForkCreatesSessionFromRetainedCheckpointAfterSourceDeletion(t *testing.
 		workflow.session != store.forked || store.forked.GetId() == "" {
 		t.Fatalf("fork = %+v, checkpoint = %+v", session, checkpoint)
 	}
-	retried, err := service.Fork(ctx, checkpoint.GetId(), "fork-request")
+	retried, err := service.Fork(ctx, checkpoint.GetId(), "fork-request", false)
 	require.NoError(t, err)
 	require.Equal(t, session.GetId(), retried.GetId())
 	require.Zero(t, store.sourceReads.Load(), "retained provenance must not require a live source Session")
@@ -512,7 +513,7 @@ func TestForkRejectsReplacedTag(t *testing.T) {
 			}}
 			service := NewService(store, testAuthorizer{}, tags, &testWorkflow{})
 			ctx := auth.AuthSessionTo(t.Context(), testSession{userID: "alice"})
-			_, err := service.Fork(ctx, checkpoint.Id, "fork-request")
+			_, err := service.Fork(ctx, checkpoint.Id, "fork-request", false)
 			require.Error(t, err)
 			require.Nil(t, store.forked)
 		})
@@ -620,7 +621,7 @@ func TestCheckpointComposesPermissionsBeforeEffects(t *testing.T) {
 			if test.operation == "create" {
 				_, err = service.Create(ctx, sourceID, "request", "head")
 			} else {
-				_, err = service.Fork(ctx, checkpointID, "request")
+				_, err = service.Fork(ctx, checkpointID, "request", false)
 			}
 			code := serviceerrors.CodePermissionDenied
 			if test.ownerDenied {
@@ -682,7 +683,7 @@ func TestCheckpointSharesAndCategoryDenialsProtectEveryOperation(t *testing.T) {
 				_, err := s.Create(ctx, id, "request", "head")
 				return err
 			}},
-			{"fork", auth.VerbGet, func(ctx context.Context, s *Service) error { _, err := s.Fork(ctx, id, "request"); return err }},
+			{"fork", auth.VerbGet, func(ctx context.Context, s *Service) error { _, err := s.Fork(ctx, id, "request", false); return err }},
 		} {
 			t.Run(fmt.Sprintf("%s/share=%v", operation.name, shared), func(t *testing.T) {
 				ctx := auth.AuthSessionTo(t.Context(), testSession{userID: "alice"})
@@ -739,7 +740,7 @@ func TestForkAuthorizesResolvedTargetNamespaceBeforeTagRead(t *testing.T) {
 			store := &testStore{prepared: checkpoint, checkpointOwner: "alice", sourceErr: database.ErrNotFound, snapshot: &database.SessionTaskSnapshot{Fidelity: "SNAPSHOT_FIDELITY_VOLUMES"}}
 			tags := &testTags{getErr: tagErr}
 			svc := NewService(store, forkNamespacePolicy{namespace: namespace}, tags, nil)
-			_, err := svc.Fork(auth.AuthSessionTo(t.Context(), testSession{userID: "alice"}), checkpoint.Id, "request")
+			_, err := svc.Fork(auth.AuthSessionTo(t.Context(), testSession{userID: "alice"}), checkpoint.Id, "request", false)
 			if namespace == "team-a" {
 				require.ErrorIs(t, err, tagErr, "resolved namespace should pass authorization")
 				require.Equal(t, 1, tags.getCalls)
@@ -790,7 +791,7 @@ func TestCheckpointCanonicalIdentityDenialsCannotBeBypassed(t *testing.T) {
 				case "delete":
 					err = svc.Delete(ctx, encoded)
 				case "fork":
-					_, err = svc.Fork(ctx, encoded, "request")
+					_, err = svc.Fork(ctx, encoded, "request", false)
 				}
 				require.True(t, serviceerrors.IsCode(err, serviceerrors.CodePermissionDenied), "%v", err)
 				require.Equal(t, resource, policy.calls[len(policy.calls)-1])
@@ -847,7 +848,7 @@ func TestForkCanonicalizesSavedSourceIdentity(t *testing.T) {
 	store := &testStore{prepared: &apiv1.Checkpoint{Id: "22222222-2222-4222-8222-222222222222", SessionId: strings.ToUpper(source)}}
 	policy := &exactIdentityPolicy{denied: auth.Resource{Type: "Session", Name: source}}
 	svc := NewService(store, policy, nil, nil)
-	_, err := svc.Fork(auth.AuthSessionTo(t.Context(), testSession{userID: "alice"}), store.prepared.Id, "request")
+	_, err := svc.Fork(auth.AuthSessionTo(t.Context(), testSession{userID: "alice"}), store.prepared.Id, "request", false)
 	require.True(t, serviceerrors.IsCode(err, serviceerrors.CodePermissionDenied))
 	require.Equal(t, policy.denied, policy.calls[len(policy.calls)-1])
 	require.Equal(t, 1, store.forkSourceReads)

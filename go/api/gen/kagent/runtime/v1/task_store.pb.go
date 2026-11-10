@@ -642,9 +642,13 @@ func (x *TaskStoreServiceGetWorkspaceRequest) GetSessionId() string {
 type TaskStoreServiceGetWorkspaceResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Unset when the Session has no workspace.
-	Workspace     *v11.Workspace `protobuf:"bytes,1,opt,name=workspace,proto3" json:"workspace,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Workspace *v11.Workspace `protobuf:"bytes,1,opt,name=workspace,proto3" json:"workspace,omitempty"`
+	// Fields 2-4 are reserved for workspace preparation.
+	// True for a fork created with a fresh conversation: before its first turn the
+	// runtime discards native conversation state restored from the checkpoint.
+	FreshConversation bool `protobuf:"varint,5,opt,name=fresh_conversation,json=freshConversation,proto3" json:"fresh_conversation,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *TaskStoreServiceGetWorkspaceResponse) Reset() {
@@ -682,6 +686,13 @@ func (x *TaskStoreServiceGetWorkspaceResponse) GetWorkspace() *v11.Workspace {
 		return x.Workspace
 	}
 	return nil
+}
+
+func (x *TaskStoreServiceGetWorkspaceResponse) GetFreshConversation() bool {
+	if x != nil {
+		return x.FreshConversation
+	}
+	return false
 }
 
 var File_kagent_runtime_v1_task_store_proto protoreflect.FileDescriptor
@@ -735,9 +746,10 @@ const file_kagent_runtime_v1_task_store_proto_rawDesc = "" +
 	"\"TaskStoreServiceSettleTaskResponse\"N\n" +
 	"#TaskStoreServiceGetWorkspaceRequest\x12'\n" +
 	"\n" +
-	"session_id\x18\x01 \x01(\tB\b\xbaH\x05r\x03\xb0\x01\x01R\tsessionId\"^\n" +
+	"session_id\x18\x01 \x01(\tB\b\xbaH\x05r\x03\xb0\x01\x01R\tsessionId\"\x8d\x01\n" +
 	"$TaskStoreServiceGetWorkspaceResponse\x126\n" +
-	"\tworkspace\x18\x01 \x01(\v2\x18.kagent.api.v1.WorkspaceR\tworkspace2\xee\x05\n" +
+	"\tworkspace\x18\x01 \x01(\v2\x18.kagent.api.v1.WorkspaceR\tworkspace\x12-\n" +
+	"\x12fresh_conversation\x18\x05 \x01(\bR\x11freshConversation2\xee\x05\n" +
 	"\x10TaskStoreService\x12y\n" +
 	"\n" +
 	"CreateTask\x124.kagent.runtime.v1.TaskStoreServiceCreateTaskRequest\x1a5.kagent.runtime.v1.TaskStoreServiceCreateTaskResponse\x12p\n" +

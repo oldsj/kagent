@@ -80,7 +80,7 @@ func (w *ActorWorkflow) Revert(ctx context.Context, session *apiv1.Session) (*ap
 		return session, nil
 	}
 	// run bounds a joined attempt. Admission bounds its own reads and execution.
-	ctx, cancel := context.WithTimeout(ctx, database.RuntimeOperationTimeout)
+	ctx, cancel := context.WithTimeout(ctx, w.operationTimeout)
 	defer cancel()
 	observed, err := w.observeCrash(ctx, session)
 	if err != nil {

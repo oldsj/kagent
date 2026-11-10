@@ -59,9 +59,16 @@ generation but leaves DELETING in place, keeping task admission closed until a
 delete retry completes. Explicit deletion requires a client retry; idle deletion
 is retried by the expiration worker. After an attempt issues runtime work, errors
 retain the operation and resource pins. The attempt releases its execution claim
-on return. A crashed executor's claim expires after at most two minutes, allowing
-a client retry to claim the same operation with a new executor ID. Each attempt
-uses a context bounded by that interval; no claim renewer or recovery sweep runs.
+on return. Each attempt, including automatic suspension, runs under
+`substrate.operationTimeout` (default 10m), and its execution claim lasts exactly
+as long as that attempt, so a second executor cannot start while the first is
+still inside a Substrate call. A crashed executor's claim expires at that bound,
+allowing a client retry to claim the same operation with a new executor ID; no
+claim renewer or recovery sweep runs. Actor resume, suspend and revert move
+snapshots, so they use `substrate.lifecycleCallTimeout` (default 5m); other
+Substrate RPCs use `substrate.callTimeout` (default 30s). The controller refuses
+to start unless the attempt bound exceeds the lifecycle call bound. A timed-out
+call is still an uncertain outcome that a retry reconciles from the Actor.
 A stale executor cannot complete or release a newer attempt's claim.
 
 Lifecycle retries inspect the pinned Actor identity and continue Substrate's
@@ -227,6 +234,24 @@ replicas. Each worker scans at startup and, when idle, every minute by default
 leave an actor running until a surviving replica's next recovery scan; increasing
 the interval increases that delay and the time until its snapshot is available.
 Ordinary committed settlements do not wait for the recovery interval.
+
+`sessions.quiescenceDelay` (default `0s`, at most `1800s`) delays automatic
+suspension after a turn settles, so background processes such as dev servers keep
+running for a while. Settlement records the deadline with the database clock, so
+acknowledgement retries and controller restarts keep it; configuration changes
+affect only newly settled boundaries. Publication is not delayed: the task is
+visible immediately. A new turn supersedes unclaimed work during the delay. Claims
+check the deadline alongside the dispatch and lifecycle fences, and work that is not
+yet due does not count as pending, so idle workers notice it on their next recovery
+scan: suspension can land up to one recovery interval after the deadline. The
+delay does not wait for background processes to finish. Boundaries published on
+an ending runtime use no delay.
+
+The deadline column (migration 8) is nullable, and NULL means eligible now, so an
+older controller can still publish boundaries. Older workers ignore deadlines, so
+roll out in two steps: deploy the new controller with `quiescenceDelay: 0s`, wait
+for every old replica to exit (all replicas run quiescence workers), then raise the
+delay. To roll back the binary, set the delay to `0s` first and keep schema 8.
 
 An empty claim is followed by a check for unclaimed work on ready sessions. If
 dispatch, checkpoint creation, a lifecycle operation, or a row lock blocks that
