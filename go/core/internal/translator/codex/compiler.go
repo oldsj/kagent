@@ -111,6 +111,9 @@ func (c *Compiler) Compile(ctx context.Context, input *translator.HarnessInput) 
 	cfg.ControlPlaneURL = c.settings.GetControlPlaneUrl()
 	cfg.MaxContentLength = c.settings.MaxContentLength // Preserve unset versus unlimited.
 	cfg.LogLevel = c.settings.GetLogging().GetLevel()
+	if codex := harness.Spec.Codex; codex != nil && codex.AutoCompactTokenLimit != nil {
+		cfg.AutoCompactTokenLimit = *codex.AutoCompactTokenLimit
+	}
 	if traceConfig.Enabled || logConfig.Enabled {
 		cfg.Telemetry = &codexconfig.Telemetry{CaptureContent: telemetryConfig.Runtime.CaptureContent}
 		if traceConfig.Enabled {
