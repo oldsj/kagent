@@ -397,6 +397,7 @@ authority and Kubernetes API, before or after service DNAT) and denies ingress. 
 NetworkPolicy cannot restrict egress by DNS name; installations requiring
 host-only egress must additionally configure their CNI's FQDN policy.
 NetworkPolicy requires an enforcing CNI. Actor egress rules remain unchanged.
+
 ## Per-Session credentials
 
 `CreateSessionRequest.credentials` accepts at most four `SessionCredential`
