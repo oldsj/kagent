@@ -62,6 +62,27 @@ message Session {
   // Output only. The operator's runtime payload pinned at creation; set exactly
   // when development_environment is.
   RuntimeComposition runtime_composition = 19;
+  // Output only. Set only by GetSession, from a fresh observation of the
+  // Session's runtime Actor. Absent means no association was verified by this
+  // read; it is never a creation or fork input.
+  RuntimeAssociation runtime_association = 20;
+}
+
+// RuntimeAssociation is a bounded observation of the runtime Actor that serves
+// a Session, not a grant: callers recheck with their own fencing before
+// runtime work.
+message RuntimeAssociation {
+  // Stable identity of the Session's current runtime: a name-based UUID of the
+  // Session ID and the Actor UID. It changes only if the Actor is replaced.
+  string generation_id = 1;
+  string atespace = 2;
+  string actor_name = 3;
+  string actor_uid = 4;
+  // "active" while the observed Actor is the Session's recorded runtime.
+  string phase = 5;
+  // True while the Actor is running; false while it is suspended or otherwise
+  // not serving. A sleeping Session stays READY and reports false here.
+  bool current_active = 6;
 }
 
 // SecretKeyReference identifies a key in the Agent's namespace. The value is

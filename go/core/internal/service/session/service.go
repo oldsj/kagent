@@ -203,7 +203,14 @@ func (s *Service) CreateWithEnvironment(ctx context.Context, agent *apiv1.Resour
 }
 
 func (s *Service) Get(ctx context.Context, id string) (*apiv1.Session, error) {
-	return s.getAuthorized(ctx, id, auth.VerbGet)
+	session, err := s.getAuthorized(ctx, id, auth.VerbGet)
+	if err != nil {
+		return nil, err
+	}
+	if observer, ok := s.workflow.(associationObserver); ok {
+		session.RuntimeAssociation = observer.RuntimeAssociation(ctx, session)
+	}
+	return session, nil
 }
 
 // getAuthorized loads a Session authorized for the requested operation. Reads are
