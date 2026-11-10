@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/durationpb"
 
 	apiv1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1"
 	runtimev1 "github.com/kagent-dev/kagent/go/api/gen/kagent/runtime/v1"
@@ -24,6 +25,7 @@ import (
 
 type Store interface {
 	SettleSessionTask(context.Context, string, string, int64, time.Duration) error
+	RecordRuntimeActivity(context.Context, string, bool, time.Duration, time.Duration) error
 	GetSessionForRuntime(context.Context, string, string) (*apiv1.Session, error)
 	CreateRuntimeTask(context.Context, string, []byte, *a2a.Task, string) (int64, error)
 	GetVersionedSessionTask(context.Context, string, string) (*a2a.Task, int64, error)
@@ -205,4 +207,26 @@ func (s *Service) GetWorkspace(ctx context.Context, input *runtimev1.TaskStoreSe
 		return nil, err
 	}
 	return &runtimev1.TaskStoreServiceGetWorkspaceResponse{Workspace: session.GetWorkspace()}, nil
+}
+
+// ReportActivity records whether the runtime is in use outside A2A tasks and
+// returns the lease it holds. Only the Session's authenticated Actor may report.
+func (s *Service) ReportActivity(ctx context.Context, input *runtimev1.TaskStoreServiceReportActivityRequest) (*runtimev1.TaskStoreServiceReportActivityResponse, error) {
+	if _, err := s.session(ctx, input.SessionId); err != nil {
+		return nil, err
+	}
+	if err := s.store.RecordRuntimeActivity(ctx, input.SessionId, input.Active, database.RuntimeActivityLease, s.quiesceDelay); err != nil {
+		return nil, storageError(err)
+	}
+	if !input.Active {
+		// An idle report may make work due at once; let local workers look now.
+		select {
+		case s.quiescenceWake <- struct{}{}:
+		default:
+		}
+	}
+	return &runtimev1.TaskStoreServiceReportActivityResponse{
+		Lease:      durationpb.New(database.RuntimeActivityLease),
+		RenewAfter: durationpb.New(database.RuntimeActivityRenewAfter),
+	}, nil
 }

@@ -40,6 +40,11 @@ func (s *idleQuiescenceStore) ClaimSessionQuiescence(context.Context) (*database
 	return nil, database.ErrNotFound
 }
 
+// No activity boundaries: these tests exercise task-boundary claims.
+func (s *idleQuiescenceStore) ClaimSessionActivityQuiescence(context.Context) (*database.SessionActivityQuiescence, error) {
+	return nil, database.ErrNotFound
+}
+
 func (s *idleQuiescenceStore) HasPendingSessionQuiescence(context.Context) (bool, error) {
 	s.pendingChecks.Add(1)
 	if s.beforeIdle != nil {
