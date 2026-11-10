@@ -107,6 +107,16 @@ func (b *Bootstrapper) Run(ctx context.Context, turn runtime.Turn, sink runtime.
 	return b.next.Run(ctx, turn, sink)
 }
 
+// Ready runs the same preparation admission and checkout as Run, for a
+// runtime that starts native work outside a turn (a client attaching to the
+// Claude SDK runner). It returns Run's public failure message, or "".
+func (b *Bootstrapper) Ready(ctx context.Context) string {
+	if err := b.preparationAdmission(ctx); err != nil {
+		return "Workspace preparation is incomplete."
+	}
+	return b.ensure(ctx)
+}
+
 // ensure returns a public failure message, or "" when the workspace is ready or
 // was never requested.
 func (b *Bootstrapper) ensure(ctx context.Context) string {

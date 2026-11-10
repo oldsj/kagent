@@ -17,6 +17,8 @@ harness.
 | [`cmd/main.go`](cmd/main.go) | Actor startup, environment inputs, Claude version validation, continuation-store wiring, and private A2A startup |
 | [`internal/adapter/adapter.go`](internal/adapter/adapter.go) | Materializing Claude home, skills, MCP config, and ephemeral provider credentials |
 | [`internal/driver`](internal/driver) | Claude CLI arguments, stream-JSON parsing, runtime-event translation, cancellation, and process supervision |
+| [`internal/sdkrunner`](internal/sdkrunner) | The Agent SDK driver's Node bridge supervision, client port, and shared conversation state |
+| [`sdk-runner`](sdk-runner) | The Node bridge that holds one live Agent SDK `query()` |
 
 ## Working
 
@@ -138,6 +140,42 @@ and reaping support before launch. Unsupported platforms, syscall filters, or
 a failure to establish process ownership reject execution; there is no numeric
 PID fallback.
 See [Claude's headless exit behavior](https://code.claude.com/docs/en/headless#background-tasks-at-exit).
+
+## Agent SDK driver
+
+Setting Harness `spec.env` `KAGENT_CLAUDE_DRIVER=sdk` (default `process`)
+replaces the per-turn `claude -p` process with one long-lived Agent SDK
+`query()` per Session. `kagent-claude` stays PID 1 and keeps A2A on `:80`,
+`/readyz` on `:8081`, TaskStore reporting, workspace preparation, and the
+continuation store. A Node child, `/opt/kagent/sdk-runner/runner.mjs`, holds the
+`query()` and speaks JSON lines over stdio; it opens no listener.
+
+- **Restore-safe start.** Node starts on first demand: an A2A turn or a client
+  attaching. The golden snapshot taken after `/readyz` never contains it, so a
+  restored Actor never resumes a Node heap. When the bridge exits, the next
+  demand starts it again and resumes the bound Claude session.
+- **A2A turns** are user messages with a fresh UUID. A turn ends at the SDK
+  `result` whose `user_message_uuids` names that UUID; results of other
+  messages pass by. Tool approval prompts become A2A approval requests; the
+  first answer, A2A or client, wins.
+- **Client port `:7682`**, reached only through the Substrate router:
+  `PUT /bootstrap` sets the Session's client token on first use (and may
+  install a Claude user home), `GET /healthz`, and `GET /ws?t=&since=` with
+  subprotocol `kagent.sdk-runner.v1`, which replays the in-memory event backlog
+  and accepts user messages, interrupts, model, effort, mode, and permission
+  answers.
+- **Profiles.** By default the bridge uses the compiled Harness configuration
+  (user setting source, hooks disabled, strict MCP). After a bootstrap installs
+  a user home it uses that home with user and project setting sources.
+- **Activity.** The driver reports busy/idle changes (clients attached, a turn,
+  a pending prompt, SDK background tasks) and never reports before serving a
+  Session.
+
+The SDK version in [`sdk-runner/package.json`](sdk-runner/package.json) is
+pinned to the release that matches the image's Claude CLI in
+`runtime-lock.json`; the bridge drives that CLI rather than the SDK's bundled
+one. Telemetry export is not yet applied in SDK mode, and the event backlog does
+not survive an Actor restart.
 
 ## Telemetry
 

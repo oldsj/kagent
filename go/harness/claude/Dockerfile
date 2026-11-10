@@ -19,6 +19,15 @@ RUN --mount=type=cache,target=/root/go/pkg/mod,rw \
     CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
     go build -trimpath -o /kagent-claude ./harness/claude/cmd
 
+# The Agent SDK bridge (KAGENT_CLAUDE_DRIVER=sdk) is plain JavaScript. Its
+# platform CLI packages are optional dependencies and are left out: the bridge
+# drives the image's own pinned, validated claude.
+FROM --platform=$BUILDPLATFORM node:22-alpine AS sdk-runner
+WORKDIR /sdk-runner
+COPY harness/claude/sdk-runner/package.json harness/claude/sdk-runner/package-lock.json ./
+RUN npm ci --omit=optional --omit=dev --ignore-scripts --no-audit --no-fund
+COPY harness/claude/sdk-runner/runner.mjs ./
+
 FROM alpine:3.22
 ARG TARGETARCH
 ARG VERSION
@@ -27,7 +36,7 @@ COPY harness/runtime/payload/install-cli.sh /build/install-cli
 COPY harness/runtime/payload/runtime-lock.json /build/runtime-lock.json
 
 ENV USE_BUILTIN_RIPGREP=0
-RUN apk upgrade --no-cache && apk add --no-cache bash ca-certificates git libgcc libstdc++ ripgrep jq \
+RUN apk upgrade --no-cache && apk add --no-cache bash ca-certificates git libgcc libstdc++ ripgrep jq nodejs \
     && /build/install-cli claude "$TARGETARCH" /usr/local /build/runtime-lock.json \
     && rm -rf /build \
     && addgroup -S -g 65532 kagent \
@@ -36,10 +45,11 @@ RUN apk upgrade --no-cache && apk add --no-cache bash ca-certificates git libgcc
     && chown -R 65532:65532 /data
 
 COPY --from=builder /kagent-claude /usr/local/bin/kagent-claude
+COPY --from=sdk-runner /sdk-runner /opt/kagent/sdk-runner
 
 USER 65532:65532
 WORKDIR /data/workspace
-EXPOSE 80 8081
+EXPOSE 80 8081 7682
 
 LABEL org.opencontainers.image.source="https://github.com/kagent-dev/kagent"
 LABEL org.opencontainers.image.description="Kagent Claude native Harness adapter"

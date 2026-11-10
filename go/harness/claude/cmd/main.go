@@ -11,8 +11,11 @@ import (
 	"time"
 
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/kagent-dev/kagent/go/adk/pkg/activity"
 	"github.com/kagent-dev/kagent/go/adk/pkg/app"
 	"github.com/kagent-dev/kagent/go/adk/pkg/controllerclient"
+	"github.com/kagent-dev/kagent/go/adk/pkg/taskstore"
+	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	"github.com/kagent-dev/kagent/go/harness/claude/config"
 	"github.com/kagent-dev/kagent/go/harness/claude/executor"
 	"github.com/kagent-dev/kagent/go/harness/runtime/workspace"
@@ -92,7 +95,16 @@ func run(ctx context.Context, check bool, getenv func(string) string, environmen
 		}
 		defer controller.Close()
 	}
-	exec, closer, err := executor.New(ctx, executor.Config{ConfigJSON: configJSON, DataDir: dataDir, Environment: environment, Workspace: source, Conversation: workspace.ConversationOf(source)})
+	execCfg := executor.Config{ConfigJSON: configJSON, DataDir: dataDir, Environment: environment, Workspace: source, Conversation: workspace.ConversationOf(source)}
+	if !check {
+		// The reporter sends nothing until the SDK runner's first busy/idle
+		// change, so the golden snapshot and boot never report activity.
+		reporter := activity.NewReporter(taskstore.New(controller, apia2a.RuntimeIdentityPath), logging.FromContext(ctx))
+		go reporter.Run(ctx)
+		execCfg.ClientAddr = executor.ClientAddr
+		execCfg.Activity = reporter
+	}
+	exec, closer, err := executor.New(ctx, execCfg)
 	if err != nil {
 		return err
 	}

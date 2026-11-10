@@ -48,3 +48,6 @@ hack/
 
 # Makefiles
 Makefile
+
+# Node bridge dependencies are installed in the image build.
+**/node_modules/
