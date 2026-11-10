@@ -89,6 +89,7 @@ func (s *testStore) FinalizeSessionCheckpoint(_ context.Context, _ string, tagUI
 	}
 	if failure != "" {
 		s.prepared.State, s.failed = apiv1.CheckpointState_CHECKPOINT_STATE_FAILED, failure
+		s.prepared.Failure = &apiv1.Failure{Reason: "SnapshotTagFailed", Message: failure}
 	} else {
 		s.prepared.State, s.tagUID = apiv1.CheckpointState_CHECKPOINT_STATE_READY, tagUID
 		s.snapshot.URI = snapshotURI
@@ -178,6 +179,7 @@ type testTags struct {
 	createErr              error
 	deleteErr              error
 	actorErr               error
+	actorState             ateapipb.ActorState
 	mutateTag              func(*ateapipb.Tag)
 	beforeDelete           func()
 }
@@ -194,9 +196,13 @@ func (t *testTags) GetActor(_ context.Context, atespace, name string) (*ateapipb
 	if t.created != nil && t.actorUIDAfterCreate != "" {
 		actorUID = t.actorUIDAfterCreate
 	}
+	state := ateapipb.ActorState_ACTOR_STATE_SUSPENDED
+	if t.actorState != ateapipb.ActorState_ACTOR_STATE_UNSPECIFIED {
+		state = t.actorState
+	}
 	return &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: atespace, Name: name, Uid: actorUID},
-		Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+		Status: &ateapipb.ActorStatus{State: state,
 			Snapshots: []*ateapipb.Snapshot{{Generation: 1, Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ActorTemplateUid: "template-uid", DurableSnapshot: &ateapipb.SnapshotStorage{State: ateapipb.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED, Object: &ateapipb.ObjectSnapshot{SnapshotUri: uri}}}}},
 	}, nil
 }
@@ -337,6 +343,50 @@ func TestCreateCleansTagBeforeFailing(t *testing.T) {
 			require.NotEmpty(t, store.failed)
 		})
 	}
+}
+
+func TestCreateOnUnsuspendedActor(t *testing.T) {
+	t.Run("Given a running checkpoint Actor, when a checkpoint is requested, assert that it fails as a definite precondition without a tag", func(t *testing.T) {
+		store := &testStore{}
+		tags := &testTags{snapshotURI: "s3://snapshots/snapshot-1", actorState: ateapipb.ActorState_ACTOR_STATE_RUNNING}
+		service := NewService(store, testAuthorizer{}, tags, nil)
+		ctx := auth.AuthSessionTo(t.Context(), testSession{userID: "alice"})
+
+		_, err := service.Create(ctx, "018f47a2-4efb-7c21-a848-123456789abc", "request-1", "task-1")
+
+		requireCheckpointFailure(t, err, "KAGENT_CHECKPOINT_RUNTIME_NOT_SUSPENDED")
+		require.Equal(t, apiv1.CheckpointState_CHECKPOINT_STATE_FAILED, store.prepared.State)
+		require.Zero(t, tags.createCalls)
+	})
+
+	t.Run("Given a request that failed on a running Actor, when the same request is retried after the Actor suspends, assert that it replays the failure instead of acknowledging a missing checkpoint", func(t *testing.T) {
+		store := &testStore{}
+		tags := &testTags{snapshotURI: "s3://snapshots/snapshot-1", actorState: ateapipb.ActorState_ACTOR_STATE_RUNNING}
+		service := NewService(store, testAuthorizer{}, tags, nil)
+		ctx := auth.AuthSessionTo(t.Context(), testSession{userID: "alice"})
+		_, err := service.Create(ctx, "018f47a2-4efb-7c21-a848-123456789abc", "request-1", "task-1")
+		require.Error(t, err)
+		tags.actorState = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
+
+		checkpoint, err := service.Create(ctx, "018f47a2-4efb-7c21-a848-123456789abc", "request-1", "task-1")
+
+		require.Nil(t, checkpoint)
+		requireCheckpointFailure(t, err, "KAGENT_CHECKPOINT_FAILED")
+		require.ErrorContains(t, err, "ACTOR_STATE_RUNNING")
+		require.Zero(t, tags.createCalls)
+	})
+}
+
+func requireCheckpointFailure(t *testing.T, err error, reason string) {
+	t.Helper()
+	failure, ok := status.FromError(err)
+	require.True(t, ok, "error %v has no gRPC status", err)
+	require.Equal(t, codes.FailedPrecondition, failure.Code())
+	require.Len(t, failure.Details(), 1)
+	info, ok := failure.Details()[0].(*errdetails.ErrorInfo)
+	require.True(t, ok)
+	require.Equal(t, "kagent.dev", info.GetDomain())
+	require.Equal(t, reason, info.GetReason())
 }
 
 func TestDeleteHidesCheckpointBeforeDeletingTag(t *testing.T) {
