@@ -103,6 +103,10 @@ func canonicalOrigin(endpoint string) (*url.URL, error) {
 // Compilation accepts resolved objects directly, so enforce credential
 // exclusivity here as well as at Kubernetes admission.
 func CompileCredentials(input *HarnessInput, extraModels []*ResolvedModelConfig, environment []corev1.EnvVar) ([]corev1.EnvVar, []egress.Credential, []egresspolicy.GatewayTarget, error) {
+	gitPolicy, _, err := CompileGit(input.Harness.Spec.Git)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	var bindings []egress.Credential
 	boundModels := map[string]bool{}
 	boundMCP := map[string]bool{}
@@ -238,6 +242,11 @@ func CompileCredentials(input *HarnessInput, extraModels []*ResolvedModelConfig,
 	access, err := egress.CanonicalAccess(destinations, bindings, targets)
 	if err != nil {
 		return nil, nil, nil, NewValidationError("%v", err)
+	}
+	if input.Harness.Spec.Claude != nil || input.Harness.Spec.Codex != nil || (gitPolicy != nil && gitPolicy.ReadProxyOrigin != nil) {
+		if err := ValidateGitEgress(gitPolicy, nil, access.Credentials); err != nil {
+			return nil, nil, nil, err
+		}
 	}
 
 	result := append([]corev1.EnvVar(nil), environment...)

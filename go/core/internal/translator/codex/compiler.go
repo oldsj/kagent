@@ -102,7 +102,10 @@ func (c *Compiler) Compile(ctx context.Context, input *translator.HarnessInput) 
 	}
 	cfg := codexconfig.Production(model.Spec.Model, input.Root.Instruction)
 	cfg.Provider, cfg.Agents, cfg.MCPServers = provider, agents, mcp.servers
-	gitPolicy, gitEgress := translator.CompileGit(harness.Spec.Git)
+	gitPolicy, gitEgress, err := translator.CompileGit(harness.Spec.Git)
+	if err != nil {
+		return nil, err
+	}
 	cfg.Git = gitPolicy
 	cfg.RuntimeTelemetry = runtimeTelemetry
 	cfg.ControlPlaneURL = c.settings.GetControlPlaneUrl()
@@ -146,6 +149,9 @@ func (c *Compiler) Compile(ctx context.Context, input *translator.HarnessInput) 
 	egress = append(egress, c.settings.GetControlPlaneUrl())
 	slices.Sort(egress)
 	egress = slices.Compact(egress)
+	if err := translator.ValidateGitEgress(gitPolicy, egress, credentials); err != nil {
+		return nil, err
+	}
 	return &translator.CompileResult{
 		Revision: translator.Revision{
 			ControlPlaneURL: c.settings.GetControlPlaneUrl(),

@@ -405,7 +405,7 @@ bindings, each containing `origin`, `header`, and `secret_ref { name, key }`.
 The Secret belongs to the Agent's namespace and contains the complete header
 value, including `Bearer ` for bearer authorization. Session bindings use no
 additional prefix. The controller never reads the Secret value, and the runtime
-receives only a placeholder header configured on its RemoteMCPServer.
+receives only placeholder headers configured for its MCP server or Git transport.
 
 The HTTP(S) origin must already be in the Session's pinned revision egress list.
 Paths, user information, queries, and fragments are rejected. A binding applies
@@ -427,3 +427,34 @@ caller may reference any valid Secret key in the Agent namespace; same-namespace
 validation does not establish that the key belongs to that caller. Isolate these
 callers and authorize credential selection in the owning control plane before
 forwarding requests to kagent.
+
+### Trusted Git transports
+
+Native Claude and Codex Harnesses can select a trusted Git proxy profile:
+
+```yaml
+git:
+  origins: [github.com]
+  readProxyOrigin: http://mainloop-git-read.mainloop.svc.cluster.local
+  pushProxyOrigin: http://mainloop-git-push.mainloop.svc.cluster.local
+```
+
+These are the only accepted proxy origins. Push requires read, and this profile
+excludes `credentialSecretRef`. The canonical repository identity remains HTTPS
+GitHub; the Actor receives only the read and optional push HTTP destinations at
+port 80. Git read and push capabilities are per-Session credential references
+containing the complete Authorization value. Neither value enters runtime
+configuration, Git config, markers, environments or revision provenance.
+
+Both native compilers check the complete origin and credential union, including
+provider, shared MCP, skill and telemetry inputs. Proxy and no-Git revisions
+reject direct GitHub host families, legacy `mainloop-git-auth` references and
+revision credentials on either Git proxy host. A no-Git coordinator acquires
+neither Git listener. Both proxy fields absent retain the standalone direct Git
+configuration. Production activation must select the proxy profile on every
+Git-enabled Harness and retire direct revisions deliberately.
+
+This check covers what a revision compiles to. It does not cover origins a
+later `EgressPolicy` grant adds, and it does not restrict which Secrets a caller
+may bind as Session credentials for the proxy origins; that caller policy is a
+separate control.
