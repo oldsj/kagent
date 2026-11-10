@@ -43,6 +43,10 @@ func SandboxActorTemplate(template *v1alpha3.SandboxTemplate, class atev1.Sandbo
 	if err != nil {
 		return nil, "", nil, err
 	}
+	fidelity, err := QuiesceFidelity(template.Spec.Substrate.SnapshotPolicy.OnQuiesce)
+	if err != nil {
+		return nil, "", nil, err
+	}
 	switch class {
 	case "", atev1.SandboxClassGvisor, atev1.SandboxClassMicroVM:
 	default:
@@ -89,7 +93,7 @@ func SandboxActorTemplate(template *v1alpha3.SandboxTemplate, class atev1.Sandbo
 		},
 		SnapshotConfig: &ateapipb.SnapshotConfig{
 			StorageLocation:   template.Spec.Substrate.SnapshotPolicy.Location,
-			PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+			PreferredFidelity: fidelity,
 			// Pin the server default so immutable comparison survives creation.
 			GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
 		},

@@ -141,6 +141,7 @@ func (c *Compiler) Compile(ctx context.Context, input *translator.HarnessInput) 
 			ConfigJSON:      configJSON, AgentCard: card,
 			WorkerPoolName:          harness.Spec.Substrate.WorkerPoolRef.Name,
 			SnapshotLocation:        harness.Spec.Substrate.SnapshotPolicy.Location,
+			OnQuiesce:               harness.Spec.Substrate.SnapshotPolicy.OnQuiesce,
 			TokenPassthroughTargets: tokenPassthroughTargets, Credentials: credentials, Provenance: provenance, EgressDestinations: egress,
 			GitOrigins:          translator.GitOrigins(gitPolicy),
 			GitEgressRestricted: translator.GitEgressRestricted(gitPolicy),

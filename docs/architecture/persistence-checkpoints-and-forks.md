@@ -55,7 +55,7 @@ A checkpoint names a durable terminal boundary with a matching native snapshot.
 TaskStore publishes task completion after native cleanup; the independent
 Session lifecycle worker records its snapshot later. Creating a checkpoint
 returns FailedPrecondition until that snapshot is ready.
-Input-required and auth-required tasks are durably suspended with VOLUMES snapshots
+Input-required and auth-required tasks are durably suspended
 but are not checkpointable or forkable; callers must resolve the interaction first.
 Creating a checkpoint does not suspend the Actor again:
 
@@ -107,7 +107,8 @@ keeps the checkpoint record and its references for retry.
 
 ## Forking
 
-Templates use VOLUMES snapshots for suspension. `ForkSession`
+Templates use VOLUMES snapshots for suspension unless their Harness sets
+`snapshotPolicy.onQuiesce: Full`, which prefers MEMORY. `ForkSession`
 accepts only VOLUMES checkpoints, which cold-boot with fresh session identities;
 MEMORY and ROOTFS checkpoints return `FAILED_PRECONDITION`.
 The rest of this section describes forks of VOLUMES checkpoints.
