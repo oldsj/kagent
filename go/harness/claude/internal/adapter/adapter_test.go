@@ -208,7 +208,12 @@ func TestNewMaterializesApprovalSettings(t *testing.T) {
 	}
 	args := strings.Join(runner.Args(runtime.Turn{Prompt: "test"}), "\n")
 	for _, required := range []string{
-		"--setting-sources\n\n",
+		// Only the adapter-owned user scope loads; the checkout supplies
+		// context and skills, never settings.
+		"--setting-sources\nuser\n",
+		"--add-dir\n" + runnerWorkspace(t, runner),
+		"--plugin-dir\n" + filepath.Join(ephemeralDir, "workspace-skills"),
+		"--disallowedTools\nScheduleWakeup,Monitor,CronCreate,CronList,CronDelete,RemoteTrigger",
 		"--settings\n" + filepath.Join(ephemeralDir, "settings.json"),
 		"--dangerously-skip-permissions",
 		"--permission-prompt-tool\nmcp__" + approvalMCPServerName + "__approve",
@@ -352,5 +357,86 @@ func TestLargeSystemPromptIsDeliveredThroughFile(t *testing.T) {
 	}
 	if slices.Contains(args, prompt) || slices.Contains(args, "--append-system-prompt") {
 		t.Fatal("system prompt is still passed inline")
+	}
+}
+
+// runnerWorkspace reads the workspace back from the driver's own arguments, so
+// the assertion holds whatever directory the test configured.
+func runnerWorkspace(t *testing.T, runner interface{ Args(runtime.Turn) []string }) string {
+	t.Helper()
+	args := runner.Args(runtime.Turn{Prompt: "test"})
+	for i, arg := range args {
+		if arg == "--add-dir" && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	t.Fatalf("arguments have no --add-dir: %v", args)
+	return ""
+}
+
+func TestWorkspaceSkillsPluginLinksCheckoutSkills(t *testing.T) {
+	ephemeral, workspace := t.TempDir(), t.TempDir()
+	for range 2 { // A restart replaces the link rather than failing on it.
+		root, err := materializeWorkspaceSkills(ephemeral, workspace)
+		if err != nil {
+			t.Fatal(err)
+		}
+		manifest, err := os.ReadFile(filepath.Join(root, ".claude-plugin", "plugin.json"))
+		if err != nil || string(manifest) != `{"name":"workspace"}` {
+			t.Fatalf("plugin manifest = %q, %v; want a name and no hooks or MCP servers", manifest, err)
+		}
+		target, err := os.Readlink(filepath.Join(root, "skills"))
+		if err != nil || target != filepath.Join(workspace, ".claude", "skills") {
+			t.Fatalf("skills link = %q, %v", target, err)
+		}
+	}
+}
+
+// The headless policy reaches the native process whatever the Actor's own
+// environment says: background and scheduled work stay off unless the
+// configuration opts in, and the provider and workspace-memory switches are
+// always the adapter's.
+func TestHeadlessPolicyReachesClaudeProcess(t *testing.T) {
+	for _, allow := range []bool{false, true} {
+		t.Run(map[bool]string{false: "safe defaults", true: "explicit opt in"}[allow], func(t *testing.T) {
+			dir := t.TempDir()
+			want := map[bool]string{false: "1 1 1 1", true: "0 0 1 1"}[allow]
+			executable := filepath.Join(dir, "claude")
+			script := fmt.Sprintf("#!/bin/sh\n[ \"$%s $%s $%s $%s\" = \"%s\" ] || exit 42\necho %s\n",
+				config.DisableBackgroundTasksEnvName, config.DisableCronEnvName, config.ProviderManagedByHostEnvName, config.AdditionalDirectoriesMemoryEnvName,
+				want, config.PinnedClaudeVersion)
+			if err := os.WriteFile(executable, []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			cfg := config.Production("", "")
+			cfg.ClaudeExecutable = executable
+			cfg.AllowBackgroundTasks, cfg.AllowScheduledTasks = allow, allow
+			if allow {
+				cfg.DisallowedTools = []string{"RemoteTrigger"}
+			}
+			raw, err := json.Marshal(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			runner, err := New(t.Context(), Input{
+				ConfigJSON: raw, Workspace: filepath.Join(dir, "workspace"), DurableDir: filepath.Join(dir, "data"), EphemeralDir: filepath.Join(dir, "generated"),
+				Environment: []string{
+					config.DisableBackgroundTasksEnvName + "=wrong", config.DisableCronEnvName + "=wrong",
+					config.ProviderManagedByHostEnvName + "=0", config.AdditionalDirectoriesMemoryEnvName + "=0",
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = runner.Close() })
+			if err := runner.Validate(t.Context()); err != nil {
+				t.Fatalf("native process did not receive the headless policy: %v", err)
+			}
+			args := strings.Join(runner.Args(runtime.Turn{Prompt: "hello"}), "\n") + "\n"
+			wantTools := map[bool]string{false: "ScheduleWakeup,Monitor,CronCreate,CronList,CronDelete,RemoteTrigger", true: "RemoteTrigger"}[allow]
+			if !strings.Contains(args, "--disallowedTools\n"+wantTools+"\n") {
+				t.Fatalf("arguments = %s, want disallowed tools %s", args, wantTools)
+			}
+		})
 	}
 }

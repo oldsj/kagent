@@ -38,11 +38,17 @@ type ProcessConfig struct {
 	SettingsPath           string
 	PermissionPromptTool   string
 	PluginDirs             []string
+	DisallowedTools        []string
 	Environment            []string
 	MaxEventBytes          int
 	MaxStderrBytes         int
 	InterruptGrace         time.Duration
-	ApprovalBroker         *ApprovalBroker
+	// PostResultGrace bounds further native activity after the first result.
+	PostResultGrace time.Duration
+	// TurnTimeout bounds one native process. Time spent waiting for a deferred
+	// input is outside any process and is not counted.
+	TurnTimeout    time.Duration
+	ApprovalBroker *ApprovalBroker
 	// AwaitTelemetry holds each prompt until Claude Code telemetry has
 	// initialized.
 	AwaitTelemetry bool
@@ -60,17 +66,30 @@ type parseItem struct {
 }
 
 type processSession struct {
-	command   *exec.Cmd
-	items     <-chan parseItem
-	stopEmit  chan struct{}
-	wait      <-chan error
-	stderr    *utils.BoundedBuffer
-	terminal  *runtime.Outcome
-	sessionID string
-	deferred  *DeferredTool
-	stopOnce  sync.Once
-	canceled  bool
-	seed      *DeferredTool
+	command  *exec.Cmd
+	items    <-chan parseItem
+	stopEmit chan struct{}
+	wait     <-chan error
+	stderr   *utils.BoundedBuffer
+	// terminal is the latest iteration result. A follow-up iteration, such as
+	// one started by a background task's completion, supersedes it.
+	terminal    *runtime.Outcome
+	sessionID   string
+	deferred    *DeferredTool
+	stopOnce    sync.Once
+	stopErr     error
+	canceled    bool
+	seed        *DeferredTool
+	streamEnded bool
+	owner       *processTree
+	stdout      io.ReadCloser
+	// executionBudget bounds the process; postResultBudget starts at the first
+	// result and bounds what follows it.
+	executionBudget  *activeBudget
+	postResultBudget *activeBudget
+	// backgroundTasks counts background tasks Claude has not yet reported to
+	// the conversation.
+	backgroundTasks int
 }
 
 // processStartError proves that no native process ran for this attempt.
@@ -81,9 +100,17 @@ func (e *processStartError) Unwrap() error { return e.err }
 
 const cancellationCleanupTimeout = 30 * time.Second
 
+var errExecutionBudgetExceeded = errors.New("Claude execution budget exceeded")
+
 // NewProcessDriver constructs a Claude Code process driver.
-func NewProcessDriver(config ProcessConfig) *ProcessDriver {
-	return &ProcessDriver{config: config}
+func NewProcessDriver(cfg ProcessConfig) *ProcessDriver {
+	if cfg.PostResultGrace <= 0 {
+		cfg.PostResultGrace = config.DefaultPostResultGrace
+	}
+	if cfg.TurnTimeout <= 0 {
+		cfg.TurnTimeout = config.DefaultTurnTimeout
+	}
+	return &ProcessDriver{config: cfg}
 }
 
 // Validate checks that the configured executable is the pinned Claude version.
@@ -119,10 +146,21 @@ func (d *ProcessDriver) Args(turn runtime.Turn) []string {
 	}
 	if d.config.ApprovalBroker != nil {
 		args = append(args,
-			"--setting-sources", "",
+			"--setting-sources", settingSources,
 			"--settings", d.config.SettingsPath,
 			"--permission-prompt-tool", d.config.PermissionPromptTool,
 		)
+	}
+	if d.config.Workspace != "" {
+		// With the adapter's CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD, this
+		// loads the checkout's CLAUDE.md and .claude/rules. Claude also reads
+		// the checkout's enabledPlugins and extraKnownMarketplaces, which can
+		// enable plugins already installed in the harness-owned user scope.
+		// The adapter supplies the checkout's skills as a plugin.
+		args = append(args, "--add-dir", d.config.Workspace)
+	}
+	if len(d.config.DisallowedTools) != 0 {
+		args = append(args, "--disallowedTools", strings.Join(d.config.DisallowedTools, ","))
 	}
 	if d.config.Model != "" {
 		args = append(args, "--model", d.config.Model)
@@ -187,12 +225,15 @@ func (d *ProcessDriver) run(ctx context.Context, turn runtime.Turn, sink runtime
 	utils.ConfigureProcessGroup(cmd)
 	cmd.Dir = d.config.Workspace
 	cmd.Env = environment
+	// A descendant that keeps stderr open must not hold Wait after the leader exits.
+	cmd.WaitDelay = d.config.InterruptGrace
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return runtime.Outcome{}, fmt.Errorf("open Claude stdin: %w", err)
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		_ = stdin.Close()
 		return runtime.Outcome{}, fmt.Errorf("open Claude stdout: %w", err)
 	}
 	stderr := utils.NewBoundedBuffer(d.config.MaxStderrBytes)
@@ -202,16 +243,29 @@ func (d *ProcessDriver) run(ctx context.Context, turn runtime.Turn, sink runtime
 	if err != nil {
 		logging.FromContext(ctx).WarnContext(ctx, "failed to read the Claude session usage, so this turn adds no tokens that only its totals show", "error", err)
 	}
-	if err := cmd.Start(); err != nil {
-		return runtime.Outcome{}, fmt.Errorf("start Claude: %w", err)
+	owner, err := newProcessTree()
+	if err != nil {
+		_ = stdin.Close()
+		_ = stdout.Close()
+		return runtime.Outcome{}, err
+	}
+	if err := owner.start(cmd); err != nil {
+		owner.release()
+		_ = stdin.Close()
+		_ = stdout.Close()
+		return runtime.Outcome{}, err
 	}
 	started = true
+	var health *healthProducer
+	if _, observed := sink.(runtime.HealthSink); observed {
+		health = newHealthProducer(d.config.Workspace, d.config.ExpectedVersion, seed)
+	}
 	items := make(chan parseItem)
 	stopEmit := make(chan struct{})
 	parseDone := make(chan struct{})
 	go func() {
 		defer close(items)
-		parseErr := parseJSONL(ctx, stdout, d.config.MaxEventBytes, startUsage, seed, func(event Event) error {
+		parseErr := parseObservedJSONL(ctx, stdout, d.config.MaxEventBytes, startUsage, seed, health, func(event Event) error {
 			select {
 			case items <- parseItem{event: &event}:
 				return nil
@@ -235,10 +289,15 @@ func (d *ProcessDriver) run(ctx context.Context, turn runtime.Turn, sink runtime
 	}()
 	session := &processSession{
 		command: cmd, items: items, stopEmit: stopEmit, wait: waitDone, stderr: stderr, seed: seed,
+		owner: owner, stdout: stdout, executionBudget: newActiveBudget(d.config.TurnTimeout),
 	}
 	go sendPrompt(ctx, stdin, message, gate, parseDone)
-	defer d.stopSession(session, sink)
 	outcome, err = d.consume(ctx, session, sink)
+	// Reap the whole native tree before the outcome is published or parked.
+	// A tree that cannot be reaped keeps its ownership slot and fails this turn.
+	if cleanupErr := d.stopSession(session, sink); cleanupErr != nil {
+		return runtime.Outcome{}, errors.Join(err, cleanupErr)
+	}
 	if err == nil && session.deferred != nil {
 		return d.parkDeferred(turn, session.sessionID, session.deferred)
 	}
@@ -352,14 +411,40 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 			returnErr = &runtime.CancellationError{Err: returnErr}
 		}
 	}()
+	// Health is observation only: it never fails, delays or blocks cancellation
+	// of the turn it describes.
+	observer, _ := sink.(runtime.HealthSink)
+	health := startHealthPublisher(observer)
+	defer func() { health.close(ctx) }()
 	for {
+		if session.executionBudget.expired() {
+			return runtime.Outcome{}, runtime.NewTerminalFailure("Claude execution budget exceeded (approval wait time excluded)", errExecutionBudgetExceeded)
+		}
+		if session.postResultBudget.expired() {
+			logging.FromContext(ctx).WarnContext(ctx, "claude post-result grace expired; stopping remaining native work", "grace", d.config.PostResultGrace)
+			return *session.terminal, nil
+		}
+		items := session.items
+		var exited <-chan error
+		if session.streamEnded {
+			// Keep the budgets and cancellation effective while the process exits.
+			items, exited = nil, session.wait
+		}
 		select {
-		case item, ok := <-session.items:
+		case item, ok := <-items:
 			if !ok {
 				return runtime.Outcome{}, fmt.Errorf("claude parser stopped without a result")
 			}
 			if item.event != nil {
-				if item.event.Kind == EventDeferred {
+				switch item.event.Kind {
+				case EventHealth:
+					health.publish(item.event.Health)
+					continue
+				case EventBackgroundTasks:
+					session.backgroundTasks = item.event.BackgroundTasks
+					session.holdPostResultGrace()
+					continue
+				case EventDeferred:
 					if session.terminal != nil || session.deferred != nil {
 						return runtime.Outcome{}, fmt.Errorf("duplicate Claude deferred result")
 					}
@@ -371,33 +456,51 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 					session.terminal = &runtime.Outcome{}
 					continue
 				}
-				outcome, err := emitEvent(*item.event, sink, session.terminal != nil)
-				if err == nil {
-					if item.event.Kind == EventSessionStarted {
-						if session.sessionID != "" && session.sessionID != item.event.SessionID {
-							return runtime.Outcome{}, fmt.Errorf("Claude changed session ID during an active process")
-						}
-						session.sessionID = item.event.SessionID
-					}
-					if outcome != nil {
-						session.terminal = outcome
-					}
-					continue
+				// A deferred result ends the process. An ordinary result ends one
+				// iteration: background completion can start another.
+				outcome, err := emitEvent(*item.event, sink, session.deferred != nil)
+				if err != nil {
+					return runtime.Outcome{}, err
 				}
-				return runtime.Outcome{}, err
+				if item.event.Kind == EventSessionStarted {
+					if session.sessionID != "" && session.sessionID != item.event.SessionID {
+						return runtime.Outcome{}, fmt.Errorf("Claude changed session ID during an active process")
+					}
+					session.sessionID = item.event.SessionID
+				}
+				if outcome != nil {
+					// The first result starts a finite allowance for any further
+					// iterations. Later results do not reset that allowance.
+					if session.postResultBudget == nil {
+						session.postResultBudget = newActiveBudget(d.config.PostResultGrace)
+						session.holdPostResultGrace()
+					}
+					session.terminal = outcome
+				}
+				continue
 			}
 			if item.err != nil {
 				// A process that exits before its result can explain the failure
 				// only on stderr. Reap it to finish draining stderr; malformed
 				// output can also stop the parser while the process is still alive.
-				d.stopSession(session, sink)
-				if stderr := strings.TrimSpace(session.stderr.String()); stderr != "" {
+				if err := d.stopSession(session, sink); err != nil {
+					return runtime.Outcome{}, errors.Join(item.err, err)
+				}
+				if stderr := session.stderr.Diagnostic(); stderr != "" {
 					return runtime.Outcome{}, fmt.Errorf("%w: %s", item.err, stderr)
 				}
 				return runtime.Outcome{}, item.err
 			}
-			if waitErr := <-session.wait; waitErr != nil {
-				return runtime.Outcome{}, fmt.Errorf("claude exited with an error: %w: %s", waitErr, session.stderr.String())
+			session.streamEnded = true
+		case waitErr := <-exited:
+			// ErrWaitDelay means Claude exited successfully while a descendant
+			// still held stderr. Stopping the session kills and reaps that tree.
+			if waitErr != nil && !errors.Is(waitErr, exec.ErrWaitDelay) {
+				stderr := session.stderr.Diagnostic()
+				if stderr != "" {
+					logging.FromContext(ctx).WarnContext(ctx, "claude exited with an error", "error", waitErr, "stderr", stderr)
+				}
+				return runtime.Outcome{}, exitError(waitErr, session.terminal, stderr)
 			}
 			if session.terminal == nil {
 				return runtime.Outcome{}, fmt.Errorf("claude process exited without a terminal result")
@@ -405,7 +508,19 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 			if cleaning && (session.deferred != nil || session.terminal.Failure != nil) {
 				return runtime.Outcome{}, fmt.Errorf("Claude did not settle its canceled replay")
 			}
+			if session.backgroundTasks > 0 && session.terminal.Failure == nil && session.deferred == nil && !cleaning {
+				// Fail closed: a result only stands for the work the model saw.
+				// Claude kills background work at print-mode wind-down and its wait
+				// ceiling, and may flush a held result after the kill.
+				logging.FromContext(ctx).WarnContext(ctx, "claude exited with unreported background tasks", "tasks", session.backgroundTasks)
+				return runtime.Outcome{Failure: &runtime.Failure{Message: backgroundTasksUnreportedMessage(session.backgroundTasks)}}, nil
+			}
 			return *session.terminal, nil
+		case <-session.executionBudget.done():
+			return runtime.Outcome{}, runtime.NewTerminalFailure("Claude execution budget exceeded (approval wait time excluded)", errExecutionBudgetExceeded)
+		case <-session.postResultBudget.done():
+			// Recheck the remaining budget at the top of the loop.
+			continue
 		case <-ctx.Done():
 			session.canceled = true
 			if session.seed == nil || cleaning {
@@ -425,6 +540,38 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 	}
 }
 
+// holdPostResultGrace pauses the post-result grace while a background task is
+// unreported. Claude feeds a task's outcome back as another iteration of this
+// turn, so only the execution budget bounds the task and its follow-up
+// iteration. The grace therefore expires only when every task has been
+// reported, and never decides a turn's success.
+func (s *processSession) holdPostResultGrace() {
+	if s.backgroundTasks > 0 {
+		s.postResultBudget.pause()
+	} else {
+		s.postResultBudget.resume()
+	}
+}
+
+func backgroundTasksUnreportedMessage(tasks int) string {
+	if tasks == 1 {
+		return "Claude ended the turn before reporting the outcome of 1 background task"
+	}
+	return fmt.Sprintf("Claude ended the turn before reporting the outcome of %d background tasks", tasks)
+}
+
+// exitError preserves a terminal failure for the shared executor while keeping
+// stderr in diagnostics only. Unexpected exits retain the generic status.
+func exitError(waitErr error, terminal *runtime.Outcome, stderr string) error {
+	if terminal != nil && terminal.Failure != nil {
+		return runtime.NewTerminalFailure(terminal.Failure.Message, waitErr)
+	}
+	if stderr == "" {
+		return fmt.Errorf("claude exited with an error: %w", waitErr)
+	}
+	return fmt.Errorf("claude exited with an error: %w: %s", waitErr, stderr)
+}
+
 // Close releases the ephemeral permission and hook listener.
 func (d *ProcessDriver) Close() error {
 	if d.config.ApprovalBroker != nil {
@@ -435,9 +582,9 @@ func (d *ProcessDriver) Close() error {
 
 // emitEvent translates a Claude event to a runtime event and emits it to the
 // provided event sink, which is then consumed by the shared A2A executor.
-func emitEvent(event Event, sink runtime.EventSink, terminal bool) (*runtime.Outcome, error) {
-	if terminal {
-		return nil, fmt.Errorf("claude emitted %s after its terminal result", event.Kind)
+func emitEvent(event Event, sink runtime.EventSink, deferred bool) (*runtime.Outcome, error) {
+	if deferred {
+		return nil, fmt.Errorf("claude emitted %s after its deferred result", event.Kind)
 	}
 	switch event.Kind {
 	case EventSessionStarted:
@@ -463,40 +610,67 @@ func emitEvent(event Event, sink runtime.EventSink, terminal bool) (*runtime.Out
 	case EventCompleted:
 		return &runtime.Outcome{}, nil
 	case EventFailed:
-		return &runtime.Outcome{Failure: &runtime.Failure{Message: event.SafeMessage}}, nil
+		return &runtime.Outcome{Failure: &runtime.Failure{Message: runtime.NewTerminalFailure(event.SafeMessage, nil).PublicMessage()}}, nil
 	default:
 		return nil, fmt.Errorf("unsupported Claude event kind %q", event.Kind)
 	}
 }
 
-func (d *ProcessDriver) stopSession(session *processSession, sink runtime.ModelCallSink) {
+// stopSession ends the native tree and reaps it, then drains the parser. It
+// returns an error when the tree could not be proven gone; the ownership slot
+// is then retained so no later turn starts over surviving processes.
+func (d *ProcessDriver) stopSession(session *processSession, sink runtime.ModelCallSink) error {
 	session.stopOnce.Do(func() {
+		session.executionBudget.pause()
+		session.postResultBudget.pause()
 		drained := make(chan struct{})
 		go func() {
 			defer close(drained)
 			for item := range session.items {
-				if item.event != nil && item.event.ModelCall != nil {
+				if item.event != nil && item.event.ModelCall != nil && sink != nil {
 					call := *item.event.ModelCall
 					call.Canceled = session.canceled && call.UsagePartial
 					sink.ModelCall(call)
 				}
 			}
 		}()
-		_ = utils.InterruptProcessGroup(session.command.Process)
+		interruptErr := session.owner.interrupt()
 		timer := time.NewTimer(d.config.InterruptGrace)
 		defer timer.Stop()
 		select {
 		case <-session.wait:
-			// The group leader can exit on the interrupt while a descendant that
-			// ignores it remains alive. Kill any processes still in the group.
-			_ = utils.KillProcessGroup(session.command.Process)
 		case <-timer.C:
-			_ = utils.KillProcessGroup(session.command.Process)
-			<-session.wait
 		}
+		// The leader can exit on the interrupt while a descendant that ignores
+		// it remains alive. Kill everything still in the tree.
+		killErr := session.owner.kill()
+		timer.Reset(d.config.InterruptGrace)
+		select {
+		case <-session.wait:
+		case <-timer.C:
+			// A survivor outside the census can hold stdout open. Unblock the
+			// parser so Wait can run; WaitDelay bounds the stderr drain.
+			_ = session.stdout.Close()
+			timer.Reset(d.config.InterruptGrace)
+			select {
+			case <-session.wait:
+			case <-timer.C:
+				close(session.stopEmit)
+				session.stopErr = errors.Join(interruptErr, killErr, fmt.Errorf("Claude leader cleanup did not finish"))
+				return
+			}
+		}
+		// exec.Cmd has reaped the leader, so remaining children are adopted orphans.
+		cleanupErr := session.owner.killAndReap()
+		closeErr := session.owner.closeLeader()
 		<-drained
 		close(session.stopEmit)
+		session.stopErr = errors.Join(interruptErr, killErr, cleanupErr, closeErr)
+		if session.stopErr == nil {
+			session.owner.release()
+		}
 	})
+	return session.stopErr
 }
 
 // splitMCPName splits Claude's mcp__<server>__<tool> name at the first "__". Agent server

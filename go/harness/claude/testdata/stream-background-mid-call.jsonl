@@ -1,0 +1,16 @@
+{"type":"system","subtype":"init","session_id":"44444444-4444-4444-8444-444444444444"}
+{"type":"system","subtype":"status","status":"requesting","session_id":"44444444-4444-4444-8444-444444444444"}
+{"type":"assistant","message":{"id":"msg-1","role":"assistant","content":[{"type":"tool_use","id":"tool-1","name":"Bash","input":{"command":"sleep 1; echo bg-done","description":"short background check","run_in_background":true}}]},"session_id":"44444444-4444-4444-8444-444444444444"}
+{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"task-1","task_type":"local_bash","description":"short background check"}],"session_id":"44444444-4444-4444-8444-444444444444"}
+{"type":"system","subtype":"task_started","task_id":"task-1","tool_use_id":"tool-1","description":"short background check","task_type":"local_bash","is_backgrounded":true,"session_id":"44444444-4444-4444-8444-444444444444"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-1","content":"background task launched"}]},"session_id":"44444444-4444-4444-8444-444444444444"}
+{"type":"system","subtype":"status","status":"requesting","session_id":"44444444-4444-4444-8444-444444444444"}
+{"type":"system","subtype":"background_tasks_changed","tasks":[],"session_id":"44444444-4444-4444-8444-444444444444"}
+{"type":"system","subtype":"task_updated","task_id":"task-1","patch":{"status":"completed"},"session_id":"44444444-4444-4444-8444-444444444444"}
+{"type":"system","subtype":"task_notification","status":"completed","task_id":"task-1","tool_use_id":"tool-1","session_id":"44444444-4444-4444-8444-444444444444"}
+{"type":"assistant","message":{"id":"msg-2","role":"assistant","content":[{"type":"text","text":"waiting for checks"}]},"session_id":"44444444-4444-4444-8444-444444444444"}
+{"type":"result","subtype":"success","is_error":false,"result":"waiting for checks","session_id":"44444444-4444-4444-8444-444444444444"}
+{"type":"system","subtype":"init","session_id":"44444444-4444-4444-8444-444444444444"}
+{"type":"system","subtype":"status","status":"requesting","session_id":"44444444-4444-4444-8444-444444444444"}
+{"type":"assistant","message":{"id":"msg-3","role":"assistant","content":[{"type":"text","text":"follow-up after notification"}]},"session_id":"44444444-4444-4444-8444-444444444444"}
+{"type":"result","subtype":"success","is_error":false,"result":"follow-up after notification","origin":{"kind":"task-notification"},"session_id":"44444444-4444-4444-8444-444444444444"}

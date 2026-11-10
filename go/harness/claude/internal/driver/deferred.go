@@ -518,6 +518,14 @@ type deferredResultSink struct {
 	declined bool
 }
 
+// Health forwards to the wrapped sink when it observes health.
+func (s deferredResultSink) Health(event runtime.HealthEvent) error {
+	if observer, ok := s.EventSink.(runtime.HealthSink); ok {
+		return observer.Health(event)
+	}
+	return nil
+}
+
 func (s deferredResultSink) ToolResult(result runtime.ToolResult) error {
 	if result.ID == s.callID && s.declined {
 		result.Status = runtime.ToolDeclined

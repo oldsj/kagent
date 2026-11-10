@@ -683,3 +683,77 @@ func TestDependencyCancellationReportsTaskFailure(t *testing.T) {
 		})
 	}
 }
+
+func TestTerminalFailureAndDeadlineReachTaskStatus(t *testing.T) {
+	deadline, cancel := context.WithTimeout(t.Context(), time.Millisecond)
+	defer cancel()
+	for _, test := range []struct {
+		name    string
+		ctx     context.Context
+		run     func(context.Context) error
+		message string
+	}{
+		{name: "vetted terminal failure", ctx: t.Context(), run: func(context.Context) error {
+			return runtime.NewTerminalFailure("provider rejected request", errors.New("exit status 1: raw stderr"))
+		}, message: "provider rejected request"},
+		{name: "terminal failure withholds credentials", ctx: t.Context(), run: func(context.Context) error {
+			return runtime.NewTerminalFailure("Authorization: Bearer abc", nil)
+		}, message: "upstream error (details withheld: possible credential)"},
+		// No cancel request publishes for an execution that outlives its own
+		// deadline, so the executor reports it.
+		{name: "execution deadline", ctx: deadline, run: func(ctx context.Context) error {
+			<-ctx.Done()
+			return ctx.Err()
+		}, message: "Harness execution deadline exceeded"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			executor, err := New(fakeRunner{run: func(ctx context.Context, _ runtime.Turn, _ runtime.EventSink) (runtime.Outcome, error) {
+				return runtime.Outcome{}, test.run(ctx)
+			}}, &fakeContinuation{}, tracing.RuntimeTelemetry{})
+			require.NoError(t, err)
+			events, errs := collect(executor.Execute(test.ctx, requestContext("task-1", "hello")))
+			require.Empty(t, errs)
+			require.NotEmpty(t, events)
+			last := events[len(events)-1].(*a2atype.TaskStatusUpdateEvent)
+			require.Equal(t, a2atype.TaskStateFailed, last.Status.State)
+			require.Equal(t, test.message, last.Status.Message.Parts[0].Text())
+		})
+	}
+}
+
+func TestHealthArtifactsPrecedeTheStatusTheyDescribe(t *testing.T) {
+	health := func(sequence int64) runtime.HealthEvent {
+		return runtime.HealthEvent{SchemaVersion: runtime.HealthSchema, EventID: fmt.Sprintf("epoch:%d", sequence), Sequence: sequence, Kind: "turn"}
+	}
+	executor, err := New(fakeRunner{run: func(_ context.Context, _ runtime.Turn, sink runtime.EventSink) (runtime.Outcome, error) {
+		observer := sink.(runtime.HealthSink)
+		require.NoError(t, observer.Health(health(1)))
+		require.NoError(t, sink.TextDelta(runtime.TextDelta{Text: "hello"}))
+		require.NoError(t, observer.Health(health(2)))
+		require.Error(t, observer.Health(runtime.HealthEvent{Sequence: 3}), "an event without identity is refused")
+		return runtime.Outcome{}, nil
+	}}, &fakeContinuation{}, tracing.RuntimeTelemetry{})
+	require.NoError(t, err)
+	events, errs := collect(executor.Execute(t.Context(), requestContext("task-1", "hello")))
+	require.Empty(t, errs)
+	var order []string
+	for _, event := range events {
+		switch event := event.(type) {
+		case *a2atype.TaskArtifactUpdateEvent:
+			if event.Artifact.Name != runtime.HealthSchema {
+				order = append(order, "text")
+				continue
+			}
+			data := event.Artifact.Parts[0].Data().(map[string]any)
+			require.Equal(t, "task-1", data["a2a_task_id"])
+			require.NotEmpty(t, data["runtime_session_id"])
+			require.Equal(t, string(event.Artifact.ID), data["event_id"])
+			order = append(order, "health:"+string(event.Artifact.ID))
+		case *a2atype.TaskStatusUpdateEvent:
+			if event.Status.State.Terminal() {
+				order = append(order, string(event.Status.State))
+			}
+		}
+	}
+	require.Equal(t, []string{"health:epoch:1", "text", "health:epoch:2", string(a2atype.TaskStateCompleted)}, order)
+}

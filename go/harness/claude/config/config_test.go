@@ -14,6 +14,10 @@ func TestOwnsEnvironment(t *testing.T) {
 		AnthropicAPIKeyEnvName,
 		ClaudeConfigDirEnvName,
 		MaxRetriesEnvName,
+		ProviderManagedByHostEnvName,
+		DisableBackgroundTasksEnvName,
+		DisableCronEnvName,
+		AdditionalDirectoriesMemoryEnvName,
 		"CLAUDE_CODE_ENHANCED_TELEMETRY_BETA",
 		"OTEL_TRACES_EXPORTER",
 		"OTEL_LOG_RAW_API_BODIES",
@@ -175,5 +179,33 @@ func TestParseAcceptsConfigWithoutRuntimeTelemetry(t *testing.T) {
 	}
 	if config.RuntimeTelemetry.CaptureLimit() != 0 {
 		t.Fatal("capture is enabled without a telemetry section")
+	}
+}
+
+func TestExecutionBoundsDefaultAndOverride(t *testing.T) {
+	cfg := Production("claude-test", "help")
+	if cfg.PostResultGrace() != DefaultPostResultGrace || cfg.TurnTimeout() != DefaultTurnTimeout {
+		t.Fatalf("defaults = %v, %v", cfg.PostResultGrace(), cfg.TurnTimeout())
+	}
+	if !reflect.DeepEqual(cfg.DisallowedBuiltinTools(), DefaultDisallowedTools()) {
+		t.Fatalf("disallowed tools = %v", cfg.DisallowedBuiltinTools())
+	}
+	cfg.PostResultGraceMillis, cfg.TurnTimeoutMillis, cfg.DisallowedTools = 1500, 60000, []string{"Monitor"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PostResultGrace().Milliseconds() != 1500 || cfg.TurnTimeout().Milliseconds() != 60000 || !reflect.DeepEqual(cfg.DisallowedBuiltinTools(), []string{"Monitor"}) {
+		t.Fatalf("overrides = %v, %v, %v", cfg.PostResultGrace(), cfg.TurnTimeout(), cfg.DisallowedBuiltinTools())
+	}
+	for name, mutate := range map[string]func(*Config){
+		"negative grace":   func(c *Config) { c.PostResultGraceMillis = -1 },
+		"negative timeout": func(c *Config) { c.TurnTimeoutMillis = -1 },
+		"tool with rule":   func(c *Config) { c.DisallowedTools = []string{"Bash(rm:*)"} },
+	} {
+		invalid := Production("claude-test", "help")
+		mutate(&invalid)
+		if err := invalid.Validate(); err == nil {
+			t.Errorf("%s: Validate accepted the configuration", name)
+		}
 	}
 }
