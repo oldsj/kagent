@@ -9,8 +9,11 @@ package driver
 //
 // The user scope can hold hooks. The harness cannot disable them, because its
 // own approval and cancellation hooks arrive through --settings and
-// disableAllHooks would stop those too. The scope is written only by the
-// Actor's own agent, and the approval boundary does not rest on hooks alone:
-// the --settings ask rules still route protected tools to the permission
-// prompt, which Claude evaluates before allow rules from any source.
+// disableAllHooks would stop those too. For the same reason, hooks in the
+// frontmatter of a checkout skill run while the agent uses that skill. The
+// user scope is written only by the Actor's own agent, and the approval
+// boundary does not rest on hooks alone: the --settings ask rules still route
+// protected tools to the permission prompt, which Claude evaluates before
+// allow rules from any source. The opt-in real-CLI test in the adapter
+// package checks this against the pinned release.
 const settingSources = "user"
