@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/cgi"
-	"os"
 	"os/exec"
 	"path/filepath"
 	goruntime "runtime"
@@ -154,7 +153,7 @@ func gitInstanceHarness(t *testing.T, kube ctrlclient.Client, readOrigin, pushOr
 	spec := *base.Spec.DeepCopy()
 	// The runtime checkout must accept the instance, so a cluster whose shared
 	// fixture predates it can name a current Claude Harness image.
-	if image := os.Getenv("KAGENT_E2E_CLAUDE_IMAGE"); image != "" {
+	if image := kagentenv.E2EClaudeImage.Get(); image != "" {
 		spec.Workload.Image = &image
 	}
 	spec.Git = &v1alpha3.HarnessGit{Origins: []string{"github.com"}, ReadProxyOrigin: &readOrigin, PushProxyOrigin: &pushOrigin}
