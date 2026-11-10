@@ -61,14 +61,16 @@ type AgentDefinition struct {
 }
 
 type RuntimeRevision struct {
-	Revision                string
-	Namespace               string
-	AgentName               string
-	AgentUID                string
-	SourceSnapshot          json.RawMessage
-	AgentCard               *a2apb.AgentCard
-	Credentials             []egress.Credential
-	EgressDestinations      []string
+	Revision           string
+	Namespace          string
+	AgentName          string
+	AgentUID           string
+	SourceSnapshot     json.RawMessage
+	AgentCard          *a2apb.AgentCard
+	Credentials        []egress.Credential
+	EgressDestinations []string
+	// GitOrigins are the hosts Sessions of this revision may clone from.
+	GitOrigins              []string
 	TokenPassthroughTargets []egresspolicy.GatewayTarget
 	ActorTemplateAtespace   string
 	ActorTemplateName       string

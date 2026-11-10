@@ -102,6 +102,8 @@ func (c *Compiler) Compile(ctx context.Context, input *translator.HarnessInput) 
 	}
 	cfg := codexconfig.Production(model.Spec.Model, input.Root.Instruction)
 	cfg.Provider, cfg.Agents, cfg.MCPServers = provider, agents, mcp.servers
+	gitPolicy, gitEgress := translator.CompileGit(harness.Spec.Git)
+	cfg.Git = gitPolicy
 	cfg.RuntimeTelemetry = runtimeTelemetry
 	cfg.ControlPlaneURL = c.settings.GetControlPlaneUrl()
 	cfg.MaxContentLength = c.settings.MaxContentLength // Preserve unset versus unlimited.
@@ -139,6 +141,7 @@ func (c *Compiler) Compile(ctx context.Context, input *translator.HarnessInput) 
 	}
 	egress = append(egress, skills.Egress...)
 	egress = append(egress, mcp.egress...)
+	egress = append(egress, gitEgress...)
 	egress = append(egress, telemetryConfig.Destinations(environment)...)
 	egress = append(egress, c.settings.GetControlPlaneUrl())
 	slices.Sort(egress)
@@ -151,6 +154,7 @@ func (c *Compiler) Compile(ctx context.Context, input *translator.HarnessInput) 
 			Environment:     environment, ConfigJSON: configJSON, AgentCard: card,
 			WorkerPoolName: harness.Spec.Substrate.WorkerPoolRef.Name, SnapshotLocation: harness.Spec.Substrate.SnapshotPolicy.Location,
 			TokenPassthroughTargets: tokenPassthroughTargets, Credentials: credentials, Provenance: provenance, EgressDestinations: egress,
+			GitOrigins: translator.GitOrigins(gitPolicy),
 		},
 		Warnings: mcp.warnings,
 	}, nil

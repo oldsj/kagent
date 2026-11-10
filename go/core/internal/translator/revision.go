@@ -77,6 +77,9 @@ type Revision struct {
 	TokenPassthroughTargets []egresspolicy.GatewayTarget
 	// EgressDestinations is the HTTP(S) origin allowlist required by this revision.
 	EgressDestinations []string
+	// GitOrigins lists the hosts Sessions may clone from. It is derived from the
+	// compiled config, which the digest already covers.
+	GitOrigins []string
 }
 
 // Equals compares the Agent Card's contents without inspecting protobuf caches.

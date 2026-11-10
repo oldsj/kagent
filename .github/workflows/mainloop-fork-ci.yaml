@@ -64,7 +64,7 @@ jobs:
       - name: Build everything
         run: go build ./...
       - name: Test runtime and policy fixtures
-        run: go test -count=1 ./adk/pkg/taskstore ./core/internal/egress ./core/internal/substrate ./core/internal/service/taskstore
+        run: go test -count=1 ./adk/pkg/taskstore ./api/workspace ./core/internal/egress ./core/internal/substrate ./core/internal/service/taskstore
       # TestSandboxTemplateCatalog and TestEgressPolicyCatalog in grpcserver
       # start envtest, which needs these binaries.
       - name: Install envtest binaries

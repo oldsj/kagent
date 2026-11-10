@@ -145,7 +145,7 @@ func TestServiceCreateUsesAuthenticatedOwnerAndGeneratedUUID(t *testing.T) {
 	store := &serviceTestStore{}
 	service := NewService(store, serviceTestAuthorizer{}, serviceTestWorkflow{})
 
-	session, err := service.Create(serviceTestContext("alice"), &apiv1.ResourceReference{Namespace: "team-a", Name: "assistant"}, "request-1", "")
+	session, err := service.Create(serviceTestContext("alice"), &apiv1.ResourceReference{Namespace: "team-a", Name: "assistant"}, "request-1", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +175,7 @@ func TestServiceCreateMapsStoreErrors(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			service := NewService(&serviceTestStore{createErr: test.err}, serviceTestAuthorizer{}, serviceTestWorkflow{})
-			_, err := service.Create(serviceTestContext("alice"), &apiv1.ResourceReference{Namespace: "team-a", Name: "assistant"}, "request-1", "")
+			_, err := service.Create(serviceTestContext("alice"), &apiv1.ResourceReference{Namespace: "team-a", Name: "assistant"}, "request-1", "", nil)
 			if !serviceerrors.IsCode(err, test.code) {
 				t.Fatalf("Create() error = %v, want code %s", err, test.code)
 			}
@@ -197,7 +197,7 @@ func TestServiceCreateRejectsInvalidOrUnauthorizedRequests(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			service := NewService(&serviceTestStore{}, test.authorizer, serviceTestWorkflow{})
-			_, err := service.Create(test.ctx, &apiv1.ResourceReference{Namespace: test.namespace, Name: "assistant"}, "request-1", "")
+			_, err := service.Create(test.ctx, &apiv1.ResourceReference{Namespace: test.namespace, Name: "assistant"}, "request-1", "", nil)
 			if !serviceerrors.IsCode(err, test.code) {
 				t.Fatalf("Create() error = %v, want code %s", err, test.code)
 			}
@@ -381,7 +381,7 @@ func TestServiceCreateCarriesTheNameAndLeavesAnOmittedOneEmpty(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			store := &serviceTestStore{}
 			service := NewService(store, serviceTestAuthorizer{}, serviceTestWorkflow{})
-			session, err := service.Create(serviceTestContext("alice"), &apiv1.ResourceReference{Namespace: "team-a", Name: "assistant"}, "request-1", test.given)
+			session, err := service.Create(serviceTestContext("alice"), &apiv1.ResourceReference{Namespace: "team-a", Name: "assistant"}, "request-1", test.given, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -598,7 +598,7 @@ func TestServiceRejectsReadOnlyShareMutationsWithoutTransport(t *testing.T) {
 func TestServiceShareCannotCreateSession(t *testing.T) {
 	ctx := auth.ShareContextTo(serviceTestContext("alice"), &auth.ShareContext{SessionID: uuid.NewString(), UserID: "alice"})
 	service := NewService(nil, serviceTestAuthorizer{}, nil)
-	_, err := service.Create(ctx, &apiv1.ResourceReference{Namespace: "team-a", Name: "assistant"}, "request-1", "")
+	_, err := service.Create(ctx, &apiv1.ResourceReference{Namespace: "team-a", Name: "assistant"}, "request-1", "", nil)
 	if !serviceerrors.IsCode(err, serviceerrors.CodePermissionDenied) {
 		t.Fatalf("Create() = %v, want permission denied", err)
 	}
@@ -709,7 +709,7 @@ func TestServiceCreateRequiresTargetAgentBeforeReservation(t *testing.T) {
 			authorizer := &recordingAuthorizer{deniedTypes: map[string]bool{deniedType: true}}
 			service := NewService(store, authorizer, serviceTestWorkflow{})
 			agent := &apiv1.ResourceReference{Namespace: "team-a", Name: "assistant"}
-			_, err := service.Create(serviceTestContext("alice"), agent, "request-1", "")
+			_, err := service.Create(serviceTestContext("alice"), agent, "request-1", "", nil)
 			if deniedType != "" {
 				if !serviceerrors.IsCode(err, serviceerrors.CodePermissionDenied) || store.createInput != nil {
 					t.Fatalf("Create() = %v, reserved = %v", err, store.createInput)
@@ -775,7 +775,7 @@ func TestSessionCreateUsesTargetNamespace(t *testing.T) {
 		t.Run(namespace, func(t *testing.T) {
 			store := &serviceTestStore{}
 			svc := NewService(store, sessionCreateNamespacePolicy{namespace: "team-a"}, serviceTestWorkflow{})
-			created, err := svc.Create(serviceTestContext("alice"), &apiv1.ResourceReference{Namespace: namespace, Name: "assistant"}, "request", "")
+			created, err := svc.Create(serviceTestContext("alice"), &apiv1.ResourceReference{Namespace: namespace, Name: "assistant"}, "request", "", nil)
 			if namespace == "team-a" {
 				if err != nil || created.GetAgent().GetRef().GetNamespace() != namespace || created.GetCreator() != "alice" {
 					t.Fatalf("create = %+v, error = %v", created, err)

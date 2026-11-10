@@ -158,6 +158,7 @@ func (c *Client) RecordRuntimeRevision(ctx context.Context, revision RuntimeRevi
 			RuntimeArtifact: RuntimeArtifact{Revision: revision.Revision, Kind: runtimeKindAgent, Namespace: revision.Namespace,
 				ActorTemplateAtespace: revision.ActorTemplateAtespace, ActorTemplateName: revision.ActorTemplateName, ActorTemplateUID: revision.ActorTemplateUID, ActorTemplateSpecDigest: revision.ActorTemplateSpecDigest},
 			SourceSnapshot: revision.SourceSnapshot, EgressDestinations: revision.EgressDestinations, Credentials: revision.Credentials, TokenPassthroughTargets: revision.TokenPassthroughTargets,
+			GitOrigins: revision.GitOrigins,
 		}); err != nil {
 			return err
 		}
@@ -343,6 +344,7 @@ type runtimeRevisionRecord struct {
 	EgressDestinations      []string
 	TokenPassthroughTargets []egresspolicy.GatewayTarget
 	Credentials             []egress.Credential
+	GitOrigins              []string
 }
 
 // recordRuntimeRevision writes immutable common inputs and mutable artifact status.
@@ -357,15 +359,18 @@ func recordRuntimeRevision(ctx context.Context, tx pgx.Tx, revision runtimeRevis
 	if revision.TokenPassthroughTargets == nil {
 		revision.TokenPassthroughTargets = []egresspolicy.GatewayTarget{}
 	}
+	if revision.GitOrigins == nil {
+		revision.GitOrigins = []string{}
+	}
 	result, err := tx.Exec(ctx, `
   INSERT INTO runtime_revision (revision, kind, namespace, source_snapshot, egress_destinations,
-   actor_template_atespace, actor_template_name, actor_template_uid, actor_template_spec_digest, credentials, token_passthrough_targets)
-  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+   actor_template_atespace, actor_template_name, actor_template_uid, actor_template_spec_digest, credentials, token_passthrough_targets, git_origins)
+  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
   ON CONFLICT (revision) DO UPDATE SET actor_template_uid = EXCLUDED.actor_template_uid,
    actor_template_spec_digest = EXCLUDED.actor_template_spec_digest, updated_at = NOW()
   WHERE runtime_revision.deleted_at IS NULL AND runtime_revision.kind = EXCLUDED.kind
  `, revision.Revision, revision.Kind, revision.Namespace, revision.SourceSnapshot, revision.EgressDestinations,
-		revision.ActorTemplateAtespace, revision.ActorTemplateName, revision.ActorTemplateUID, revision.ActorTemplateSpecDigest, revision.Credentials, revision.TokenPassthroughTargets)
+		revision.ActorTemplateAtespace, revision.ActorTemplateName, revision.ActorTemplateUID, revision.ActorTemplateSpecDigest, revision.Credentials, revision.TokenPassthroughTargets, revision.GitOrigins)
 	if err != nil {
 		return fmt.Errorf("record runtime revision %s: %w", revision.Revision, err)
 	}

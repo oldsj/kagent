@@ -12,7 +12,7 @@ import type { JsonObject, Message } from "@bufbuild/protobuf";
  * Describes the file kagent/api/v1/common.proto.
  */
 export const file_kagent_api_v1_common: GenFile = /*@__PURE__*/
-  fileDesc("ChprYWdlbnQvYXBpL3YxL2NvbW1vbi5wcm90bxINa2FnZW50LmFwaS52MSJdChBTdHJ1Y3R1cmVkT2JqZWN0EhMKC2FwaV92ZXJzaW9uGAEgASgJEgwKBGtpbmQYAiABKAkSJgoFdmFsdWUYAyABKAsyFy5nb29nbGUucHJvdG9idWYuU3RydWN0IrABChFSZXNvdXJjZVJlZmVyZW5jZRI9CgluYW1lc3BhY2UYASABKAlCKrpIJ3IlEAEYPzIfXlthLXowLTldKFstYS16MC05XSpbYS16MC05XSk/JBJcCgRuYW1lGAIgASgJQk66SEtySRABGP0BMkJeW2EtejAtOV0oWy1hLXowLTldKlthLXowLTldKT8oWy5dW2EtejAtOV0oWy1hLXowLTldKlthLXowLTldKT8pKiQiOwoLUGFnZVJlcXVlc3QSGAoFbGltaXQYASABKAVCCbpIBhoEGGQoABISCgpwYWdlX3Rva2VuGAIgASgJIicKDFBhZ2VSZXNwb25zZRIXCg9uZXh0X3BhZ2VfdG9rZW4YASABKAlCPVo7Z2l0aHViLmNvbS9rYWdlbnQtZGV2L2thZ2VudC9nby9hcGkvZ2VuL2thZ2VudC9hcGkvdjE7YXBpdjFiBnByb3RvMw", [file_buf_validate_validate, file_google_protobuf_struct]);
+  fileDesc("ChprYWdlbnQvYXBpL3YxL2NvbW1vbi5wcm90bxINa2FnZW50LmFwaS52MSJdChBTdHJ1Y3R1cmVkT2JqZWN0EhMKC2FwaV92ZXJzaW9uGAEgASgJEgwKBGtpbmQYAiABKAkSJgoFdmFsdWUYAyABKAsyFy5nb29nbGUucHJvdG9idWYuU3RydWN0IrABChFSZXNvdXJjZVJlZmVyZW5jZRI9CgluYW1lc3BhY2UYASABKAlCKrpIJ3IlEAEYPzIfXlthLXowLTldKFstYS16MC05XSpbYS16MC05XSk/JBJcCgRuYW1lGAIgASgJQk66SEtySRABGP0BMkJeW2EtejAtOV0oWy1hLXowLTldKlthLXowLTldKT8oWy5dW2EtejAtOV0oWy1hLXowLTldKlthLXowLTldKT8pKiQiOwoLUGFnZVJlcXVlc3QSGAoFbGltaXQYASABKAVCCbpIBhoEGGQoABISCgpwYWdlX3Rva2VuGAIgASgJIicKDFBhZ2VSZXNwb25zZRIXCg9uZXh0X3BhZ2VfdG9rZW4YASABKAkiwAEKCVdvcmtzcGFjZRIbCgRyZXBvGAEgASgJQg26SApyCBABGIAQiAEBEjsKA3JlZhgCIAEoCUIuukgrcikY/wEyJF4oPzokfFtBLVphLXowLTlfXVtBLVphLXowLTkuXy8tXSopJBI+CgZicmFuY2gYAyABKAlCLrpIK3IpGP8BMiReKD86JHxbQS1aYS16MC05X11bQS1aYS16MC05Ll8vLV0qKSQSGQoFZGVwdGgYBCABKAVCCrpIBxoFGOgHKABCPVo7Z2l0aHViLmNvbS9rYWdlbnQtZGV2L2thZ2VudC9nby9hcGkvZ2VuL2thZ2VudC9hcGkvdjE7YXBpdjFiBnByb3RvMw", [file_buf_validate_validate, file_google_protobuf_struct]);
 
 /**
  * @generated from message kagent.api.v1.StructuredObject
@@ -101,4 +101,49 @@ export type PageResponse = Message<"kagent.api.v1.PageResponse"> & {
  */
 export const PageResponseSchema: GenMessage<PageResponse> = /*@__PURE__*/
   messageDesc(file_kagent_api_v1_common, 3);
+
+/**
+ * Workspace asks the runtime to check out a Git repository before the first turn.
+ * The repository host must be one of the Agent's Git origins; the runtime never
+ * receives credentials, since the egress gateway injects them.
+ *
+ * @generated from message kagent.api.v1.Workspace
+ */
+export type Workspace = Message<"kagent.api.v1.Workspace"> & {
+  /**
+   * HTTPS repository URL without credentials, for example
+   * https://github.com/owner/name.
+   *
+   * @generated from field: string repo = 1;
+   */
+  repo: string;
+
+  /**
+   * Branch, tag, or commit to check out. Empty uses the repository default branch.
+   *
+   * @generated from field: string ref = 2;
+   */
+  ref: string;
+
+  /**
+   * Local branch to create or switch to after checking out ref. Empty stays on ref.
+   *
+   * @generated from field: string branch = 3;
+   */
+  branch: string;
+
+  /**
+   * Shallow clone depth. Zero uses the server default.
+   *
+   * @generated from field: int32 depth = 4;
+   */
+  depth: number;
+};
+
+/**
+ * Describes the message kagent.api.v1.Workspace.
+ * Use `create(WorkspaceSchema)` to create a new message.
+ */
+export const WorkspaceSchema: GenMessage<Workspace> = /*@__PURE__*/
+  messageDesc(file_kagent_api_v1_common, 4);
 

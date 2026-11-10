@@ -1,3 +1,4 @@
+from buf.validate import validate_pb2 as _validate_pb2
 from google.protobuf import struct_pb2 as _struct_pb2
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
@@ -15,3 +16,15 @@ class StructuredObject(_message.Message):
     kind: str
     value: _struct_pb2.Struct
     def __init__(self, api_version: _Optional[str] = ..., kind: _Optional[str] = ..., value: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ...) -> None: ...
+
+class Workspace(_message.Message):
+    __slots__ = ("repo", "ref", "branch", "depth")
+    REPO_FIELD_NUMBER: _ClassVar[int]
+    REF_FIELD_NUMBER: _ClassVar[int]
+    BRANCH_FIELD_NUMBER: _ClassVar[int]
+    DEPTH_FIELD_NUMBER: _ClassVar[int]
+    repo: str
+    ref: str
+    branch: str
+    depth: int
+    def __init__(self, repo: _Optional[str] = ..., ref: _Optional[str] = ..., branch: _Optional[str] = ..., depth: _Optional[int] = ...) -> None: ...
