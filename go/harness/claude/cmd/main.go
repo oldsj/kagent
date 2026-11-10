@@ -84,7 +84,12 @@ func run(ctx context.Context, check bool, getenv func(string) string, environmen
 		}
 	}()
 
-	exec, closer, err := executor.New(ctx, executor.Config{ConfigJSON: configJSON, DataDir: dataDir, Environment: environment})
+	execCfg := executor.Config{ConfigJSON: configJSON, DataDir: dataDir, Environment: environment}
+	if !check {
+		execCfg.ClientAddr = executor.ClientAddr
+		execCfg.Activity = loggedActivity{ctx: ctx}
+	}
+	exec, closer, err := executor.New(ctx, execCfg)
 	if err != nil {
 		return err
 	}
@@ -109,4 +114,12 @@ type startMetrics func()
 func (start startMetrics) Intercept(ctx context.Context, _ *a2asrv.ExecutorContext) (context.Context, error) {
 	start()
 	return ctx, nil
+}
+
+// loggedActivity records the SDK runner's busy/idle changes. It stands in for
+// the control plane's activity reporter until that client lands on this branch.
+type loggedActivity struct{ ctx context.Context }
+
+func (a loggedActivity) SetActive(active bool) {
+	logging.FromContext(a.ctx).InfoContext(a.ctx, "sdk runner activity", "active", active)
 }

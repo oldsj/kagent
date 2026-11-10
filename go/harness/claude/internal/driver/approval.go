@@ -179,6 +179,16 @@ func (b *ApprovalBroker) SettingsJSON() ([]byte, error) {
 	return json.Marshal(settings)
 }
 
+// askRules lists the permission rules for the protected MCP servers, sorted.
+func (b *ApprovalBroker) askRules() []string {
+	rules := make([]string, 0, len(b.protected))
+	for server := range b.protected {
+		rules = append(rules, "mcp__"+server+"__*")
+	}
+	slices.Sort(rules)
+	return rules
+}
+
 func (b *ApprovalBroker) authorizeAndLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if subtle.ConstantTimeCompare([]byte("Bearer "+b.token), []byte(r.Header.Get("Authorization"))) != 1 {

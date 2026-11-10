@@ -13,6 +13,7 @@ import (
 
 	"github.com/kagent-dev/kagent/go/harness/claude/config"
 	"github.com/kagent-dev/kagent/go/harness/claude/internal/adapter"
+	"github.com/kagent-dev/kagent/go/harness/claude/internal/sdkrunner"
 	runtimea2a "github.com/kagent-dev/kagent/go/harness/runtime/a2a"
 	"github.com/kagent-dev/kagent/go/harness/runtime/continuation"
 )
@@ -25,6 +26,11 @@ type Config struct {
 	DataDir string
 	// Environment is the process environment passed to the Claude CLI.
 	Environment []string
+	// ClientAddr is where the SDK runner serves its clients when the
+	// environment selects that driver. Empty serves none, as for a check run.
+	ClientAddr string
+	// Activity receives the SDK runner's busy/idle changes. Nil reports none.
+	Activity sdkrunner.ActivityReporter
 }
 
 // New validates the configuration and Claude installation, then returns the
@@ -59,12 +65,33 @@ func New(ctx context.Context, cfg Config) (a2asrv.AgentExecutor, io.Closer, erro
 		_ = runner.Close()
 		return nil, nil, err
 	}
-	executor, err := runtimea2a.New(runner, store, parsed.RuntimeTelemetry)
+	mode, err := selectedDriver(cfg.Environment)
 	if err != nil {
 		_ = runner.Close()
 		return nil, nil, err
 	}
-	return executor, runner, nil
+	var turns runtimea2a.Runner = runner
+	closer := closers{runner}
+	if mode == modeSDK {
+		sdk, err := newSDKWiring(ctx, cfg, runner, store, parsed.InterruptGrace())
+		if err != nil {
+			_ = closer.Close()
+			return nil, nil, err
+		}
+		served, err := sdk.serve(ctx, cfg.ClientAddr)
+		if err != nil {
+			_ = closer.Close()
+			return nil, nil, err
+		}
+		// Stop the client port and the bridge before the driver they use.
+		turns, closer = sdk.driver(runner), closers{served, runner}
+	}
+	executor, err := runtimea2a.New(turns, store, parsed.RuntimeTelemetry)
+	if err != nil {
+		_ = closer.Close()
+		return nil, nil, err
+	}
+	return executor, closer, nil
 }
 
 func validateSessionID(id string) error {

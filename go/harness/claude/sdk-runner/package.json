@@ -1,0 +1,8 @@
+{
+  "name": "kagent-claude-sdk-runner",
+  "private": true,
+  "type": "module",
+  "description": "Agent SDK bridge started by kagent-claude (KAGENT_CLAUDE_DRIVER=sdk). Internal JSONL protocol on stdio.",
+  "scripts": { "test": "node --test" },
+  "dependencies": { "@anthropic-ai/claude-agent-sdk": "0.3.285" }
+}
