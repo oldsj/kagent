@@ -120,6 +120,13 @@ func newAgentReconciliations(
 			revision := &state.Target.Revision
 			base := egress.Access{Destinations: revision.EgressDestinations, Credentials: revision.Credentials, TokenPassthroughTargets: revision.TokenPassthroughTargets}
 			_, err = egress.MergeAccess(base, state.EgressGrant)
+			if err == nil && revision.GitEgressRestricted {
+				// Report it on the Agent and keep it out of the stored grants. The
+				// store also filters at application for older pinned revisions.
+				if _, dropped := egress.FilterGitRestricted(state.EgressGrant); len(dropped) != 0 {
+					err = fmt.Errorf("EgressPolicy grants add Git access this Harness's Git profile does not allow: %s", strings.Join(dropped, ", "))
+				}
+			}
 		}
 		if err != nil {
 			state.EgressConflict = err.Error()
@@ -379,6 +386,10 @@ func (r *Reconciler) reconcileAgent(ctx context.Context, key string) error {
 			revision := &state.Target.Revision
 			base := egress.Access{Destinations: revision.EgressDestinations, Credentials: revision.Credentials, TokenPassthroughTargets: revision.TokenPassthroughTargets}
 			grants, _ = egress.FilterConflicts(base, grants)
+			if revision.GitEgressRestricted {
+				// A grant stored before this target became restricted must go too.
+				grants, _ = egress.FilterGitRestricted(grants)
+			}
 		}
 	}
 	definition := database.AgentDefinition{
@@ -416,6 +427,7 @@ func (r *Reconciler) reconcileAgent(ctx context.Context, key string) error {
 		Credentials:             target.Revision.Credentials,
 		TokenPassthroughTargets: target.Revision.TokenPassthroughTargets,
 		GitOrigins:              target.Revision.GitOrigins,
+		GitEgressRestricted:     target.Revision.GitEgressRestricted,
 		ActorTemplateAtespace:   desiredRef.GetAtespace(), ActorTemplateName: desiredRef.GetName(),
 		ActorTemplateSpecDigest: digest,
 	}

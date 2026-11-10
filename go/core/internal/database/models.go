@@ -70,7 +70,9 @@ type RuntimeRevision struct {
 	Credentials        []egress.Credential
 	EgressDestinations []string
 	// GitOrigins are the hosts Sessions of this revision may clone from.
-	GitOrigins              []string
+	GitOrigins []string
+	// GitEgressRestricted drops GitHub and Git proxy access from live grants.
+	GitEgressRestricted     bool
 	TokenPassthroughTargets []egresspolicy.GatewayTarget
 	ActorTemplateAtespace   string
 	ActorTemplateName       string

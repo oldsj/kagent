@@ -157,3 +157,29 @@ func validateHost(host string) error {
 	}
 	return nil
 }
+
+// DirectGitHubHost reports whether a normalized hostname belongs to a GitHub
+// host family that the trusted Git proxy profile must not reach directly.
+func DirectGitHubHost(host string) bool {
+	for _, domain := range []string{"github.com", "githubusercontent.com", "githubassets.com", "github.io"} {
+		if host == domain || strings.HasSuffix(host, "."+domain) {
+			return true
+		}
+	}
+	return false
+}
+
+// GitProxyHost reports whether a normalized hostname is one of the trusted Git
+// proxy listeners.
+func GitProxyHost(host string) bool {
+	for _, origin := range []string{ReadProxyOrigin, PushProxyOrigin} {
+		if u, err := url.Parse(origin); err == nil && host == u.Hostname() {
+			return true
+		}
+	}
+	return false
+}
+
+// LegacyGitCredentialSecret is the Secret name of the pre-proxy Git token. No
+// revision or grant may bind it once Git goes through the proxies.
+const LegacyGitCredentialSecret = "mainloop-git-auth"

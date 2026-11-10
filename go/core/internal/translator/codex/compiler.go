@@ -160,7 +160,8 @@ func (c *Compiler) Compile(ctx context.Context, input *translator.HarnessInput) 
 			Environment:     environment, ConfigJSON: configJSON, AgentCard: card,
 			WorkerPoolName: harness.Spec.Substrate.WorkerPoolRef.Name, SnapshotLocation: harness.Spec.Substrate.SnapshotPolicy.Location,
 			TokenPassthroughTargets: tokenPassthroughTargets, Credentials: credentials, Provenance: provenance, EgressDestinations: egress,
-			GitOrigins: translator.GitOrigins(gitPolicy),
+			GitOrigins:          translator.GitOrigins(gitPolicy),
+			GitEgressRestricted: translator.GitEgressRestricted(gitPolicy),
 		},
 		Warnings: mcp.warnings,
 	}, nil
