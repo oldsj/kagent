@@ -8,6 +8,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	codexconfig "github.com/kagent-dev/kagent/go/harness/codex/config"
 )
 
 const AuthKey = "auth.json"
@@ -20,7 +22,10 @@ const statePending = "pending"
 const stateRunning = "running"
 const stateRejected = "reauthentication-required"
 const safetyMargin = 10 * time.Minute
-const codexVersion = "0.148.0"
+
+// The refresh Job runs the Codex CLI from the Codex Harness image, so it must
+// be the version that image pins.
+const codexVersion = codexconfig.PinnedCodexVersion
 
 var errCredential = errors.New("invalid dedicated ChatGPT credential")
 var errOperation = errors.New("ChatGPT credential operation failed")

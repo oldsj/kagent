@@ -175,7 +175,7 @@ func fakeCLI(t *testing.T, home string, after []byte, fail bool) (string, string
 	dir := t.TempDir()
 	result, requests := filepath.Join(dir, "rotated.json"), filepath.Join(dir, "requests.jsonl")
 	require.NoError(t, os.WriteFile(result, after, 0600))
-	script := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'codex-cli 0.148.0'; exit; fi\necho SYNTHETIC_SECRET >&2\nwhile IFS= read -r line; do\nprintf '%s\\n' \"$line\" >> '" + requests + "'\ncase \"$line\" in\n*initialize*) echo '{\"id\":1,\"result\":{}}';;\n*account/read*) "
+	script := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'codex-cli " + codexVersion + "'; exit; fi\necho SYNTHETIC_SECRET >&2\nwhile IFS= read -r line; do\nprintf '%s\\n' \"$line\" >> '" + requests + "'\ncase \"$line\" in\n*initialize*) echo '{\"id\":1,\"result\":{}}';;\n*account/read*) "
 	if fail {
 		script += "echo '{\"id\":2,\"error\":{\"message\":\"SYNTHETIC_SECRET\"}}';;\n"
 	} else {

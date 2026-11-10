@@ -31,7 +31,7 @@ type rpcResponse struct {
 	Error json.RawMessage `json:"error"`
 }
 
-// Official rust-v0.148.0 account/read -> refresh_token_if_requested ->
+// Traced against official rust-v0.148.0: account/read -> refresh_token_if_requested ->
 // AuthManager::refresh_token -> refresh_and_persist_chatgpt_token. No thread
 // or turn requests are sent. Discard all upstream diagnostics, which can echo
 // credentials. Each process gets only our isolated, memory-backed CODEX_HOME.

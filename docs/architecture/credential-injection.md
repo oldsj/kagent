@@ -321,9 +321,13 @@ home after storing the dedicated login. Neither the gateway nor an Actor receive
 the source or runtime `auth.json` key; bindings continue to reference only the
 runtime access-token key, and Actors retain their synthetic auth file.
 
-Set controller environment variable `KAGENT_CHATGPT_REFRESH_IMAGE` to an
-immutable digest of the Codex Harness image containing
-`/usr/local/bin/kagent-credential-refresh` and official Codex **0.148.0**.
+Set `config.credentialRefresh.chatgptImage` in the Helm values
+(`credential_refresh.chatgpt_image` in the controller configuration) to an
+immutable digest of the Codex Harness image, which contains
+`/usr/local/bin/kagent-credential-refresh` and the Codex CLI version the Harness
+pins. Setting it also renders the `credential-refresh` role: the controller's
+other roles no longer carry the Job, ServiceAccount, Role, RoleBinding,
+NetworkPolicy and Secret-update permissions the refresh needs.
 The worker checks the executable version before requesting refresh. An empty
 image setting disables automatic refresh. Leader election must be enabled.
 Secrets without an `auth.json` key retain manual access-token rotation.
