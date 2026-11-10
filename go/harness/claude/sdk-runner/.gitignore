@@ -1,1 +1,3 @@
 node_modules/
+# The image build installs from this lockfile; the repository root ignores lockfiles.
+!package-lock.json
