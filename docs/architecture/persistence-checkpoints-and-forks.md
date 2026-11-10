@@ -141,6 +141,37 @@ immutable. The copied head boundary uses the retained Tag URI, allowing a fresh 
 to be checkpointed before its first turn. Fork creation verifies the Tag UID and URI
 as well as the Actor's source Tag, suspended state, template, and external snapshot.
 
+### Fresh-conversation forks
+
+`ForkSession` with `fresh_conversation` keeps the checkpoint's data snapshot, and
+so the workspace and caches, but copies no events or tasks: the fork starts with
+an empty public history. The native conversation lives inside that snapshot, in
+the continuation binding (`/data/adapter/state.json`) and the Claude or Codex
+transcripts. The control plane marks the Session (`Session.fresh_conversation`),
+and the runtime discards that state before its first turn:
+
+- It reads the flag through `TaskStoreService.GetWorkspace`.
+- It removes the continuation binding and the provider's transcript paths:
+  `projects`, `todos`, `shell-snapshots`, `file-history`, `session-env`,
+  `sessions`, `plans` and `history.jsonl` under `/data/claude` and the Agent SDK
+  runner's unpacked home, or `sessions`, `archived_sessions`, `history.jsonl` and
+  `session_index.jsonl` under `/data/codex`. Settings, credentials, skills and
+  packages stay.
+- It records the Session ID in `/data/.kagent/conversation-settled`, so the reset
+  runs once per Session and a later suspend and wake keeps the new conversation.
+
+If the flag cannot be read, the turn fails rather than resuming the old
+conversation. Replaying a fork request with a different mode is an idempotency
+conflict.
+
+A fork reuses the checkpoint's pinned revision, so the reset runs only if that
+revision's harness payload contains it. Never fresh-fork a checkpoint whose
+runtime predates the reset: it would resume the old native conversation under an
+empty public history, and nothing reports that. Roll out the controller before
+the harness payloads. Rolling the controller back strands fresh forks whose first
+turn has not run, because the runtime fails closed when the control plane cannot
+confirm the flag.
+
 Checkpoint sharing is not implemented. Future sharing must be restricted to data
 snapshots without process state.
 
