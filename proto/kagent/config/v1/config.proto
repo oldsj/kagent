@@ -152,10 +152,19 @@ message ControllerServerConfig {
 }
 
 message AuthenticationConfig {
+  option (buf.validate.message).cel = {
+    id: "auth.service_account_mode"
+    message: "service_account is required when mode is service-account"
+    expression: "!has(this.mode) || this.mode != 'service-account' || has(this.service_account)"
+  };
+
+  // service-account accepts only verified Kubernetes service accounts and
+  // runtime Actors; it has no user identity, so the UI cannot sign in.
   optional string mode = 1 [(buf.validate.field).string = {
     in: [
       "insecure",
-      "trusted-proxy"
+      "trusted-proxy",
+      "service-account"
     ]
   }];
   string user_id_claim = 2;
@@ -166,6 +175,14 @@ message AuthenticationConfig {
 // independent of the Kubernetes API token.
 message ServiceAccountAuthentication {
   string authority = 1 [(buf.validate.field).string.min_len = 1];
+  // Service accounts allowed to call, as system:serviceaccount:<namespace>:<name>.
+  // Empty accepts every service account the cluster verifies for the audience.
+  repeated string allowed_subjects = 2 [(buf.validate.field).repeated = {
+    unique: true
+    items: {
+      string: {pattern: "^system:serviceaccount:[a-z0-9]([-a-z0-9]*[a-z0-9])?:[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"}
+    }
+  }];
 }
 
 // DatabaseConfig names two PostgreSQL logins. The owner applies migrations; the

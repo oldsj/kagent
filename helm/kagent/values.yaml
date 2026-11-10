@@ -157,10 +157,18 @@ config:
   kubernetes: {}
   server:
     auth:
+      # insecure, trusted-proxy, or service-account. service-account accepts only
+      # verified Kubernetes service accounts and runtime Actors, so the UI cannot
+      # sign in; it requires serviceAccount below.
       mode: insecure
       # Opt in to Kubernetes TokenReview authentication independently of the mode.
+      # Callers present a ServiceAccount token projected for the
+      # kagent-invocation audience. allowedSubjects, when set, admits only those
+      # service accounts.
       # serviceAccount:
       #   authority: kubernetes
+      #   allowedSubjects:
+      #     - system:serviceaccount:mainloop:mainloop
     # Serve gRPC reflection for tools such as grpcurl. Callers must pass the
     # configured authentication. `kagent install` enables it.
     grpcReflection: false

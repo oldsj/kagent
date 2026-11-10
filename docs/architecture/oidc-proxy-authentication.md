@@ -111,6 +111,18 @@ The principal ID combines the configured authority and the verified service-acco
 UID, so token rotation preserves identity and recreation changes it. Use distinct
 authorities when identities from multiple clusters share storage.
 
+`config.server.auth.serviceAccount.allowedSubjects` restricts callers to the listed
+service accounts (`system:serviceaccount:<namespace>:<name>`). The check uses the
+username TokenReview returns, never the token's own claims, and applies to cached
+reviews too. An empty list admits every service account the cluster verifies for
+the audience.
+
+`config.server.auth.mode: service-account` removes user authentication entirely:
+only verified service accounts and runtime Actors can call, and requests carrying
+`X-User-Id`, a proxy JWT, or no credential are rejected. It requires
+`serviceAccount` to be configured. The UI has no way to sign in under this mode;
+use it for installs driven by another service.
+
 Tokens with a `kubernetes.io` claim or a `system:serviceaccount:` subject always
 take this verifier when enabled. Verification failure never falls back to the
 trusted proxy, including for federated credentials from another cluster. Unverified

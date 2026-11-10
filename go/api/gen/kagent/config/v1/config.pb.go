@@ -846,7 +846,9 @@ func (x *ControllerServerConfig) GetAuth() *AuthenticationConfig {
 }
 
 type AuthenticationConfig struct {
-	state          protoimpl.MessageState        `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// service-account accepts only verified Kubernetes service accounts and
+	// runtime Actors; it has no user identity, so the UI cannot sign in.
 	Mode           *string                       `protobuf:"bytes,1,opt,name=mode,proto3,oneof" json:"mode,omitempty"`
 	UserIdClaim    string                        `protobuf:"bytes,2,opt,name=user_id_claim,json=userIdClaim,proto3" json:"user_id_claim,omitempty"`
 	ServiceAccount *ServiceAccountAuthentication `protobuf:"bytes,3,opt,name=service_account,json=serviceAccount,proto3" json:"service_account,omitempty"`
@@ -908,10 +910,13 @@ func (x *AuthenticationConfig) GetServiceAccount() *ServiceAccountAuthentication
 // Platform-owned invocation authentication for the fixed kagent-invocation audience,
 // independent of the Kubernetes API token.
 type ServiceAccountAuthentication struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Authority     string                 `protobuf:"bytes,1,opt,name=authority,proto3" json:"authority,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Authority string                 `protobuf:"bytes,1,opt,name=authority,proto3" json:"authority,omitempty"`
+	// Service accounts allowed to call, as system:serviceaccount:<namespace>:<name>.
+	// Empty accepts every service account the cluster verifies for the audience.
+	AllowedSubjects []string `protobuf:"bytes,2,rep,name=allowed_subjects,json=allowedSubjects,proto3" json:"allowed_subjects,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ServiceAccountAuthentication) Reset() {
@@ -949,6 +954,13 @@ func (x *ServiceAccountAuthentication) GetAuthority() string {
 		return x.Authority
 	}
 	return ""
+}
+
+func (x *ServiceAccountAuthentication) GetAllowedSubjects() []string {
+	if x != nil {
+		return x.AllowedSubjects
+	}
+	return nil
 }
 
 // DatabaseConfig names two PostgreSQL logins. The owner applies migrations; the
@@ -2202,14 +2214,16 @@ const file_kagent_config_v1_config_proto_rawDesc = "" +
 	"\fbind_address\x18\x01 \x01(\tB\a\xbaH\x04r\x02\x10\x01H\x00R\vbindAddress\x88\x01\x01\x12'\n" +
 	"\x0fgrpc_reflection\x18\x02 \x01(\bR\x0egrpcReflection\x12:\n" +
 	"\x04auth\x18\x03 \x01(\v2&.kagent.config.v1.AuthenticationConfigR\x04authB\x0f\n" +
-	"\r_bind_address\"\xd5\x01\n" +
-	"\x14AuthenticationConfig\x127\n" +
-	"\x04mode\x18\x01 \x01(\tB\x1e\xbaH\x1br\x19R\binsecureR\rtrusted-proxyH\x00R\x04mode\x88\x01\x01\x12\"\n" +
+	"\r_bind_address\"\x95\x03\n" +
+	"\x14AuthenticationConfig\x12H\n" +
+	"\x04mode\x18\x01 \x01(\tB/\xbaH,r*R\binsecureR\rtrusted-proxyR\x0fservice-accountH\x00R\x04mode\x88\x01\x01\x12\"\n" +
 	"\ruser_id_claim\x18\x02 \x01(\tR\vuserIdClaim\x12W\n" +
-	"\x0fservice_account\x18\x03 \x01(\v2..kagent.config.v1.ServiceAccountAuthenticationR\x0eserviceAccountB\a\n" +
-	"\x05_mode\"E\n" +
+	"\x0fservice_account\x18\x03 \x01(\v2..kagent.config.v1.ServiceAccountAuthenticationR\x0eserviceAccount:\xac\x01\xbaH\xa8\x01\x1a\xa5\x01\n" +
+	"\x19auth.service_account_mode\x128service_account is required when mode is service-account\x1aN!has(this.mode) || this.mode != 'service-account' || has(this.service_account)B\a\n" +
+	"\x05_mode\"\xd5\x01\n" +
 	"\x1cServiceAccountAuthentication\x12%\n" +
-	"\tauthority\x18\x01 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\tauthority\"\xc7\x03\n" +
+	"\tauthority\x18\x01 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\tauthority\x12\x8d\x01\n" +
+	"\x10allowed_subjects\x18\x02 \x03(\tBb\xbaH_\x92\x01\\\x18\x01\"XrV2T^system:serviceaccount:[a-z0-9]([-a-z0-9]*[a-z0-9])?:[a-z0-9]([-a-z0-9.]*[a-z0-9])?$R\x0fallowedSubjects\"\xc7\x03\n" +
 	"\x0eDatabaseConfig\x12;\n" +
 	"\x05owner\x18\x01 \x01(\v2%.kagent.config.v1.DatabaseLoginConfigR\x05owner\x12D\n" +
 	"\n" +

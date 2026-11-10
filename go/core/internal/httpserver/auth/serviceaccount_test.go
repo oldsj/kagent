@@ -120,3 +120,63 @@ func TestPrincipalAuthoritiesDoNotCollide(t *testing.T) {
 	require.False(t, ids[auth.PrincipalID("kubernetes:issuer-a", "same-subject")])
 	require.NotEqual(t, auth.PrincipalID("a/b", "c"), auth.PrincipalID("a", "b/c"))
 }
+
+func TestServiceAccountAllowedSubjects(t *testing.T) {
+	const audience = "kagent-invocation"
+	review := func(username, uid string) *fake.Clientset {
+		client := fake.NewClientset()
+		client.PrependReactor("create", "tokenreviews", func(kubetesting.Action) (bool, runtime.Object, error) {
+			return true, &authenticationv1.TokenReview{Status: authenticationv1.TokenReviewStatus{
+				Authenticated: true, Audiences: []string{audience},
+				User: authenticationv1.UserInfo{Username: username, UID: uid},
+			}}, nil
+		})
+		return client
+	}
+	headers := func(subject string) http.Header {
+		token := createTestJWT(map[string]any{"sub": subject, "exp": time.Now().Add(time.Hour).Unix()})
+		return http.Header{"Authorization": {"Bearer " + token}}
+	}
+
+	t.Run("Given an allowlist, when a listed service account calls, assert that it is authenticated", func(t *testing.T) {
+		client := review("system:serviceaccount:mainloop:mainloop", "listed-uid")
+		p := authimpl.NewServiceAccountProvider(authimpl.ServiceAccountOnlyAuthenticator{}, client.AuthenticationV1().TokenReviews(), "cluster", "system:serviceaccount:mainloop:mainloop")
+		session, err := p.Authenticate(t.Context(), headers("system:serviceaccount:mainloop:mainloop"), nil)
+		require.NoError(t, err)
+		require.Equal(t, auth.PrincipalID("kubernetes:cluster", "listed-uid"), session.Principal().ID)
+	})
+
+	t.Run("Given an allowlist, when a verified but unlisted service account calls, assert that it is rejected on every attempt", func(t *testing.T) {
+		client := review("system:serviceaccount:other:caller", "other-uid")
+		p := authimpl.NewServiceAccountProvider(authimpl.ServiceAccountOnlyAuthenticator{}, client.AuthenticationV1().TokenReviews(), "cluster", "system:serviceaccount:mainloop:mainloop")
+		for range 2 {
+			// The second attempt reads the cached review; the allowlist still applies.
+			_, err := p.Authenticate(t.Context(), headers("system:serviceaccount:other:caller"), nil)
+			require.ErrorIs(t, err, authimpl.ErrUnauthenticated)
+		}
+	})
+
+	t.Run("Given a token whose claimed subject is listed, when the cluster verifies a different service account, assert that it is rejected", func(t *testing.T) {
+		client := review("system:serviceaccount:other:caller", "other-uid")
+		p := authimpl.NewServiceAccountProvider(authimpl.ServiceAccountOnlyAuthenticator{}, client.AuthenticationV1().TokenReviews(), "cluster", "system:serviceaccount:mainloop:mainloop")
+		_, err := p.Authenticate(t.Context(), headers("system:serviceaccount:mainloop:mainloop"), nil)
+		require.ErrorIs(t, err, authimpl.ErrUnauthenticated)
+	})
+}
+
+func TestServiceAccountOnlyModeRejectsUserCredentials(t *testing.T) {
+	client := fake.NewClientset()
+	p := authimpl.NewServiceAccountProvider(authimpl.ServiceAccountOnlyAuthenticator{}, client.AuthenticationV1().TokenReviews(), "cluster")
+	for name, headers := range map[string]http.Header{
+		"no credential":   {},
+		"user id header":  {"X-User-Id": {"admin@kagent.dev"}},
+		"user bearer JWT": {"Authorization": {"Bearer " + createTestJWT(map[string]any{"sub": "alice", "iss": "https://idp.example"})}},
+		"opaque bearer":   {"Authorization": {"Bearer not-a-jwt"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := p.Authenticate(t.Context(), headers, nil)
+			require.ErrorIs(t, err, authimpl.ErrUnauthenticated)
+		})
+	}
+	require.Empty(t, client.Actions(), "user credentials must not reach TokenReview")
+}

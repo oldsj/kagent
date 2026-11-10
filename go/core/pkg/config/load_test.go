@@ -80,6 +80,31 @@ func TestControllerConfig(t *testing.T) {
 	}
 }
 
+func TestServiceAccountAuthentication(t *testing.T) {
+	for _, tc := range []struct {
+		name, input, wantErr string
+	}{
+		{name: "service-account mode with a verifier", input: "server: {auth: {mode: service-account, serviceAccount: {authority: cluster, allowedSubjects: ['system:serviceaccount:mainloop:mainloop']}}}"},
+		{name: "allowlist beside a user mode", input: "server: {auth: {mode: trusted-proxy, serviceAccount: {authority: cluster, allowedSubjects: ['system:serviceaccount:mainloop:mainloop']}}}"},
+		{name: "service-account mode without a verifier", input: "server: {auth: {mode: service-account}}", wantErr: "service_account is required"},
+		{name: "subject that is not a service account", input: "server: {auth: {mode: service-account, serviceAccount: {authority: cluster, allowedSubjects: ['alice']}}}", wantErr: "allowed_subjects"},
+		{name: "duplicate subject", input: "server: {auth: {mode: service-account, serviceAccount: {authority: cluster, allowedSubjects: ['system:serviceaccount:a:b', 'system:serviceaccount:a:b']}}}", wantErr: "allowed_subjects"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &configv1.ControllerConfig{}
+			require.NoError(t, config.Decode([]byte(tc.input), cfg))
+			config.DefaultController(cfg)
+			setLogins(cfg)
+			err := config.Validate(cfg)
+			if tc.wantErr != "" {
+				require.ErrorContains(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestDatabaseSkipMigrations(t *testing.T) {
 	for _, tc := range []struct {
 		name, input string

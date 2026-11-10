@@ -21,12 +21,39 @@ type ServiceAccountProvider struct {
 	users     auth.AuthProvider
 	reviews   typedauth.TokenReviewInterface
 	authority string
-	verified  *lru.Cache
-	lookups   singleflight.Group
+	// allowed is nil when every verified service account may call.
+	allowed  map[string]struct{}
+	verified *lru.Cache
+	lookups  singleflight.Group
 }
 
-func NewServiceAccountProvider(users auth.AuthProvider, reviews typedauth.TokenReviewInterface, authority string) *ServiceAccountProvider {
-	return &ServiceAccountProvider{users: users, reviews: reviews, authority: authority, verified: lru.New(tokenReviewCacheSize)}
+// NewServiceAccountProvider verifies service-account callers and passes every
+// other credential to users. A non-empty allowedSubjects admits only those
+// verified usernames (system:serviceaccount:<namespace>:<name>).
+func NewServiceAccountProvider(users auth.AuthProvider, reviews typedauth.TokenReviewInterface, authority string, allowedSubjects ...string) *ServiceAccountProvider {
+	var allowed map[string]struct{}
+	if len(allowedSubjects) != 0 {
+		allowed = make(map[string]struct{}, len(allowedSubjects))
+		for _, subject := range allowedSubjects {
+			allowed[subject] = struct{}{}
+		}
+	}
+	return &ServiceAccountProvider{users: users, reviews: reviews, authority: authority, allowed: allowed, verified: lru.New(tokenReviewCacheSize)}
+}
+
+// ServiceAccountOnlyAuthenticator is the user provider for service-account
+// mode: no user credential is accepted, so only callers the service-account
+// and runtime Actor verifiers establish can authenticate.
+type ServiceAccountOnlyAuthenticator struct{}
+
+var _ auth.AuthProvider = ServiceAccountOnlyAuthenticator{}
+
+func (ServiceAccountOnlyAuthenticator) Authenticate(context.Context, http.Header, url.Values) (auth.Session, error) {
+	return nil, ErrUnauthenticated
+}
+
+func (ServiceAccountOnlyAuthenticator) UpstreamAuth(r *http.Request, session auth.Session, _ string) error {
+	return auth.ForwardCredential(r, session)
 }
 
 func (p *ServiceAccountProvider) Authenticate(ctx context.Context, headers http.Header, query url.Values) (auth.Session, error) {
