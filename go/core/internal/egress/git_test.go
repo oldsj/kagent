@@ -37,6 +37,19 @@ func TestFilterGitRestricted(t *testing.T) {
 		require.Equal(t, original, grants, "inputs are not modified")
 	})
 
+	t.Run("Given wildcard grants over any Git instance's proxy listeners, when they are filtered, assert that they are dropped", func(t *testing.T) {
+		kept, dropped := egress.FilterGitRestricted(egress.Access{Destinations: []string{
+			"http://*.mainloop.svc.cluster.local:80",
+			"http://*.mainloop-dev.svc.cluster.local:80",
+			"http://*.svc.cluster.local:80",
+			"http://mainloop-git-read.mainloop-dev.svc.cluster.local:80",
+			"http://*.mainloop-mcp.mainloop.svc.cluster.local:80",
+			"https://*.example.com:443",
+		}})
+		require.Equal(t, []string{"http://*.mainloop-mcp.mainloop.svc.cluster.local:80", "https://*.example.com:443"}, kept.Destinations)
+		require.Len(t, dropped, 4)
+	})
+
 	t.Run("Given a grant origin that cannot be parsed, when it is filtered, assert that it is dropped rather than passed through", func(t *testing.T) {
 		kept, dropped := egress.FilterGitRestricted(egress.Access{Destinations: []string{"://bad", "https://ok.example.com:443"}})
 		require.Equal(t, []string{"https://ok.example.com:443"}, kept.Destinations)

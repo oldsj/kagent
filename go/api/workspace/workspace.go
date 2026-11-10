@@ -66,7 +66,9 @@ func ParseGitProxyOrigin(origin string, read bool) (namespace string, ok bool) {
 		kind = "read"
 	}
 	prefix, suffix := "http://mainloop-git-"+kind+".", ".svc.cluster.local"
-	if !strings.HasPrefix(origin, prefix) || !strings.HasSuffix(origin, suffix) {
+	// The length check keeps an origin whose prefix and suffix overlap, such as
+	// http://mainloop-git-read.svc.cluster.local, from slicing out of range.
+	if len(origin) <= len(prefix)+len(suffix) || !strings.HasPrefix(origin, prefix) || !strings.HasSuffix(origin, suffix) {
 		return "", false
 	}
 	namespace = origin[len(prefix) : len(origin)-len(suffix)]
@@ -74,6 +76,16 @@ func ParseGitProxyOrigin(origin string, read bool) (namespace string, ok bool) {
 		return "", false
 	}
 	return namespace, true
+}
+
+// CoversGitProxyHost reports whether a leftmost-label wildcard over suffix (as
+// in *.suffix) would match some Mainloop Git proxy host of any namespace.
+func CoversGitProxyHost(suffix string) bool {
+	if IsGitProxyHost("mainloop-git-read." + suffix) {
+		return true
+	}
+	const proxyDomain = "svc.cluster.local"
+	return suffix == proxyDomain || strings.HasSuffix(proxyDomain, "."+suffix)
 }
 
 // IsGitProxyHost reports whether a normalized hostname has the canonical shape

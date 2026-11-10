@@ -156,6 +156,9 @@ func TestParseGitProxyOrigin(t *testing.T) {
 		{"http://mainloop-git-read.Mainloop.svc.cluster.local", true, "", false},
 		{"https://mainloop-git-read.mainloop.svc.cluster.local", true, "", false},
 		{ReadProxyOrigin + "/", true, "", false},
+		{"http://mainloop-git-read.svc.cluster.local", true, "", false},
+		{"http://mainloop-git-push.svc.cluster.local", false, "", false},
+		{"http://mainloop-git-read..svc.cluster.local", true, "", false},
 	} {
 		t.Run(tc.origin, func(t *testing.T) {
 			ns, ok := ParseGitProxyOrigin(tc.origin, tc.read)
@@ -210,5 +213,23 @@ func TestKnownGitInstanceSecretPatternsAreDisjoint(t *testing.T) {
 func TestMCPInstanceOrigin(t *testing.T) {
 	if got := MCPInstanceOrigin("mainloop-dev"); got != "http://mainloop-mcp.mainloop-dev.svc.cluster.local" {
 		t.Fatalf("MCPInstanceOrigin = %q", got)
+	}
+}
+
+func TestCoversGitProxyHost(t *testing.T) {
+	for suffix, want := range map[string]bool{
+		"mainloop.svc.cluster.local":              true,
+		"mainloop-dev.svc.cluster.local":          true,
+		"other.svc.cluster.local":                 true,
+		"svc.cluster.local":                       true,
+		"cluster.local":                           true,
+		"local":                                   true,
+		"mainloop-mcp.mainloop.svc.cluster.local": false,
+		"example.com":                             false,
+		"cluster.example":                         false,
+	} {
+		if got := CoversGitProxyHost(suffix); got != want {
+			t.Errorf("CoversGitProxyHost(%q) = %v, want %v", suffix, got, want)
+		}
 	}
 }
