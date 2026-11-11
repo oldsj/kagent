@@ -106,7 +106,15 @@ requires `expected_head_task_id`, the terminal task the caller intends to captur
 The store checks that boundary atomically. `FailedPrecondition` includes a
 `google.rpc.ErrorInfo` in domain `kagent.dev`: `KAGENT_CHECKPOINT_SNAPSHOT_PENDING`
 permits retry with the same request and task IDs; `KAGENT_CHECKPOINT_CONVERSATION_ADVANCED`
-requires refreshing the conversation and choosing a new boundary. The UI retries
+requires refreshing the conversation and choosing a new boundary.
+`KAGENT_CHECKPOINT_RUNTIME_NOT_SUSPENDED` means the Actor was running, so there
+was no stable snapshot to copy; `KAGENT_CHECKPOINT_FAILED` means the snapshot copy
+failed and was cleaned up. Both record the request as failed: retrying the same
+request ID returns `KAGENT_CHECKPOINT_FAILED` with the original message, so a new
+attempt needs a new request ID. Only `READY` checkpoints are acknowledged; a
+replay never returns a checkpoint that Get, List, or Fork would report missing.
+`Unavailable` is reserved for attempts left `CREATING` (tag cleanup or
+finalization failed), which the same request ID resumes. The UI retries
 only the pending reason, for at most 30 seconds. A checkpoint reservation
 blocks both new turns and idle lifecycle work while the snapshot is retained.
 

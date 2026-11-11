@@ -46,6 +46,20 @@ func TestComposeRevision(t *testing.T) {
 		}
 	})
 
+	t.Run("Given a revision sized by its Harness, when it is composed with a development image, assert that the composed Session keeps the Harness's CPU and memory limits", func(t *testing.T) {
+		base := claudeBaseRevision(t)
+		base.CPU, base.Memory = "4", "8Gi"
+
+		composed, err := ComposeRevision(base, claudeSelection())
+		if err != nil {
+			t.Fatalf("ComposeRevision() error = %v", err)
+		}
+
+		if composed.CPU != "4" || composed.Memory != "8Gi" {
+			t.Errorf("composed limits = %s CPU, %s memory; want the Harness's 4 CPU and 8Gi", composed.CPU, composed.Memory)
+		}
+	})
+
 	t.Run("Given a single-image revision, when its digest is compared with its composed variant, assert that the identities differ and the base digest ignores the composition fields", func(t *testing.T) {
 		base := claudeBaseRevision(t)
 		before, err := base.Digest()
