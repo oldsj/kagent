@@ -305,7 +305,7 @@ func (d *ProcessDriver) run(ctx context.Context, turn runtime.Turn, sink runtime
 		return runtime.Outcome{}, errors.Join(err, cleanupErr)
 	}
 	if err == nil && session.deferred != nil {
-		return d.parkDeferred(turn, session.sessionID, session.deferred)
+		return d.parkDeferred(turn, session.sessionID, session.deferred, d.run)
 	}
 	return outcome, err
 }

@@ -91,9 +91,15 @@ func (s *readinessServer) SettleTask(ctx context.Context, _ *runtimev1.TaskStore
 
 func newReadinessStore(t *testing.T, api *readinessServer, available *atomic.Bool, interceptor grpc.UnaryClientInterceptor) *Store {
 	t.Helper()
+	return newTaskStoreServer(t, api, api, available, interceptor)
+}
+
+// newTaskStoreServer serves service over bufconn behind proxy's interceptor.
+func newTaskStoreServer(t *testing.T, service runtimev1.TaskStoreServiceServer, proxy *readinessServer, available *atomic.Bool, interceptor grpc.UnaryClientInterceptor) *Store {
+	t.Helper()
 	listener := bufconn.Listen(1 << 20)
-	server := grpc.NewServer(grpc.UnaryInterceptor(api.proxy))
-	runtimev1.RegisterTaskStoreServiceServer(server, api)
+	server := grpc.NewServer(grpc.UnaryInterceptor(proxy.proxy))
+	runtimev1.RegisterTaskStoreServiceServer(server, service)
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(func() {
 		server.Stop()

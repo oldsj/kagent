@@ -256,7 +256,6 @@ func TestSDKSpecProfiles(t *testing.T) {
 	t.Cleanup(func() { _ = broker.Close() })
 	d := NewProcessDriver(ProcessConfig{
 		Executable: "sh", Workspace: "/data/workspace", Model: "opus", MCPConfigPath: mcp,
-		// The process driver's settings file carries deferral hooks the bridge must not load.
 		SettingsPath: filepath.Join(dir, "settings.json"), ApprovalBroker: broker, AppendSystemPromptFile: prompt,
 		PluginDirs: []string{"/p"}, DisallowedTools: []string{"Monitor"}, AgentsJSON: `{"a":{"description":"d","prompt":"p"}}`,
 		Environment: []string{"CLAUDE_CONFIG_DIR=/data/claude", "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1", "PATH=/usr/bin:/bin"},
@@ -268,7 +267,16 @@ func TestSDKSpecProfiles(t *testing.T) {
 	if _, ok := managed.MCPServers["kagent_hitl"]; ok || managed.MCPServers["tools"] == nil {
 		t.Fatalf("mcp = %v, want tools without the loopback approval server", managed.MCPServers)
 	}
-	if managed.Settings != `{"disableAllHooks":true,"permissions":{"ask":["mcp__tools__*"]}}` || !managed.StrictMCPConfig || managed.PermissionMode != "bypassPermissions" ||
+	// Both profiles carry the broker's deferral hooks and ask rules, as the
+	// process driver's settings file does.
+	wantSettings, err := broker.SettingsJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(wantSettings), `"PreToolUse"`) || !strings.Contains(string(wantSettings), `"ask":["AskUserQuestion","mcp__tools__*"]`) {
+		t.Fatalf("broker settings = %s, want its hooks and ask rules", wantSettings)
+	}
+	if managed.Settings != string(wantSettings) || !managed.StrictMCPConfig || managed.PermissionMode != "bypassPermissions" ||
 		strings.Join(managed.SettingSources, ",") != "user" || managed.Env["CLAUDE_CONFIG_DIR"] != "/data/claude" ||
 		managed.Env["CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS"] != "1" || !filepath.IsAbs(managed.Executable) || managed.AppendSystemPrompt != "be brief" {
 		t.Fatalf("managed = %+v", managed)
@@ -281,7 +289,15 @@ func TestSDKSpecProfiles(t *testing.T) {
 		strings.Join(user.SettingSources, ",") != "user,project" || user.Env["CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST"] != "1" {
 		t.Fatalf("user = %+v", user)
 	}
-	if user.Settings != `{"permissions":{"ask":["mcp__tools__*"]}}` {
-		t.Fatalf("user settings = %s, want ask rules without the hook block", user.Settings)
+	if user.Settings != string(wantSettings) {
+		t.Fatalf("user settings = %s, want the same hooks and ask rules beside the user's own", user.Settings)
+	}
+	// Without an approval boundary the managed profile runs no hook at all.
+	bare := NewProcessDriver(ProcessConfig{Executable: "sh", Workspace: "/data/workspace"})
+	for profile, want := range map[sdkrunner.Profile]string{sdkrunner.ProfileManaged: `{"disableAllHooks":true}`, sdkrunner.ProfileUser: `{}`} {
+		spec, err := bare.SDKSpec(profile, "/data/sdk-runner/home")
+		if err != nil || spec.Settings != want {
+			t.Fatalf("%s settings without a broker = %q, %v; want %s", profile, spec.Settings, err, want)
+		}
 	}
 }

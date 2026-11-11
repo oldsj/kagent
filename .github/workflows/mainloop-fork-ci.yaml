@@ -2,6 +2,8 @@ name: Mainloop Fork Fixture CI
 
 on:
   pull_request:
+    # edited: a stacked PR retargeted here after its base merges gets CI.
+    types: [opened, synchronize, reopened, edited]
     branches: [mainloop-substrate-1-0]
   push:
     branches: [mainloop-substrate-1-0]
@@ -50,7 +52,11 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: go/go.mod
-          cache: false
+          # Restores the base branch's Go module and build cache, keyed on go.sum. Only this
+          # job saves it: the short entrypoint job would save a near-empty cache first
+          # under the same key.
+          cache: true
+          cache-dependency-path: go/go.sum
       # The base branch carries upstream plus fork CI only. Each fork feature
       # adds its own packages to these steps in the pull request that ports it.
       - name: Record bounded offline scope

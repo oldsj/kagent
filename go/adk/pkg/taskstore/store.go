@@ -275,6 +275,13 @@ func sdkError(err error) error {
 	}
 }
 
+// ServesSession reports whether this runtime has a Session identity. It is
+// false while a golden snapshot is being made.
+func (s *Store) ServesSession() bool {
+	_, err := s.sessionID()
+	return err == nil
+}
+
 // ReportActivity tells the control plane whether anything uses this runtime
 // outside A2A tasks, and returns when an active runtime should report again.
 // It makes one attempt; activity.Reporter owns renewal and retries.
@@ -343,4 +350,26 @@ func (s *Store) CompleteWorkspacePreparation(ctx context.Context, request *runti
 		_, err := s.client.TaskStoreService().CompleteWorkspacePreparation(ctx, request)
 		return err
 	})
+}
+
+// SessionID returns the Session this runtime serves, from its local identity.
+func (s *Store) SessionID() (string, error) { return s.sessionID() }
+
+// FreshConversation reports whether the Session is a fork that must discard the
+// native agent conversation carried in its restored data.
+func (s *Store) FreshConversation(ctx context.Context) (bool, error) {
+	id, err := s.sessionID()
+	if err != nil {
+		return false, err
+	}
+	var response *runtimev1.TaskStoreServiceGetWorkspaceResponse
+	err = s.retry(ctx, func(ctx context.Context) error {
+		var err error
+		response, err = s.client.TaskStoreService().GetWorkspace(ctx, &runtimev1.TaskStoreServiceGetWorkspaceRequest{SessionId: id})
+		return err
+	})
+	if err != nil {
+		return false, err
+	}
+	return response.GetFreshConversation(), nil
 }
