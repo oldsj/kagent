@@ -66,11 +66,13 @@ type ShareListResult struct {
 }
 
 type Service struct {
-	store        store
-	authorizer   auth.Authorizer
-	workflow     sessionWorkflow
-	shareMaxTTL  time.Duration
-	createPolicy CreatePolicy
+	store      store
+	authorizer auth.Authorizer
+	workflow   sessionWorkflow
+	// preparationFailures rate-limits refusal logs per Session generation.
+	preparationFailures preparationFailureLog
+	shareMaxTTL         time.Duration
+	createPolicy        CreatePolicy
 
 	environmentPreparer EnvironmentPreparer
 }
@@ -209,6 +211,15 @@ func (s *Service) Get(ctx context.Context, id string) (*apiv1.Session, error) {
 	}
 	if observer, ok := s.workflow.(associationObserver); ok {
 		session.RuntimeAssociation = observer.RuntimeAssociation(ctx, session)
+	}
+	// Only a Session with a workspace in a selected development environment can
+	// be prepared, so other Sessions skip the read.
+	if store, ok := s.store.(preparationStore); ok && session.GetWorkspace() != nil && session.GetDevelopmentEnvironment() != nil {
+		receipt, err := store.GetWorkspacePreparationReceipt(ctx, session.GetId())
+		if err != nil {
+			return nil, serviceerrors.NewInternal("Failed to read workspace preparation", err)
+		}
+		session.WorkspacePreparation = receipt
 	}
 	return session, nil
 }

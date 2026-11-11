@@ -17,7 +17,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file kagent/api/v1/sessions.proto.
  */
 export const file_kagent_api_v1_sessions: GenFile = /*@__PURE__*/
-  fileDesc("ChxrYWdlbnQvYXBpL3YxL3Nlc3Npb25zLnByb3RvEg1rYWdlbnQuYXBpLnYxIioKB0ZhaWx1cmUSDgoGcmVhc29uGAEgASgJEg8KB21lc3NhZ2UYAiABKAki2gUKB1Nlc3Npb24SCgoCaWQYASABKAkSDwoHY3JlYXRvchgCIAEoCRItCgVhZ2VudBgPIAEoCzIeLmthZ2VudC5hcGkudjEuQWdlbnRQcm92ZW5hbmNlEhkKEXByZXBhcmVkX3JldmlzaW9uGAUgASgJEhUKDWEyYV9hdXRob3JpdHkYBiABKAkSKgoFc3RhdGUYByABKA4yGy5rYWdlbnQuYXBpLnYxLlJ1bnRpbWVTdGF0ZRIyCglvcGVyYXRpb24YCCABKA4yHy5rYWdlbnQuYXBpLnYxLlJ1bnRpbWVPcGVyYXRpb24SJwoHZmFpbHVyZRgJIAEoCzIWLmthZ2VudC5hcGkudjEuRmFpbHVyZRIuCgpjcmVhdGVkX2F0GAogASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgp1cGRhdGVkX2F0GAsgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIMCgRuYW1lGA0gASgJEhIKCmNvbnRleHRfaWQYDiABKAkSKwoJd29ya3NwYWNlGBAgASgLMhgua2FnZW50LmFwaS52MS5Xb3Jrc3BhY2USNQoLY3JlZGVudGlhbHMYESADKAsyIC5rYWdlbnQuYXBpLnYxLlNlc3Npb25DcmVkZW50aWFsEkYKF2RldmVsb3BtZW50X2Vudmlyb25tZW50GBIgASgLMiUua2FnZW50LmFwaS52MS5EZXZlbG9wbWVudEVudmlyb25tZW50Ej4KE3J1bnRpbWVfY29tcG9zaXRpb24YEyABKAsyIS5rYWdlbnQuYXBpLnYxLlJ1bnRpbWVDb21wb3NpdGlvbhI+ChNydW50aW1lX2Fzc29jaWF0aW9uGBQgASgLMiEua2FnZW50LmFwaS52MS5SdW50aW1lQXNzb2NpYXRpb24SGgoSZnJlc2hfY29udmVyc2F0aW9uGBYgASgIIosBChJSdW50aW1lQXNzb2NpYXRpb24SFQoNZ2VuZXJhdGlvbl9pZBgBIAEoCRIQCghhdGVzcGFjZRgCIAEoCRISCgphY3Rvcl9uYW1lGAMgASgJEhEKCWFjdG9yX3VpZBgEIAEoCRINCgVwaGFzZRgFIAEoCRIWCg5jdXJyZW50X2FjdGl2ZRgGIAEoCCKeAQoSU2VjcmV0S2V5UmVmZXJlbmNlElwKBG5hbWUYASABKAlCTrpIS3JJEAEY/QEyQl5bYS16MC05XShbLWEtejAtOV0qW2EtejAtOV0pPyhbLl1bYS16MC05XShbLWEtejAtOV0qW2EtejAtOV0pPykqJBIqCgNrZXkYAiABKAlCHbpIGnIYEAEY/QEyEV5bQS1aYS16MC05Ll8tXSskItABChFTZXNzaW9uQ3JlZGVudGlhbBJBCgZvcmlnaW4YASABKAlCMbpILnIsGIAQMideaHR0cHM/Oi8vW0EtWmEtejAtOS4tXSsoOlswLTldezEsNX0pPyQSOQoGaGVhZGVyGAIgASgJQim6SCZyJBABGIACMh1eWyEjJCUmJyorLl5fYHx+MC05QS1aYS16LV0rJBI9CgpzZWNyZXRfcmVmGAMgASgLMiEua2FnZW50LmFwaS52MS5TZWNyZXRLZXlSZWZlcmVuY2VCBrpIA8gBASJNCg9BZ2VudFByb3ZlbmFuY2USLQoDcmVmGAEgASgLMiAua2FnZW50LmFwaS52MS5SZXNvdXJjZVJlZmVyZW5jZRILCgN1aWQYAiABKAki8gIKFENyZWF0ZVNlc3Npb25SZXF1ZXN0EjcKBWFnZW50GAUgASgLMiAua2FnZW50LmFwaS52MS5SZXNvdXJjZVJlZmVyZW5jZUIGukgDyAEBEh4KCnJlcXVlc3RfaWQYAyABKAlCCrpIB3IFEAEYgAESSwoEbmFtZRgEIAEoCUI9ukg6cjgYyAEyM14oPzokfFteXHB7Wn1ccHtDY31dKD86W15ccHtDY31dKlteXHB7Wn1ccHtDY31dKT8pJBIrCgl3b3Jrc3BhY2UYBiABKAsyGC5rYWdlbnQuYXBpLnYxLldvcmtzcGFjZRI/CgtjcmVkZW50aWFscxgHIAMoCzIgLmthZ2VudC5hcGkudjEuU2Vzc2lvbkNyZWRlbnRpYWxCCLpIBZIBAhAEEkYKF2RldmVsb3BtZW50X2Vudmlyb25tZW50GAggASgLMiUua2FnZW50LmFwaS52MS5EZXZlbG9wbWVudEVudmlyb25tZW50IsoBChZEZXZlbG9wbWVudEVudmlyb25tZW50EksKBWltYWdlGAEgASgJQjy6SDlyNxiABDIyXltBLVphLXowLTldW0EtWmEtejAtOS4vXzotXSpAc2hhMjU2OlthLWYwLTldezY0fSQSMQoIcGxhdGZvcm0YAiABKAlCH7pIHHIaUgtsaW51eC9hbWQ2NFILbGludXgvYXJtNjQSMAoPcG9saWN5X2lkZW50aXR5GAMgASgJQhe6SBRyEhABGIACMgteXFMoLipcUyk/JCJiChJSdW50aW1lQ29tcG9zaXRpb24SFQoNcGF5bG9hZF9pbWFnZRgBIAEoCRIQCghwcm92aWRlchgCIAEoCRIOCgZzY2hlbWEYAyABKA0SEwoLY2xpX3ZlcnNpb24YBCABKAkiQAoVQ3JlYXRlU2Vzc2lvblJlc3BvbnNlEicKB3Nlc3Npb24YASABKAsyFi5rYWdlbnQuYXBpLnYxLlNlc3Npb24iMQoRR2V0U2Vzc2lvblJlcXVlc3QSHAoKc2Vzc2lvbl9pZBgBIAEoCUIIukgFcgOwAQEiPQoSR2V0U2Vzc2lvblJlc3BvbnNlEicKB3Nlc3Npb24YASABKAsyFi5rYWdlbnQuYXBpLnYxLlNlc3Npb24ihgEKE0xpc3RTZXNzaW9uc1JlcXVlc3QSFAoMYWxsX2NyZWF0b3JzGAIgASgIEigKBHBhZ2UYAyABKAsyGi5rYWdlbnQuYXBpLnYxLlBhZ2VSZXF1ZXN0Ei8KBWFnZW50GAYgASgLMiAua2FnZW50LmFwaS52MS5SZXNvdXJjZVJlZmVyZW5jZSJrChRMaXN0U2Vzc2lvbnNSZXNwb25zZRIoCghzZXNzaW9ucxgBIAMoCzIWLmthZ2VudC5hcGkudjEuU2Vzc2lvbhIpCgRwYWdlGAIgASgLMhsua2FnZW50LmFwaS52MS5QYWdlUmVzcG9uc2UihQEKGFVwZGF0ZVNlc3Npb25OYW1lUmVxdWVzdBIcCgpzZXNzaW9uX2lkGAEgASgJQgi6SAVyA7ABARJLCgRuYW1lGAIgASgJQj26SDpyOBjIATIzXig/OiR8W15ccHtafVxwe0NjfV0oPzpbXlxwe0NjfV0qW15ccHtafVxwe0NjfV0pPykkIkQKGVVwZGF0ZVNlc3Npb25OYW1lUmVzcG9uc2USJwoHc2Vzc2lvbhgBIAEoCzIWLmthZ2VudC5hcGkudjEuU2Vzc2lvbiI0ChRSZXZlcnRTZXNzaW9uUmVxdWVzdBIcCgpzZXNzaW9uX2lkGAEgASgJQgi6SAVyA7ABASJAChVSZXZlcnRTZXNzaW9uUmVzcG9uc2USJwoHc2Vzc2lvbhgBIAEoCzIWLmthZ2VudC5hcGkudjEuU2Vzc2lvbiJDChREZWxldGVTZXNzaW9uUmVxdWVzdBIcCgpzZXNzaW9uX2lkGAEgASgJQgi6SAVyA7ABARINCgVmb3JjZRgCIAEoCCJAChVEZWxldGVTZXNzaW9uUmVzcG9uc2USJwoHc2Vzc2lvbhgBIAEoCzIWLmthZ2VudC5hcGkudjEuU2Vzc2lvbiKOAQoMU2Vzc2lvblNoYXJlEgoKAmlkGAEgASgJEhIKCnNlc3Npb25faWQYAiABKAkSLgoKY3JlYXRlZF9hdBgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLgoKZXhwaXJlc19hdBgEIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAiawoZQ3JlYXRlU2Vzc2lvblNoYXJlUmVxdWVzdBIcCgpzZXNzaW9uX2lkGAEgASgJQgi6SAVyA7ABARIwCgN0dGwYAiABKAsyGS5nb29nbGUucHJvdG9idWYuRHVyYXRpb25CCLpIBaoBAioAIlcKGkNyZWF0ZVNlc3Npb25TaGFyZVJlc3BvbnNlEioKBXNoYXJlGAEgASgLMhsua2FnZW50LmFwaS52MS5TZXNzaW9uU2hhcmUSDQoFdG9rZW4YAiABKAkiYgoYTGlzdFNlc3Npb25TaGFyZXNSZXF1ZXN0EhwKCnNlc3Npb25faWQYASABKAlCCLpIBXIDsAEBEigKBHBhZ2UYAiABKAsyGi5rYWdlbnQuYXBpLnYxLlBhZ2VSZXF1ZXN0InMKGUxpc3RTZXNzaW9uU2hhcmVzUmVzcG9uc2USKwoGc2hhcmVzGAEgAygLMhsua2FnZW50LmFwaS52MS5TZXNzaW9uU2hhcmUSKQoEcGFnZRgCIAEoCzIbLmthZ2VudC5hcGkudjEuUGFnZVJlc3BvbnNlIjcKGVJldm9rZVNlc3Npb25TaGFyZVJlcXVlc3QSGgoIc2hhcmVfaWQYASABKAlCCLpIBXIDsAEBIhwKGlJldm9rZVNlc3Npb25TaGFyZVJlc3BvbnNlMvYGCg5TZXNzaW9uU2VydmljZRJaCg1DcmVhdGVTZXNzaW9uEiMua2FnZW50LmFwaS52MS5DcmVhdGVTZXNzaW9uUmVxdWVzdBokLmthZ2VudC5hcGkudjEuQ3JlYXRlU2Vzc2lvblJlc3BvbnNlElEKCkdldFNlc3Npb24SIC5rYWdlbnQuYXBpLnYxLkdldFNlc3Npb25SZXF1ZXN0GiEua2FnZW50LmFwaS52MS5HZXRTZXNzaW9uUmVzcG9uc2USVwoMTGlzdFNlc3Npb25zEiIua2FnZW50LmFwaS52MS5MaXN0U2Vzc2lvbnNSZXF1ZXN0GiMua2FnZW50LmFwaS52MS5MaXN0U2Vzc2lvbnNSZXNwb25zZRJmChFVcGRhdGVTZXNzaW9uTmFtZRInLmthZ2VudC5hcGkudjEuVXBkYXRlU2Vzc2lvbk5hbWVSZXF1ZXN0Gigua2FnZW50LmFwaS52MS5VcGRhdGVTZXNzaW9uTmFtZVJlc3BvbnNlEloKDVJldmVydFNlc3Npb24SIy5rYWdlbnQuYXBpLnYxLlJldmVydFNlc3Npb25SZXF1ZXN0GiQua2FnZW50LmFwaS52MS5SZXZlcnRTZXNzaW9uUmVzcG9uc2USWgoNRGVsZXRlU2Vzc2lvbhIjLmthZ2VudC5hcGkudjEuRGVsZXRlU2Vzc2lvblJlcXVlc3QaJC5rYWdlbnQuYXBpLnYxLkRlbGV0ZVNlc3Npb25SZXNwb25zZRJpChJDcmVhdGVTZXNzaW9uU2hhcmUSKC5rYWdlbnQuYXBpLnYxLkNyZWF0ZVNlc3Npb25TaGFyZVJlcXVlc3QaKS5rYWdlbnQuYXBpLnYxLkNyZWF0ZVNlc3Npb25TaGFyZVJlc3BvbnNlEmYKEUxpc3RTZXNzaW9uU2hhcmVzEicua2FnZW50LmFwaS52MS5MaXN0U2Vzc2lvblNoYXJlc1JlcXVlc3QaKC5rYWdlbnQuYXBpLnYxLkxpc3RTZXNzaW9uU2hhcmVzUmVzcG9uc2USaQoSUmV2b2tlU2Vzc2lvblNoYXJlEigua2FnZW50LmFwaS52MS5SZXZva2VTZXNzaW9uU2hhcmVSZXF1ZXN0Gikua2FnZW50LmFwaS52MS5SZXZva2VTZXNzaW9uU2hhcmVSZXNwb25zZUI9WjtnaXRodWIuY29tL2thZ2VudC1kZXYva2FnZW50L2dvL2FwaS9nZW4va2FnZW50L2FwaS92MTthcGl2MWIGcHJvdG8z", [file_buf_validate_validate, file_google_protobuf_duration, file_google_protobuf_timestamp, file_kagent_api_v1_common, file_kagent_api_v1_runtime]);
+  fileDesc("ChxrYWdlbnQvYXBpL3YxL3Nlc3Npb25zLnByb3RvEg1rYWdlbnQuYXBpLnYxIioKB0ZhaWx1cmUSDgoGcmVhc29uGAEgASgJEg8KB21lc3NhZ2UYAiABKAkipQYKB1Nlc3Npb24SCgoCaWQYASABKAkSDwoHY3JlYXRvchgCIAEoCRItCgVhZ2VudBgPIAEoCzIeLmthZ2VudC5hcGkudjEuQWdlbnRQcm92ZW5hbmNlEhkKEXByZXBhcmVkX3JldmlzaW9uGAUgASgJEhUKDWEyYV9hdXRob3JpdHkYBiABKAkSKgoFc3RhdGUYByABKA4yGy5rYWdlbnQuYXBpLnYxLlJ1bnRpbWVTdGF0ZRIyCglvcGVyYXRpb24YCCABKA4yHy5rYWdlbnQuYXBpLnYxLlJ1bnRpbWVPcGVyYXRpb24SJwoHZmFpbHVyZRgJIAEoCzIWLmthZ2VudC5hcGkudjEuRmFpbHVyZRIuCgpjcmVhdGVkX2F0GAogASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgp1cGRhdGVkX2F0GAsgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIMCgRuYW1lGA0gASgJEhIKCmNvbnRleHRfaWQYDiABKAkSKwoJd29ya3NwYWNlGBAgASgLMhgua2FnZW50LmFwaS52MS5Xb3Jrc3BhY2USNQoLY3JlZGVudGlhbHMYESADKAsyIC5rYWdlbnQuYXBpLnYxLlNlc3Npb25DcmVkZW50aWFsEkYKF2RldmVsb3BtZW50X2Vudmlyb25tZW50GBIgASgLMiUua2FnZW50LmFwaS52MS5EZXZlbG9wbWVudEVudmlyb25tZW50Ej4KE3J1bnRpbWVfY29tcG9zaXRpb24YEyABKAsyIS5rYWdlbnQuYXBpLnYxLlJ1bnRpbWVDb21wb3NpdGlvbhI+ChNydW50aW1lX2Fzc29jaWF0aW9uGBQgASgLMiEua2FnZW50LmFwaS52MS5SdW50aW1lQXNzb2NpYXRpb24SSQoVd29ya3NwYWNlX3ByZXBhcmF0aW9uGBUgASgLMioua2FnZW50LmFwaS52MS5Xb3Jrc3BhY2VQcmVwYXJhdGlvblJlY2VpcHQSGgoSZnJlc2hfY29udmVyc2F0aW9uGBYgASgIIosBChJSdW50aW1lQXNzb2NpYXRpb24SFQoNZ2VuZXJhdGlvbl9pZBgBIAEoCRIQCghhdGVzcGFjZRgCIAEoCRISCgphY3Rvcl9uYW1lGAMgASgJEhEKCWFjdG9yX3VpZBgEIAEoCRINCgVwaGFzZRgFIAEoCRIWCg5jdXJyZW50X2FjdGl2ZRgGIAEoCCKeAQoSU2VjcmV0S2V5UmVmZXJlbmNlElwKBG5hbWUYASABKAlCTrpIS3JJEAEY/QEyQl5bYS16MC05XShbLWEtejAtOV0qW2EtejAtOV0pPyhbLl1bYS16MC05XShbLWEtejAtOV0qW2EtejAtOV0pPykqJBIqCgNrZXkYAiABKAlCHbpIGnIYEAEY/QEyEV5bQS1aYS16MC05Ll8tXSskItABChFTZXNzaW9uQ3JlZGVudGlhbBJBCgZvcmlnaW4YASABKAlCMbpILnIsGIAQMideaHR0cHM/Oi8vW0EtWmEtejAtOS4tXSsoOlswLTldezEsNX0pPyQSOQoGaGVhZGVyGAIgASgJQim6SCZyJBABGIACMh1eWyEjJCUmJyorLl5fYHx+MC05QS1aYS16LV0rJBI9CgpzZWNyZXRfcmVmGAMgASgLMiEua2FnZW50LmFwaS52MS5TZWNyZXRLZXlSZWZlcmVuY2VCBrpIA8gBASJNCg9BZ2VudFByb3ZlbmFuY2USLQoDcmVmGAEgASgLMiAua2FnZW50LmFwaS52MS5SZXNvdXJjZVJlZmVyZW5jZRILCgN1aWQYAiABKAki8gIKFENyZWF0ZVNlc3Npb25SZXF1ZXN0EjcKBWFnZW50GAUgASgLMiAua2FnZW50LmFwaS52MS5SZXNvdXJjZVJlZmVyZW5jZUIGukgDyAEBEh4KCnJlcXVlc3RfaWQYAyABKAlCCrpIB3IFEAEYgAESSwoEbmFtZRgEIAEoCUI9ukg6cjgYyAEyM14oPzokfFteXHB7Wn1ccHtDY31dKD86W15ccHtDY31dKlteXHB7Wn1ccHtDY31dKT8pJBIrCgl3b3Jrc3BhY2UYBiABKAsyGC5rYWdlbnQuYXBpLnYxLldvcmtzcGFjZRI/CgtjcmVkZW50aWFscxgHIAMoCzIgLmthZ2VudC5hcGkudjEuU2Vzc2lvbkNyZWRlbnRpYWxCCLpIBZIBAhAEEkYKF2RldmVsb3BtZW50X2Vudmlyb25tZW50GAggASgLMiUua2FnZW50LmFwaS52MS5EZXZlbG9wbWVudEVudmlyb25tZW50IsoBChZEZXZlbG9wbWVudEVudmlyb25tZW50EksKBWltYWdlGAEgASgJQjy6SDlyNxiABDIyXltBLVphLXowLTldW0EtWmEtejAtOS4vXzotXSpAc2hhMjU2OlthLWYwLTldezY0fSQSMQoIcGxhdGZvcm0YAiABKAlCH7pIHHIaUgtsaW51eC9hbWQ2NFILbGludXgvYXJtNjQSMAoPcG9saWN5X2lkZW50aXR5GAMgASgJQhe6SBRyEhABGIACMgteXFMoLipcUyk/JCJiChJSdW50aW1lQ29tcG9zaXRpb24SFQoNcGF5bG9hZF9pbWFnZRgBIAEoCRIQCghwcm92aWRlchgCIAEoCRIOCgZzY2hlbWEYAyABKA0SEwoLY2xpX3ZlcnNpb24YBCABKAkiQAoVQ3JlYXRlU2Vzc2lvblJlc3BvbnNlEicKB3Nlc3Npb24YASABKAsyFi5rYWdlbnQuYXBpLnYxLlNlc3Npb24iMQoRR2V0U2Vzc2lvblJlcXVlc3QSHAoKc2Vzc2lvbl9pZBgBIAEoCUIIukgFcgOwAQEiPQoSR2V0U2Vzc2lvblJlc3BvbnNlEicKB3Nlc3Npb24YASABKAsyFi5rYWdlbnQuYXBpLnYxLlNlc3Npb24ihgEKE0xpc3RTZXNzaW9uc1JlcXVlc3QSFAoMYWxsX2NyZWF0b3JzGAIgASgIEigKBHBhZ2UYAyABKAsyGi5rYWdlbnQuYXBpLnYxLlBhZ2VSZXF1ZXN0Ei8KBWFnZW50GAYgASgLMiAua2FnZW50LmFwaS52MS5SZXNvdXJjZVJlZmVyZW5jZSJrChRMaXN0U2Vzc2lvbnNSZXNwb25zZRIoCghzZXNzaW9ucxgBIAMoCzIWLmthZ2VudC5hcGkudjEuU2Vzc2lvbhIpCgRwYWdlGAIgASgLMhsua2FnZW50LmFwaS52MS5QYWdlUmVzcG9uc2UihQEKGFVwZGF0ZVNlc3Npb25OYW1lUmVxdWVzdBIcCgpzZXNzaW9uX2lkGAEgASgJQgi6SAVyA7ABARJLCgRuYW1lGAIgASgJQj26SDpyOBjIATIzXig/OiR8W15ccHtafVxwe0NjfV0oPzpbXlxwe0NjfV0qW15ccHtafVxwe0NjfV0pPykkIkQKGVVwZGF0ZVNlc3Npb25OYW1lUmVzcG9uc2USJwoHc2Vzc2lvbhgBIAEoCzIWLmthZ2VudC5hcGkudjEuU2Vzc2lvbiI0ChRSZXZlcnRTZXNzaW9uUmVxdWVzdBIcCgpzZXNzaW9uX2lkGAEgASgJQgi6SAVyA7ABASJAChVSZXZlcnRTZXNzaW9uUmVzcG9uc2USJwoHc2Vzc2lvbhgBIAEoCzIWLmthZ2VudC5hcGkudjEuU2Vzc2lvbiJDChREZWxldGVTZXNzaW9uUmVxdWVzdBIcCgpzZXNzaW9uX2lkGAEgASgJQgi6SAVyA7ABARINCgVmb3JjZRgCIAEoCCJAChVEZWxldGVTZXNzaW9uUmVzcG9uc2USJwoHc2Vzc2lvbhgBIAEoCzIWLmthZ2VudC5hcGkudjEuU2Vzc2lvbiKOAQoMU2Vzc2lvblNoYXJlEgoKAmlkGAEgASgJEhIKCnNlc3Npb25faWQYAiABKAkSLgoKY3JlYXRlZF9hdBgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASLgoKZXhwaXJlc19hdBgEIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAiawoZQ3JlYXRlU2Vzc2lvblNoYXJlUmVxdWVzdBIcCgpzZXNzaW9uX2lkGAEgASgJQgi6SAVyA7ABARIwCgN0dGwYAiABKAsyGS5nb29nbGUucHJvdG9idWYuRHVyYXRpb25CCLpIBaoBAioAIlcKGkNyZWF0ZVNlc3Npb25TaGFyZVJlc3BvbnNlEioKBXNoYXJlGAEgASgLMhsua2FnZW50LmFwaS52MS5TZXNzaW9uU2hhcmUSDQoFdG9rZW4YAiABKAkiYgoYTGlzdFNlc3Npb25TaGFyZXNSZXF1ZXN0EhwKCnNlc3Npb25faWQYASABKAlCCLpIBXIDsAEBEigKBHBhZ2UYAiABKAsyGi5rYWdlbnQuYXBpLnYxLlBhZ2VSZXF1ZXN0InMKGUxpc3RTZXNzaW9uU2hhcmVzUmVzcG9uc2USKwoGc2hhcmVzGAEgAygLMhsua2FnZW50LmFwaS52MS5TZXNzaW9uU2hhcmUSKQoEcGFnZRgCIAEoCzIbLmthZ2VudC5hcGkudjEuUGFnZVJlc3BvbnNlIjcKGVJldm9rZVNlc3Npb25TaGFyZVJlcXVlc3QSGgoIc2hhcmVfaWQYASABKAlCCLpIBXIDsAEBIhwKGlJldm9rZVNlc3Npb25TaGFyZVJlc3BvbnNlIt0FCh5QcmVwYXJlU2Vzc2lvbldvcmtzcGFjZVJlcXVlc3QSHAoKc2Vzc2lvbl9pZBgBIAEoCUIIukgFcgOwAQESMQoJYWN0aW9uX2lkGAIgASgJQh66SBtyGRABGIABMhJeW0EtWmEtejAtOTouXy1dKyQSJQoRY3JlYXRlX3JlcXVlc3RfaWQYAyABKAlCCrpIB3IFEAEYgAESHwoNZ2VuZXJhdGlvbl9pZBgEIAEoCUIIukgFcgOwAQESHQoJYWN0b3JfdWlkGAUgASgJQgq6SAdyBRABGIABEiUKEXByZXBhcmVkX3JldmlzaW9uGAYgASgJQgq6SAdyBRABGIABEjMKCXdvcmtzcGFjZRgHIAEoCzIYLmthZ2VudC5hcGkudjEuV29ya3NwYWNlQga6SAPIAQESTgoXZGV2ZWxvcG1lbnRfZW52aXJvbm1lbnQYCCABKAsyJS5rYWdlbnQuYXBpLnYxLkRldmVsb3BtZW50RW52aXJvbm1lbnRCBrpIA8gBARJGChNydW50aW1lX2NvbXBvc2l0aW9uGAkgASgLMiEua2FnZW50LmFwaS52MS5SdW50aW1lQ29tcG9zaXRpb25CBrpIA8gBARI2Cg1zZXR1cF9wcm9maWxlGAogASgJQh+6SBxyGlIKc3VwZXJ2aXNvclIFY2hpbGRSBWFnZW50EisKDHNldHVwX2RpZ2VzdBgLIAEoCUIVukgSchAyDl5bYS1mMC05XXs2NH0kOqkBukilARqiAQoacHJlcGFyYXRpb24uZXhhY3RfY2hlY2tvdXQSN3ByZXBhcmF0aW9uIHJlcXVpcmVzIGEgZnVsbCBjb21taXQgU0hBIGFuZCBuYW1lZCBicmFuY2gaS3RoaXMud29ya3NwYWNlLnJlZi5tYXRjaGVzKCdeW2EtZjAtOV17NDB9JCcpICYmIHRoaXMud29ya3NwYWNlLmJyYW5jaCAhPSAnJyJeCh9QcmVwYXJlU2Vzc2lvbldvcmtzcGFjZVJlc3BvbnNlEjsKB3JlY2VpcHQYASABKAsyKi5rYWdlbnQuYXBpLnYxLldvcmtzcGFjZVByZXBhcmF0aW9uUmVjZWlwdCKHBAobV29ya3NwYWNlUHJlcGFyYXRpb25SZWNlaXB0Ej8KCG9yaWdpbmFsGAEgASgLMi0ua2FnZW50LmFwaS52MS5QcmVwYXJlU2Vzc2lvbldvcmtzcGFjZVJlcXVlc3QSFgoOcmVxdWVzdF9kaWdlc3QYAiABKAkSFAoMZXhlY3V0aW9uX2lkGAMgASgJEhIKCmNvbnRleHRfaWQYBCABKAkSEAoIYXRlc3BhY2UYBSABKAkSEgoKYWN0b3JfbmFtZRgGIAEoCRIWCg5jbGFzc2lmaWNhdGlvbhgHIAEoCRIUCgxjaGFsbGVuZ2VfaWQYCCABKAkSHAoUb2JzZXJ2YXRpb25fc2VxdWVuY2UYCSABKAQSDAoEaGVhZBgKIAEoCRIOCgZicmFuY2gYCyABKAkSGAoQdHJhbnNwb3J0X2RpZ2VzdBgMIAEoCRIVCg1jb25maWdfZGlnZXN0GA0gASgJEhIKCm1jcF9kaWdlc3QYDiABKAkSEwoLbmF0aXZlX2hvb2sYDyABKAkSNgoSZWZmZWN0X29ic2VydmVkX2F0GBAgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIvCgtvYnNlcnZlZF9hdBgRIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASEgoKaGlzdG9yaWNhbBgSIAEoCDLwBwoOU2Vzc2lvblNlcnZpY2USWgoNQ3JlYXRlU2Vzc2lvbhIjLmthZ2VudC5hcGkudjEuQ3JlYXRlU2Vzc2lvblJlcXVlc3QaJC5rYWdlbnQuYXBpLnYxLkNyZWF0ZVNlc3Npb25SZXNwb25zZRJRCgpHZXRTZXNzaW9uEiAua2FnZW50LmFwaS52MS5HZXRTZXNzaW9uUmVxdWVzdBohLmthZ2VudC5hcGkudjEuR2V0U2Vzc2lvblJlc3BvbnNlEngKF1ByZXBhcmVTZXNzaW9uV29ya3NwYWNlEi0ua2FnZW50LmFwaS52MS5QcmVwYXJlU2Vzc2lvbldvcmtzcGFjZVJlcXVlc3QaLi5rYWdlbnQuYXBpLnYxLlByZXBhcmVTZXNzaW9uV29ya3NwYWNlUmVzcG9uc2USVwoMTGlzdFNlc3Npb25zEiIua2FnZW50LmFwaS52MS5MaXN0U2Vzc2lvbnNSZXF1ZXN0GiMua2FnZW50LmFwaS52MS5MaXN0U2Vzc2lvbnNSZXNwb25zZRJmChFVcGRhdGVTZXNzaW9uTmFtZRInLmthZ2VudC5hcGkudjEuVXBkYXRlU2Vzc2lvbk5hbWVSZXF1ZXN0Gigua2FnZW50LmFwaS52MS5VcGRhdGVTZXNzaW9uTmFtZVJlc3BvbnNlEloKDVJldmVydFNlc3Npb24SIy5rYWdlbnQuYXBpLnYxLlJldmVydFNlc3Npb25SZXF1ZXN0GiQua2FnZW50LmFwaS52MS5SZXZlcnRTZXNzaW9uUmVzcG9uc2USWgoNRGVsZXRlU2Vzc2lvbhIjLmthZ2VudC5hcGkudjEuRGVsZXRlU2Vzc2lvblJlcXVlc3QaJC5rYWdlbnQuYXBpLnYxLkRlbGV0ZVNlc3Npb25SZXNwb25zZRJpChJDcmVhdGVTZXNzaW9uU2hhcmUSKC5rYWdlbnQuYXBpLnYxLkNyZWF0ZVNlc3Npb25TaGFyZVJlcXVlc3QaKS5rYWdlbnQuYXBpLnYxLkNyZWF0ZVNlc3Npb25TaGFyZVJlc3BvbnNlEmYKEUxpc3RTZXNzaW9uU2hhcmVzEicua2FnZW50LmFwaS52MS5MaXN0U2Vzc2lvblNoYXJlc1JlcXVlc3QaKC5rYWdlbnQuYXBpLnYxLkxpc3RTZXNzaW9uU2hhcmVzUmVzcG9uc2USaQoSUmV2b2tlU2Vzc2lvblNoYXJlEigua2FnZW50LmFwaS52MS5SZXZva2VTZXNzaW9uU2hhcmVSZXF1ZXN0Gikua2FnZW50LmFwaS52MS5SZXZva2VTZXNzaW9uU2hhcmVSZXNwb25zZUI9WjtnaXRodWIuY29tL2thZ2VudC1kZXYva2FnZW50L2dvL2FwaS9nZW4va2FnZW50L2FwaS92MTthcGl2MWIGcHJvdG8z", [file_buf_validate_validate, file_google_protobuf_duration, file_google_protobuf_timestamp, file_kagent_api_v1_common, file_kagent_api_v1_runtime]);
 
 /**
  * @generated from message kagent.api.v1.Failure
@@ -152,6 +152,13 @@ export type Session = Message<"kagent.api.v1.Session"> & {
    * @generated from field: kagent.api.v1.RuntimeAssociation runtime_association = 20;
    */
   runtimeAssociation?: RuntimeAssociation | undefined;
+
+  /**
+   * Output only. The latest workspace preparation receipt, if one was issued.
+   *
+   * @generated from field: kagent.api.v1.WorkspacePreparationReceipt workspace_preparation = 21;
+   */
+  workspacePreparation?: WorkspacePreparationReceipt | undefined;
 
   /**
    * Output only. Set on a fork created with a fresh conversation: its restored
@@ -816,6 +823,219 @@ export const RevokeSessionShareResponseSchema: GenMessage<RevokeSessionShareResp
   messageDesc(file_kagent_api_v1_sessions, 26);
 
 /**
+ * @generated from message kagent.api.v1.PrepareSessionWorkspaceRequest
+ */
+export type PrepareSessionWorkspaceRequest = Message<"kagent.api.v1.PrepareSessionWorkspaceRequest"> & {
+  /**
+   * @generated from field: string session_id = 1;
+   */
+  sessionId: string;
+
+  /**
+   * Idempotency key: retries with the same request bytes join one preparation.
+   *
+   * @generated from field: string action_id = 2;
+   */
+  actionId: string;
+
+  /**
+   * The CreateSession request_id that created this Session (not a fork).
+   *
+   * @generated from field: string create_request_id = 3;
+   */
+  createRequestId: string;
+
+  /**
+   * From Session.runtime_association.
+   *
+   * @generated from field: string generation_id = 4;
+   */
+  generationId: string;
+
+  /**
+   * @generated from field: string actor_uid = 5;
+   */
+  actorUid: string;
+
+  /**
+   * The Session's own prepared_revision, workspace, environment and composition.
+   *
+   * @generated from field: string prepared_revision = 6;
+   */
+  preparedRevision: string;
+
+  /**
+   * @generated from field: kagent.api.v1.Workspace workspace = 7;
+   */
+  workspace?: Workspace | undefined;
+
+  /**
+   * @generated from field: kagent.api.v1.DevelopmentEnvironment development_environment = 8;
+   */
+  developmentEnvironment?: DevelopmentEnvironment | undefined;
+
+  /**
+   * @generated from field: kagent.api.v1.RuntimeComposition runtime_composition = 9;
+   */
+  runtimeComposition?: RuntimeComposition | undefined;
+
+  /**
+   * @generated from field: string setup_profile = 10;
+   */
+  setupProfile: string;
+
+  /**
+   * SHA-256 of the fixed standing-context text for setup_profile.
+   *
+   * @generated from field: string setup_digest = 11;
+   */
+  setupDigest: string;
+};
+
+/**
+ * Describes the message kagent.api.v1.PrepareSessionWorkspaceRequest.
+ * Use `create(PrepareSessionWorkspaceRequestSchema)` to create a new message.
+ */
+export const PrepareSessionWorkspaceRequestSchema: GenMessage<PrepareSessionWorkspaceRequest> = /*@__PURE__*/
+  messageDesc(file_kagent_api_v1_sessions, 27);
+
+/**
+ * @generated from message kagent.api.v1.PrepareSessionWorkspaceResponse
+ */
+export type PrepareSessionWorkspaceResponse = Message<"kagent.api.v1.PrepareSessionWorkspaceResponse"> & {
+  /**
+   * @generated from field: kagent.api.v1.WorkspacePreparationReceipt receipt = 1;
+   */
+  receipt?: WorkspacePreparationReceipt | undefined;
+};
+
+/**
+ * Describes the message kagent.api.v1.PrepareSessionWorkspaceResponse.
+ * Use `create(PrepareSessionWorkspaceResponseSchema)` to create a new message.
+ */
+export const PrepareSessionWorkspaceResponseSchema: GenMessage<PrepareSessionWorkspaceResponse> = /*@__PURE__*/
+  messageDesc(file_kagent_api_v1_sessions, 28);
+
+/**
+ * WorkspacePreparationReceipt is bounded evidence of one preparation. It never
+ * contains command output, prompt text or configuration documents.
+ *
+ * @generated from message kagent.api.v1.WorkspacePreparationReceipt
+ */
+export type WorkspacePreparationReceipt = Message<"kagent.api.v1.WorkspacePreparationReceipt"> & {
+  /**
+   * @generated from field: kagent.api.v1.PrepareSessionWorkspaceRequest original = 1;
+   */
+  original?: PrepareSessionWorkspaceRequest | undefined;
+
+  /**
+   * SHA-256 of the deterministic encoding of original.
+   *
+   * @generated from field: string request_digest = 2;
+   */
+  requestDigest: string;
+
+  /**
+   * @generated from field: string execution_id = 3;
+   */
+  executionId: string;
+
+  /**
+   * @generated from field: string context_id = 4;
+   */
+  contextId: string;
+
+  /**
+   * @generated from field: string atespace = 5;
+   */
+  atespace: string;
+
+  /**
+   * @generated from field: string actor_name = 6;
+   */
+  actorName: string;
+
+  /**
+   * pending, uncertain, confirmed or definite-failure.
+   *
+   * @generated from field: string classification = 7;
+   */
+  classification: string;
+
+  /**
+   * Identifies the latest observation of an already confirmed preparation.
+   *
+   * @generated from field: string challenge_id = 8;
+   */
+  challengeId: string;
+
+  /**
+   * @generated from field: uint64 observation_sequence = 9;
+   */
+  observationSequence: bigint;
+
+  /**
+   * Runtime-observed checkout and setup facts.
+   *
+   * @generated from field: string head = 10;
+   */
+  head: string;
+
+  /**
+   * @generated from field: string branch = 11;
+   */
+  branch: string;
+
+  /**
+   * @generated from field: string transport_digest = 12;
+   */
+  transportDigest: string;
+
+  /**
+   * @generated from field: string config_digest = 13;
+   */
+  configDigest: string;
+
+  /**
+   * @generated from field: string mcp_digest = 14;
+   */
+  mcpDigest: string;
+
+  /**
+   * @generated from field: string native_hook = 15;
+   */
+  nativeHook: string;
+
+  /**
+   * When the checkout and setup effect was first observed.
+   *
+   * @generated from field: google.protobuf.Timestamp effect_observed_at = 16;
+   */
+  effectObservedAt?: Timestamp | undefined;
+
+  /**
+   * When the latest observation committed; unset while it is pending.
+   *
+   * @generated from field: google.protobuf.Timestamp observed_at = 17;
+   */
+  observedAt?: Timestamp | undefined;
+
+  /**
+   * True when the receipt describes an earlier runtime generation.
+   *
+   * @generated from field: bool historical = 18;
+   */
+  historical: boolean;
+};
+
+/**
+ * Describes the message kagent.api.v1.WorkspacePreparationReceipt.
+ * Use `create(WorkspacePreparationReceiptSchema)` to create a new message.
+ */
+export const WorkspacePreparationReceiptSchema: GenMessage<WorkspacePreparationReceipt> = /*@__PURE__*/
+  messageDesc(file_kagent_api_v1_sessions, 29);
+
+/**
  * Lifecycle mutations execute inline. After a retryable error, repeat the same
  * mutation; CreateSession retries must keep the same request_id and input.
  * GetSession only observes state. A timeout does not roll back runtime effects.
@@ -840,6 +1060,20 @@ export const SessionService: GenService<{
     methodKind: "unary";
     input: typeof GetSessionRequestSchema;
     output: typeof GetSessionResponseSchema;
+  },
+  /**
+   * PrepareSessionWorkspace checks out the Session's exact workspace commit and
+   * installs its fixed setup in the current runtime generation, then returns a
+   * receipt of what the runtime observed. A stale generation_id or actor_uid
+   * fails with FAILED_PRECONDITION or ABORTED (a sleeping runtime is woken
+   * first); the caller re-reads the Session and retries with the same action_id.
+   *
+   * @generated from rpc kagent.api.v1.SessionService.PrepareSessionWorkspace
+   */
+  prepareSessionWorkspace: {
+    methodKind: "unary";
+    input: typeof PrepareSessionWorkspaceRequestSchema;
+    output: typeof PrepareSessionWorkspaceResponseSchema;
   },
   /**
    * @generated from rpc kagent.api.v1.SessionService.ListSessions

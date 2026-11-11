@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/google/uuid"
 	ateapipb "go.ate.dev/substrate/api/ateapi/v1"
@@ -60,4 +61,31 @@ func (w *ActorWorkflow) RuntimeAssociation(ctx context.Context, session *apiv1.S
 
 type associationObserver interface {
 	RuntimeAssociation(context.Context, *apiv1.Session) *apiv1.RuntimeAssociation
+}
+
+// WakeRuntime resumes the Session's recorded Actor when it is not running, as
+// Substrate ingress would for an interaction. It keeps the Session READY and
+// leaves lifecycle state untouched; a concurrent idle suspend simply requires
+// another wake.
+func (w *ActorWorkflow) WakeRuntime(ctx context.Context, session *apiv1.Session) error {
+	generation, err := w.store.GetSessionGeneration(ctx, session.GetId())
+	if err != nil {
+		return err
+	}
+	name := substrate.ActorName(session.GetId())
+	actor, err := w.actors.GetActor(ctx, generation.TemplateAtespace, name)
+	if err != nil {
+		return err
+	}
+	if runtimeAssociation(session, generation, actor) == nil {
+		return fmt.Errorf("runtime Actor is not the Session's recorded runtime")
+	}
+	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		return nil
+	}
+	if err := w.actors.EnsureActorEgressPolicy(ctx, generation.TemplateAtespace, name, session.GetPreparedRevision()); err != nil {
+		return err
+	}
+	_, err = w.actors.ResumeActor(ctx, generation.TemplateAtespace, name)
+	return err
 }

@@ -19,13 +19,14 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	TaskStoreService_CreateTask_FullMethodName     = "/kagent.runtime.v1.TaskStoreService/CreateTask"
-	TaskStoreService_GetTask_FullMethodName        = "/kagent.runtime.v1.TaskStoreService/GetTask"
-	TaskStoreService_UpdateTask_FullMethodName     = "/kagent.runtime.v1.TaskStoreService/UpdateTask"
-	TaskStoreService_ListTasks_FullMethodName      = "/kagent.runtime.v1.TaskStoreService/ListTasks"
-	TaskStoreService_SettleTask_FullMethodName     = "/kagent.runtime.v1.TaskStoreService/SettleTask"
-	TaskStoreService_GetWorkspace_FullMethodName   = "/kagent.runtime.v1.TaskStoreService/GetWorkspace"
-	TaskStoreService_ReportActivity_FullMethodName = "/kagent.runtime.v1.TaskStoreService/ReportActivity"
+	TaskStoreService_CreateTask_FullMethodName                   = "/kagent.runtime.v1.TaskStoreService/CreateTask"
+	TaskStoreService_GetTask_FullMethodName                      = "/kagent.runtime.v1.TaskStoreService/GetTask"
+	TaskStoreService_UpdateTask_FullMethodName                   = "/kagent.runtime.v1.TaskStoreService/UpdateTask"
+	TaskStoreService_ListTasks_FullMethodName                    = "/kagent.runtime.v1.TaskStoreService/ListTasks"
+	TaskStoreService_SettleTask_FullMethodName                   = "/kagent.runtime.v1.TaskStoreService/SettleTask"
+	TaskStoreService_GetWorkspace_FullMethodName                 = "/kagent.runtime.v1.TaskStoreService/GetWorkspace"
+	TaskStoreService_CompleteWorkspacePreparation_FullMethodName = "/kagent.runtime.v1.TaskStoreService/CompleteWorkspacePreparation"
+	TaskStoreService_ReportActivity_FullMethodName               = "/kagent.runtime.v1.TaskStoreService/ReportActivity"
 )
 
 // TaskStoreServiceClient is the client API for TaskStoreService service.
@@ -49,6 +50,10 @@ type TaskStoreServiceClient interface {
 	// GetWorkspace returns the Git checkout the Session asked for, or an empty
 	// response when it asked for none. The runtime calls it before the first turn.
 	GetWorkspace(ctx context.Context, in *TaskStoreServiceGetWorkspaceRequest, opts ...grpc.CallOption) (*TaskStoreServiceGetWorkspaceResponse, error)
+	// CompleteWorkspacePreparation reports the result of the assignment returned
+	// by GetWorkspace. Only the originally assigned bytes are accepted; repeating
+	// a completed report is a no-op.
+	CompleteWorkspacePreparation(ctx context.Context, in *TaskStoreServiceCompleteWorkspacePreparationRequest, opts ...grpc.CallOption) (*TaskStoreServiceCompleteWorkspacePreparationResponse, error)
 	// ReportActivity tells the control plane whether anything uses the Session
 	// runtime outside A2A tasks, such as an attached client or background work.
 	// An active report holds idle suspension until its lease ends; the runtime
@@ -126,6 +131,16 @@ func (c *taskStoreServiceClient) GetWorkspace(ctx context.Context, in *TaskStore
 	return out, nil
 }
 
+func (c *taskStoreServiceClient) CompleteWorkspacePreparation(ctx context.Context, in *TaskStoreServiceCompleteWorkspacePreparationRequest, opts ...grpc.CallOption) (*TaskStoreServiceCompleteWorkspacePreparationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TaskStoreServiceCompleteWorkspacePreparationResponse)
+	err := c.cc.Invoke(ctx, TaskStoreService_CompleteWorkspacePreparation_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *taskStoreServiceClient) ReportActivity(ctx context.Context, in *TaskStoreServiceReportActivityRequest, opts ...grpc.CallOption) (*TaskStoreServiceReportActivityResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(TaskStoreServiceReportActivityResponse)
@@ -157,6 +172,10 @@ type TaskStoreServiceServer interface {
 	// GetWorkspace returns the Git checkout the Session asked for, or an empty
 	// response when it asked for none. The runtime calls it before the first turn.
 	GetWorkspace(context.Context, *TaskStoreServiceGetWorkspaceRequest) (*TaskStoreServiceGetWorkspaceResponse, error)
+	// CompleteWorkspacePreparation reports the result of the assignment returned
+	// by GetWorkspace. Only the originally assigned bytes are accepted; repeating
+	// a completed report is a no-op.
+	CompleteWorkspacePreparation(context.Context, *TaskStoreServiceCompleteWorkspacePreparationRequest) (*TaskStoreServiceCompleteWorkspacePreparationResponse, error)
 	// ReportActivity tells the control plane whether anything uses the Session
 	// runtime outside A2A tasks, such as an attached client or background work.
 	// An active report holds idle suspension until its lease ends; the runtime
@@ -191,6 +210,9 @@ func (UnimplementedTaskStoreServiceServer) SettleTask(context.Context, *TaskStor
 }
 func (UnimplementedTaskStoreServiceServer) GetWorkspace(context.Context, *TaskStoreServiceGetWorkspaceRequest) (*TaskStoreServiceGetWorkspaceResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetWorkspace not implemented")
+}
+func (UnimplementedTaskStoreServiceServer) CompleteWorkspacePreparation(context.Context, *TaskStoreServiceCompleteWorkspacePreparationRequest) (*TaskStoreServiceCompleteWorkspacePreparationResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CompleteWorkspacePreparation not implemented")
 }
 func (UnimplementedTaskStoreServiceServer) ReportActivity(context.Context, *TaskStoreServiceReportActivityRequest) (*TaskStoreServiceReportActivityResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReportActivity not implemented")
@@ -324,6 +346,24 @@ func _TaskStoreService_GetWorkspace_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TaskStoreService_CompleteWorkspacePreparation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TaskStoreServiceCompleteWorkspacePreparationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskStoreServiceServer).CompleteWorkspacePreparation(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskStoreService_CompleteWorkspacePreparation_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskStoreServiceServer).CompleteWorkspacePreparation(ctx, req.(*TaskStoreServiceCompleteWorkspacePreparationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _TaskStoreService_ReportActivity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(TaskStoreServiceReportActivityRequest)
 	if err := dec(in); err != nil {
@@ -372,6 +412,10 @@ var TaskStoreService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetWorkspace",
 			Handler:    _TaskStoreService_GetWorkspace_Handler,
+		},
+		{
+			MethodName: "CompleteWorkspacePreparation",
+			Handler:    _TaskStoreService_CompleteWorkspacePreparation_Handler,
 		},
 		{
 			MethodName: "ReportActivity",

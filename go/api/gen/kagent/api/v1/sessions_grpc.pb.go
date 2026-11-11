@@ -19,15 +19,16 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	SessionService_CreateSession_FullMethodName      = "/kagent.api.v1.SessionService/CreateSession"
-	SessionService_GetSession_FullMethodName         = "/kagent.api.v1.SessionService/GetSession"
-	SessionService_ListSessions_FullMethodName       = "/kagent.api.v1.SessionService/ListSessions"
-	SessionService_UpdateSessionName_FullMethodName  = "/kagent.api.v1.SessionService/UpdateSessionName"
-	SessionService_RevertSession_FullMethodName      = "/kagent.api.v1.SessionService/RevertSession"
-	SessionService_DeleteSession_FullMethodName      = "/kagent.api.v1.SessionService/DeleteSession"
-	SessionService_CreateSessionShare_FullMethodName = "/kagent.api.v1.SessionService/CreateSessionShare"
-	SessionService_ListSessionShares_FullMethodName  = "/kagent.api.v1.SessionService/ListSessionShares"
-	SessionService_RevokeSessionShare_FullMethodName = "/kagent.api.v1.SessionService/RevokeSessionShare"
+	SessionService_CreateSession_FullMethodName           = "/kagent.api.v1.SessionService/CreateSession"
+	SessionService_GetSession_FullMethodName              = "/kagent.api.v1.SessionService/GetSession"
+	SessionService_PrepareSessionWorkspace_FullMethodName = "/kagent.api.v1.SessionService/PrepareSessionWorkspace"
+	SessionService_ListSessions_FullMethodName            = "/kagent.api.v1.SessionService/ListSessions"
+	SessionService_UpdateSessionName_FullMethodName       = "/kagent.api.v1.SessionService/UpdateSessionName"
+	SessionService_RevertSession_FullMethodName           = "/kagent.api.v1.SessionService/RevertSession"
+	SessionService_DeleteSession_FullMethodName           = "/kagent.api.v1.SessionService/DeleteSession"
+	SessionService_CreateSessionShare_FullMethodName      = "/kagent.api.v1.SessionService/CreateSessionShare"
+	SessionService_ListSessionShares_FullMethodName       = "/kagent.api.v1.SessionService/ListSessionShares"
+	SessionService_RevokeSessionShare_FullMethodName      = "/kagent.api.v1.SessionService/RevokeSessionShare"
 )
 
 // SessionServiceClient is the client API for SessionService service.
@@ -42,6 +43,12 @@ const (
 type SessionServiceClient interface {
 	CreateSession(ctx context.Context, in *CreateSessionRequest, opts ...grpc.CallOption) (*CreateSessionResponse, error)
 	GetSession(ctx context.Context, in *GetSessionRequest, opts ...grpc.CallOption) (*GetSessionResponse, error)
+	// PrepareSessionWorkspace checks out the Session's exact workspace commit and
+	// installs its fixed setup in the current runtime generation, then returns a
+	// receipt of what the runtime observed. A stale generation_id or actor_uid
+	// fails with FAILED_PRECONDITION or ABORTED (a sleeping runtime is woken
+	// first); the caller re-reads the Session and retries with the same action_id.
+	PrepareSessionWorkspace(ctx context.Context, in *PrepareSessionWorkspaceRequest, opts ...grpc.CallOption) (*PrepareSessionWorkspaceResponse, error)
 	ListSessions(ctx context.Context, in *ListSessionsRequest, opts ...grpc.CallOption) (*ListSessionsResponse, error)
 	UpdateSessionName(ctx context.Context, in *UpdateSessionNameRequest, opts ...grpc.CallOption) (*UpdateSessionNameResponse, error)
 	// Restores a crashed runtime to its last snapshot without replaying its turn.
@@ -74,6 +81,16 @@ func (c *sessionServiceClient) GetSession(ctx context.Context, in *GetSessionReq
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetSessionResponse)
 	err := c.cc.Invoke(ctx, SessionService_GetSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *sessionServiceClient) PrepareSessionWorkspace(ctx context.Context, in *PrepareSessionWorkspaceRequest, opts ...grpc.CallOption) (*PrepareSessionWorkspaceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PrepareSessionWorkspaceResponse)
+	err := c.cc.Invoke(ctx, SessionService_PrepareSessionWorkspace_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -162,6 +179,12 @@ func (c *sessionServiceClient) RevokeSessionShare(ctx context.Context, in *Revok
 type SessionServiceServer interface {
 	CreateSession(context.Context, *CreateSessionRequest) (*CreateSessionResponse, error)
 	GetSession(context.Context, *GetSessionRequest) (*GetSessionResponse, error)
+	// PrepareSessionWorkspace checks out the Session's exact workspace commit and
+	// installs its fixed setup in the current runtime generation, then returns a
+	// receipt of what the runtime observed. A stale generation_id or actor_uid
+	// fails with FAILED_PRECONDITION or ABORTED (a sleeping runtime is woken
+	// first); the caller re-reads the Session and retries with the same action_id.
+	PrepareSessionWorkspace(context.Context, *PrepareSessionWorkspaceRequest) (*PrepareSessionWorkspaceResponse, error)
 	ListSessions(context.Context, *ListSessionsRequest) (*ListSessionsResponse, error)
 	UpdateSessionName(context.Context, *UpdateSessionNameRequest) (*UpdateSessionNameResponse, error)
 	// Restores a crashed runtime to its last snapshot without replaying its turn.
@@ -185,6 +208,9 @@ func (UnimplementedSessionServiceServer) CreateSession(context.Context, *CreateS
 }
 func (UnimplementedSessionServiceServer) GetSession(context.Context, *GetSessionRequest) (*GetSessionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetSession not implemented")
+}
+func (UnimplementedSessionServiceServer) PrepareSessionWorkspace(context.Context, *PrepareSessionWorkspaceRequest) (*PrepareSessionWorkspaceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PrepareSessionWorkspace not implemented")
 }
 func (UnimplementedSessionServiceServer) ListSessions(context.Context, *ListSessionsRequest) (*ListSessionsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListSessions not implemented")
@@ -260,6 +286,24 @@ func _SessionService_GetSession_Handler(srv interface{}, ctx context.Context, de
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(SessionServiceServer).GetSession(ctx, req.(*GetSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SessionService_PrepareSessionWorkspace_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PrepareSessionWorkspaceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SessionServiceServer).PrepareSessionWorkspace(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SessionService_PrepareSessionWorkspace_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SessionServiceServer).PrepareSessionWorkspace(ctx, req.(*PrepareSessionWorkspaceRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -404,6 +448,10 @@ var SessionService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetSession",
 			Handler:    _SessionService_GetSession_Handler,
+		},
+		{
+			MethodName: "PrepareSessionWorkspace",
+			Handler:    _SessionService_PrepareSessionWorkspace_Handler,
 		},
 		{
 			MethodName: "ListSessions",

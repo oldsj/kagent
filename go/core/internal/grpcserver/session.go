@@ -28,6 +28,14 @@ func (s *sessionServer) GetSession(ctx context.Context, request *apiv1.GetSessio
 	return &apiv1.GetSessionResponse{Session: session}, nil
 }
 
+func (s *sessionServer) PrepareSessionWorkspace(ctx context.Context, request *apiv1.PrepareSessionWorkspaceRequest) (*apiv1.PrepareSessionWorkspaceResponse, error) {
+	receipt, err := s.service.PrepareWorkspace(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	return &apiv1.PrepareSessionWorkspaceResponse{Receipt: receipt}, nil
+}
+
 func (s *sessionServer) ListSessions(ctx context.Context, request *apiv1.ListSessionsRequest) (*apiv1.ListSessionsResponse, error) {
 	result, err := s.service.List(ctx, sessionsvc.ListRequest{
 		AllCreators: request.GetAllCreators(),

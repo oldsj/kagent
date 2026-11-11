@@ -12,6 +12,7 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
+	apiworkspace "github.com/kagent-dev/kagent/go/api/workspace"
 	"github.com/kagent-dev/kagent/go/core/pkg/agentplugins"
 	"github.com/kagent-dev/kagent/go/core/pkg/env"
 	"github.com/kagent-dev/kagent/go/harness/codex/config"
@@ -30,6 +31,9 @@ type Input struct {
 	Workspace   string
 	DurableDir  string
 	Environment []string
+	// SetupProfile, when set, appends that profile's fixed workspace
+	// preparation standing context to the developer instruction.
+	SetupProfile string
 }
 
 // New validates and materializes Codex-owned state, then constructs its driver.
@@ -37,6 +41,13 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 	cfg, err := config.Parse(input.ConfigJSON)
 	if err != nil {
 		return nil, err
+	}
+	if input.SetupProfile != "" {
+		standing, err := apiworkspace.Standing(input.SetupProfile)
+		if err != nil {
+			return nil, err
+		}
+		cfg.DeveloperInstruction += "\n" + standing
 	}
 	if !filepath.IsAbs(input.Workspace) || !filepath.IsAbs(input.DurableDir) {
 		return nil, fmt.Errorf("workspace and durable directories must be absolute paths")
@@ -69,22 +80,8 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 	if err := materializeAgents(codexHome, cfg.Agents); err != nil {
 		return nil, err
 	}
-	nativeDefaults := cfg.RuntimeTelemetry
-	if cfg.Telemetry != nil {
-		exporters := nativeDefaults.ExporterConfig()
-		if cfg.Telemetry.Traces != nil {
-			exporters.Traces = &sharedtelemetry.OTLPConfig{Endpoint: cfg.Telemetry.Traces.Endpoint, Protocol: cfg.Telemetry.Traces.Protocol}
-		}
-		if cfg.Telemetry.Logs != nil {
-			exporters.Logs = &sharedtelemetry.OTLPConfig{Endpoint: cfg.Telemetry.Logs.Endpoint, Protocol: cfg.Telemetry.Logs.Protocol}
-		}
-		nativeDefaults.Exporters = &exporters
-		nativeDefaults.CaptureContent = cfg.Telemetry.CaptureContent
-	}
-	environment := nativeEnvironment(input.Environment, codexHome, nativeDefaults)
-	cfg.Telemetry = effectiveTelemetry(cfg.Telemetry, environment)
-	cfg.Telemetry.CaptureContent = nativeDefaults.WithEnvironment(input.Environment).CaptureContent
-	configTOML, err := renderConfig(cfg, codexHome, input.Workspace, slices.Contains(input.Environment, env.TestCodexDisableRetries+"=true"))
+	cfg, environment := withNativeTelemetry(cfg, input)
+	configTOML, err := renderInputConfig(cfg, input)
 	if err != nil {
 		return nil, err
 	}
@@ -283,6 +280,33 @@ func renderConfig(cfg config.Config, codexHome, workspaceDir string, disableRetr
 		return nil, fmt.Errorf("encode Codex configuration: %w", err)
 	}
 	return append(contents, workspaceTrustEntry(workspaceDir)...), nil
+}
+
+// withNativeTelemetry resolves the telemetry Codex itself exports, which the
+// rendered config.toml carries, and returns it with the native environment.
+func withNativeTelemetry(cfg config.Config, input Input) (config.Config, []string) {
+	nativeDefaults := cfg.RuntimeTelemetry
+	if cfg.Telemetry != nil {
+		exporters := nativeDefaults.ExporterConfig()
+		if cfg.Telemetry.Traces != nil {
+			exporters.Traces = &sharedtelemetry.OTLPConfig{Endpoint: cfg.Telemetry.Traces.Endpoint, Protocol: cfg.Telemetry.Traces.Protocol}
+		}
+		if cfg.Telemetry.Logs != nil {
+			exporters.Logs = &sharedtelemetry.OTLPConfig{Endpoint: cfg.Telemetry.Logs.Endpoint, Protocol: cfg.Telemetry.Logs.Protocol}
+		}
+		nativeDefaults.Exporters = &exporters
+		nativeDefaults.CaptureContent = cfg.Telemetry.CaptureContent
+	}
+	environment := nativeEnvironment(input.Environment, filepath.Join(input.DurableDir, "codex"), nativeDefaults)
+	cfg.Telemetry = effectiveTelemetry(cfg.Telemetry, environment)
+	cfg.Telemetry.CaptureContent = nativeDefaults.WithEnvironment(input.Environment).CaptureContent
+	return cfg, environment
+}
+
+// renderInputConfig renders the config.toml New writes for input, given cfg
+// with its native telemetry resolved.
+func renderInputConfig(cfg config.Config, input Input) ([]byte, error) {
+	return renderConfig(cfg, filepath.Join(input.DurableDir, "codex"), input.Workspace, slices.Contains(input.Environment, env.TestCodexDisableRetries+"=true"))
 }
 
 // workspaceTrustEntry is the exact bytes the pinned Codex CLI appends to

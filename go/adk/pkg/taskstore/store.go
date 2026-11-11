@@ -318,6 +318,40 @@ func (s *Store) GetWorkspace(ctx context.Context) (*apiv1.Workspace, error) {
 	return response.GetWorkspace(), nil
 }
 
+// GetWorkspacePreparation returns the whole workspace response, including the
+// preparation state and any assigned preparation. Reading an assignment
+// records its issue; a repeated read returns the same assignment.
+func (s *Store) GetWorkspacePreparation(ctx context.Context) (*runtimev1.TaskStoreServiceGetWorkspaceResponse, error) {
+	id, err := s.sessionID()
+	if err != nil {
+		return nil, err
+	}
+	var response *runtimev1.TaskStoreServiceGetWorkspaceResponse
+	err = s.retry(ctx, func(ctx context.Context) error {
+		var err error
+		response, err = s.client.TaskStoreService().GetWorkspace(ctx, &runtimev1.TaskStoreServiceGetWorkspaceRequest{SessionId: id})
+		return err
+	})
+	return response, err
+}
+
+// CompleteWorkspacePreparation reports the result of this Session's assigned
+// preparation. The control plane treats a repeated report of a committed
+// result as a no-op, so retrying is safe.
+func (s *Store) CompleteWorkspacePreparation(ctx context.Context, request *runtimev1.TaskStoreServiceCompleteWorkspacePreparationRequest) error {
+	id, err := s.sessionID()
+	if err != nil {
+		return err
+	}
+	if request.GetSessionId() != id {
+		return fmt.Errorf("preparation belongs to another Session")
+	}
+	return s.retry(ctx, func(ctx context.Context) error {
+		_, err := s.client.TaskStoreService().CompleteWorkspacePreparation(ctx, request)
+		return err
+	})
+}
+
 // SessionID returns the Session this runtime serves, from its local identity.
 func (s *Store) SessionID() (string, error) { return s.sessionID() }
 

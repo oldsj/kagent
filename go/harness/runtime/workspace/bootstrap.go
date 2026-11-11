@@ -55,6 +55,14 @@ type Bootstrapper struct {
 	// none caches that the Session asked for no workspace, so later turns of this
 	// process skip the control-plane call. A resumed actor asks again once.
 	none bool
+	// setupInstaller re-observes the installed native setup before each turn
+	// of a prepared Session.
+	setupInstaller SetupInstaller
+	// noPreparation caches that the Session requires no preparation.
+	noPreparation bool
+	// settled caches that the Session's only preparation was settled, confirmed
+	// or failed, so the poll loop stops. Turn admission still checks.
+	settled bool
 }
 
 // Config configures New.
@@ -96,10 +104,24 @@ func New(next Runner, cfg Config) (*Bootstrapper, error) {
 // Run bootstraps the workspace if needed, then runs the turn. A bootstrap
 // failure ends the turn with a vetted message and never reaches the agent.
 func (b *Bootstrapper) Run(ctx context.Context, turn runtime.Turn, sink runtime.EventSink) (runtime.Outcome, error) {
-	if failure := b.ensure(ctx); failure != "" {
+	if failure := b.Ready(ctx); failure != "" {
 		return runtime.Outcome{Failure: &runtime.Failure{Message: failure}}, nil
 	}
-	return b.next.Run(ctx, turn, sink)
+	// Preparation may have replaced the runner with one carrying the setup.
+	b.mu.Lock()
+	next := b.next
+	b.mu.Unlock()
+	return next.Run(ctx, turn, sink)
+}
+
+// Ready runs the same preparation admission and checkout as Run, for a
+// runtime that starts native work outside a turn (a client attaching to the
+// Claude SDK runner). It returns Run's public failure message, or "".
+func (b *Bootstrapper) Ready(ctx context.Context) string {
+	if err := b.preparationAdmission(ctx); err != nil {
+		return "Workspace preparation is incomplete."
+	}
+	return b.ensure(ctx)
 }
 
 // RestorePending returns the wrapped runner's turn that was waiting for input

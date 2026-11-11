@@ -5,6 +5,7 @@ package kagent.runtime.v1;
 import "a2a.proto";
 import "buf/validate/validate.proto";
 import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
 import "kagent/api/v1/common.proto";
 
 option go_package = "github.com/kagent-dev/kagent/go/api/gen/kagent/runtime/v1;runtimev1";
@@ -26,6 +27,10 @@ service TaskStoreService {
   // GetWorkspace returns the Git checkout the Session asked for, or an empty
   // response when it asked for none. The runtime calls it before the first turn.
   rpc GetWorkspace(TaskStoreServiceGetWorkspaceRequest) returns (TaskStoreServiceGetWorkspaceResponse);
+  // CompleteWorkspacePreparation reports the result of the assignment returned
+  // by GetWorkspace. Only the originally assigned bytes are accepted; repeating
+  // a completed report is a no-op.
+  rpc CompleteWorkspacePreparation(TaskStoreServiceCompleteWorkspacePreparationRequest) returns (TaskStoreServiceCompleteWorkspacePreparationResponse);
   // ReportActivity tells the control plane whether anything uses the Session
   // runtime outside A2A tasks, such as an attached client or background work.
   // An active report holds idle suspension until its lease ends; the runtime
@@ -112,11 +117,62 @@ message TaskStoreServiceGetWorkspaceRequest {
 message TaskStoreServiceGetWorkspaceResponse {
   // Unset when the Session has no workspace.
   kagent.api.v1.Workspace workspace = 1;
-  // Fields 2-4 are reserved for workspace preparation.
+  // True when turns wait for a confirmed workspace preparation.
+  bool preparation_required = 2;
+  // True once the preparation is confirmed and turns may run.
+  bool preparation_ready = 3;
+  // The issued assignment, set until its result is committed. Reading it
+  // records the issue; a later read returns the same assignment.
+  WorkspacePreparation preparation = 4;
   // True for a fork created with a fresh conversation: before its first turn the
   // runtime discards native conversation state restored from the checkpoint.
   bool fresh_conversation = 5;
 }
+
+// WorkspacePreparation is one assigned preparation action for this runtime.
+message WorkspacePreparation {
+  string session_id = 1 [(buf.validate.field).string.uuid = true];
+  string context_id = 2 [(buf.validate.field).string.uuid = true];
+  string create_request_id = 3 [(buf.validate.field).string = {min_len: 1, max_len: 128}];
+  string action_id = 4 [(buf.validate.field).string = {min_len: 1, max_len: 128}];
+  string request_digest = 5 [(buf.validate.field).string.pattern = "^[a-f0-9]{64}$"];
+  string execution_id = 6 [(buf.validate.field).string.uuid = true];
+  string challenge_id = 7 [(buf.validate.field).string.uuid = true];
+  // 0 for the original effect; a positive sequence only observes it.
+  uint64 sequence = 8 [(buf.validate.field).uint64.lte = 65535];
+  string generation_id = 9 [(buf.validate.field).string.uuid = true];
+  string atespace = 10 [(buf.validate.field).string = {min_len: 1, max_len: 128}];
+  string actor_name = 11 [(buf.validate.field).string = {min_len: 1, max_len: 128}];
+  string actor_uid = 12 [(buf.validate.field).string = {min_len: 1, max_len: 128}];
+  string prepared_revision = 13 [(buf.validate.field).string = {min_len: 1, max_len: 128}];
+  kagent.api.v1.Workspace workspace = 14 [(buf.validate.field).required = true];
+  string development_image = 15 [(buf.validate.field).string = {min_len: 1, max_len: 512}];
+  string platform = 16 [(buf.validate.field).string = {min_len: 1, max_len: 128}];
+  string policy_identity = 17 [(buf.validate.field).string = {min_len: 1, max_len: 256}];
+  string payload_image = 18 [(buf.validate.field).string = {min_len: 1, max_len: 512}];
+  string provider = 19 [(buf.validate.field).string = {min_len: 1, max_len: 128}];
+  uint32 schema = 20;
+  string cli_version = 21 [(buf.validate.field).string = {min_len: 1, max_len: 128}];
+  string profile = 22 [(buf.validate.field).string = {in: ["supervisor", "child", "agent"]}];
+  string setup_digest = 23 [(buf.validate.field).string.pattern = "^[a-f0-9]{64}$"];
+  // Digests of the revision's bootstrap config_json and its mcp_servers.
+  string config_digest = 24 [(buf.validate.field).string.pattern = "^[a-f0-9]{64}$"];
+  string mcp_digest = 25 [(buf.validate.field).string.pattern = "^[a-f0-9]{64}$"];
+}
+
+message TaskStoreServiceCompleteWorkspacePreparationRequest {
+  string session_id = 1 [(buf.validate.field).string.uuid = true];
+  WorkspacePreparation assignment = 2 [(buf.validate.field).required = true];
+  string head = 3 [(buf.validate.field).string = {max_len: 40, pattern: "^(?:[a-f0-9]{40})?$"}];
+  string branch = 4 [(buf.validate.field).string.max_len = 256];
+  string transport_digest = 5 [(buf.validate.field).string = {max_len: 64, pattern: "^(?:[a-f0-9]{64})?$"}];
+  string native_hook = 6 [(buf.validate.field).string = {in: ["", "append_system_prompt", "developer_instruction"]}];
+  google.protobuf.Timestamp observed_at = 7 [(buf.validate.field).required = true];
+  // False reports a definite failure.
+  bool confirmed = 8;
+}
+
+message TaskStoreServiceCompleteWorkspacePreparationResponse {}
 
 message TaskStoreServiceReportActivityRequest {
   string session_id = 1 [(buf.validate.field).string.uuid = true];

@@ -601,3 +601,104 @@ A failed bootstrap does not run the agent. The turn ends as a failed task whose 
 names the cause (ref not found, authentication, unreachable host, timeout, invalid ref
 name), and the next turn retries. The bootstrapper also enforces the Harness origins, so
 a Session row that bypassed create-time validation still cannot reach another host.
+
+## Workspace preparation
+
+Some Sessions need setup on their current runtime before they can accept turns.
+That is a Session with a `workspace` and a selected `development_environment`
+whose revision routes Git through both trusted proxies (`readProxyOrigin` and
+`pushProxyOrigin`). Its creator prepares it once with `PrepareSessionWorkspace`.
+
+The request repeats the Session's creation request ID, revision, workspace,
+environment and composition. It also names the `generation_id` and `actor_uid`
+the caller read from `runtime_association`, and a setup profile (`supervisor`,
+`child` or `agent`) with its `setup_digest`.
+
+The control plane refuses in these cases:
+
+| Condition | Code |
+| --- | --- |
+| A share, or a Session that does not need preparation | PERMISSION_DENIED |
+| A setup digest that does not match its profile | INVALID_ARGUMENT |
+| The same `action_id` with other inputs | ALREADY_EXISTS |
+| The runtime is stale or not running, or the Session lacks exactly one read and one push proxy credential | FAILED_PRECONDITION "Current prepared runtime identity is unavailable" |
+
+When the runtime is not running, the call also wakes it (egress policy first,
+then resume). In every stale case the caller re-reads the Session and retries.
+The specific cause is logged once per Session and generation.
+
+An accepted request records one row in `session_workspace_preparation`. It
+stores the request bytes and the runtime's assignment, and returns a `pending`
+receipt. The assignment holds the request's action and setup, the Session's
+workspace and composition, the observed Actor, and digests of the revision's
+bootstrap config and MCP servers. Retrying with identical bytes returns the
+same receipt.
+
+The runtime settles the preparation:
+
+1. `TaskStoreService.GetWorkspace` returns the assignment, but only to the Actor
+   it names and only while it is pending. The first read records the issue;
+   later reads return the same bytes. These reads take no lock, because the
+   runtime calls them before every turn.
+2. `CompleteWorkspacePreparation` accepts only that exact, already issued
+   assignment from that Actor:
+   - its first report moves the row to `confirmed` or `definite-failure`
+   - repeating the same report succeeds
+   - a different report is refused with ABORTED
+
+`GetSession` reports the receipt as `workspace_preparation`. A receipt for an
+earlier Actor is marked `historical`.
+
+Until the preparation is `confirmed`, the store refuses new runtime tasks for
+the Session. The check runs in the same transaction that creates the task. A
+`definite-failure` keeps turns refused; the caller deletes the Session.
+
+### Runtime workspace preparation
+
+When the control plane requires preparation for a Session, the runtime prepares
+it instead of bootstrapping on the first turn. The runtime reads its assignment
+through `TaskStoreService.GetWorkspace` once a second, on the same authenticated
+channel, and stops polling when the response reports that the Session requires
+no preparation. Turns that arrive while preparation is required but not ready
+end with "Workspace preparation is incomplete." and never reach the agent.
+
+An assignment carries an exact commit `ref` and a `branch`, together with the
+digests of the fixed setup it installs:
+
+- `setup_digest` is the SHA-256 of the profile's standing context
+  (`supervisor`, `child` or `agent`), the fixed role text in
+  `go/api/workspace`. The text must not change byte for byte, because the
+  control plane hashes the same text.
+- `config_digest` and `mcp_digest` hash the bootstrap bundle's `config_json`,
+  re-marshaled as a top-level map, and its `mcp_servers`. The MCP server must
+  belong to the same Mainloop instance as the Git policy's read proxy, matched
+  by URL origin, so a Session cannot pair one instance's Git credentials with
+  another instance's MCP identity.
+
+The runtime first writes the effect to `native-preparation.issued` in
+`/data/.kagent` with an exclusive create and an fsync. Only then does it clone
+through the existing bootstrap. It never adopts or resets a checkout it didn't
+make. An issued action is only ever observed again, never redone, including
+after a crash.
+
+After the checkout, the runtime reads it back. HEAD must equal `ref` on
+`branch`, and the local Git config must hold exactly the fixed proxy transport
+plus `git init`'s own defaults. The native setup installer then adds the
+standing context to the native hook, and setup is refused if native history
+already exists:
+
+| Harness | Native hook |
+| --- | --- |
+| Claude | `append_system_prompt` |
+| Codex | `developer_instruction` |
+
+The runtime persists the result to `native-preparation.result` before reporting
+it with `CompleteWorkspacePreparation`. It writes `native-preparation.ack`
+after the report succeeds, so a lost reply resends the original bytes.
+
+`native-setup.json` records the installed profile and digests. A restarted
+runtime restores the standing context from that record, and checks the
+materialized native files against it before it rewrites any of them. A Claude
+runtime also checks its MCP, settings and system prompt files. A Codex runtime
+checks its rendered `config.toml`. Each turn of a prepared Session re-observes
+the installed setup before it runs.
