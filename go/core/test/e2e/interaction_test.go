@@ -795,7 +795,8 @@ func newInteractionFixtureForHarnessTemplate(t *testing.T, target, harnessName, 
 	})
 }
 
-// newInteractionFixtureForRequest creates the Session that request describes.
+// newInteractionFixtureForRequest creates the Session request describes, such
+// as one with a workspace and credentials, and deletes it on cleanup.
 func newInteractionFixtureForRequest(t *testing.T, target string, request *apiv1.CreateSessionRequest) *interactionFixture {
 	t.Helper()
 	conn := newControllerConn(t, target)

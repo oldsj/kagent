@@ -15,6 +15,7 @@ import (
 	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	"github.com/kagent-dev/kagent/go/api/bootstrap"
 	runtimev1 "github.com/kagent-dev/kagent/go/api/gen/kagent/runtime/v1"
+	"github.com/kagent-dev/kagent/go/api/v1alpha3"
 	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"github.com/kagent-dev/kagent/go/core/pkg/egresspolicy"
 )
@@ -67,6 +68,8 @@ type Revision struct {
 	WorkerPoolName   string
 	SandboxClass     atev1.SandboxClass
 	SnapshotLocation string
+	// OnQuiesce selects what an idle runtime's snapshot keeps; empty means Data.
+	OnQuiesce v1alpha3.RuntimeSnapshotScope
 
 	// Provenance records non-secret source configuration for diagnostics. Revision
 	// identity comes from compiled runtime inputs, not this source snapshot.
@@ -144,6 +147,8 @@ func (r *Revision) Digest() (RevisionID, error) {
 		// Placement now matches the pool's namespace as well as its name.
 		// Hash it explicitly so existing immutable templates do not conflict after upgrades.
 		WorkerPoolNamespace string `json:"workerPoolNamespace"`
+		// Omitted for Data so existing revisions keep their digests.
+		OnQuiesce v1alpha3.RuntimeSnapshotScope `json:"onQuiesce,omitempty"`
 	}{
 		BootstrapVersion: bootstrap.FormatVersion, ControlPlaneURL: r.ControlPlaneURL,
 		AgentName: r.AgentName, AgentUID: r.AgentUID, Namespace: r.Namespace,
@@ -153,7 +158,7 @@ func (r *Revision) Digest() (RevisionID, error) {
 		WorkerPoolName: r.WorkerPoolName, SnapshotLocation: r.SnapshotLocation,
 		TokenPassthroughTargets: r.TokenPassthroughTargets, Credentials: r.Credentials, EgressDestinations: r.EgressDestinations,
 		SandboxClass: sandboxClass, WorkerPoolNamespace: r.Namespace,
-		Composition: r.Composition,
+		Composition: r.Composition, OnQuiesce: quiesceScopeIdentity(r.OnQuiesce),
 	})
 	if err != nil {
 		return RevisionID{}, fmt.Errorf("marshal runtime revision inputs: %w", err)
@@ -178,4 +183,12 @@ func (r *Revision) BootstrapBundle(id RevisionID) (*runtimev1.BootstrapBundle, e
 		return nil, fmt.Errorf("render bootstrap Agent Card: %w", err)
 	}
 	return bootstrap.NewBundle(id.String(), r.ConfigJSON, raw)
+}
+
+// quiesceScopeIdentity hashes the default Data scope as unset.
+func quiesceScopeIdentity(scope v1alpha3.RuntimeSnapshotScope) v1alpha3.RuntimeSnapshotScope {
+	if scope == v1alpha3.RuntimeSnapshotScopeData {
+		return ""
+	}
+	return scope
 }

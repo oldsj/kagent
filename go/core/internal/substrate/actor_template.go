@@ -107,6 +107,10 @@ func ActorTemplateForRevision(spec *translator.Revision, revisionID translator.R
 	if err != nil {
 		return nil, err
 	}
+	fidelity, err := QuiesceFidelity(spec.OnQuiesce)
+	if err != nil {
+		return nil, err
+	}
 
 	template := &ateapipb.ActorTemplate{
 		GoldenEgressPolicy: goldenPolicy,
@@ -131,7 +135,7 @@ func ActorTemplateForRevision(spec *translator.Revision, revisionID translator.R
 		WorkerSelector: workerSelectorForPool(workerKey),
 		SnapshotConfig: &ateapipb.SnapshotConfig{
 			StorageLocation:   spec.SnapshotLocation,
-			PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+			PreferredFidelity: fidelity,
 			// Pin the server default so immutable comparison survives creation.
 			GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
 		},
