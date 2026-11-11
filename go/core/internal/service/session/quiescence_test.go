@@ -40,6 +40,11 @@ func (s *idleQuiescenceStore) ClaimSessionQuiescence(context.Context) (*database
 	return nil, database.ErrNotFound
 }
 
+// No activity boundaries: these tests exercise task-boundary claims.
+func (s *idleQuiescenceStore) ClaimSessionActivityQuiescence(context.Context) (*database.SessionActivityQuiescence, error) {
+	return nil, database.ErrNotFound
+}
+
 func (s *idleQuiescenceStore) HasPendingSessionQuiescence(context.Context) (bool, error) {
 	s.pendingChecks.Add(1)
 	if s.beforeIdle != nil {
@@ -149,7 +154,7 @@ func TestIdleLifecycleDoesNotOwnTaskPublication(t *testing.T) {
 			hash := sha256.Sum256([]byte("completed"))
 			version, err := store.CreateRuntimeTask(t.Context(), session.Id, hash[:], task, "")
 			require.NoError(t, err)
-			require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, string(task.ID), version))
+			require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, string(task.ID), version, 0))
 
 			entered, release := make(chan struct{}), make(chan struct{})
 			actors := &retryTestActors{lifecycleTestActors: base, beforeRead: func(ctx context.Context) {

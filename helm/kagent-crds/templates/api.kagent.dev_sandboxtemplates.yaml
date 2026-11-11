@@ -115,6 +115,20 @@ spec:
                           by Substrate.
                         pattern: ^[^[:space:]]+$
                         type: string
+                      onQuiesce:
+                        description: |-
+                          OnQuiesce selects what a snapshot keeps when an idle runtime suspends.
+                          It defaults to Data. Full keeps processes that are running at
+                          suspension alive across it, at the cost of larger snapshots and slower
+                          suspend and wake. Harnesses that end their process tree after each turn
+                          keep no turn-started processes either way. Substrate keeps memory on a best-effort basis: it may capture
+                          less under host pressure, and it wakes a runtime without its memory when
+                          the snapshot cannot resume on the assigned worker. A checkpoint taken
+                          with Full cannot be forked.
+                        enum:
+                        - Data
+                        - Full
+                        type: string
                     required:
                     - location
                     type: object

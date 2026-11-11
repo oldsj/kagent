@@ -214,7 +214,7 @@ The runtime stages a final task update and acknowledges it after native cleanup.
 That acknowledgement publishes task state and history atomically, without waiting
 for suspension. A Session lifecycle worker independently claims the idle
 boundary in PostgreSQL. Both INPUT_REQUIRED/AUTH_REQUIRED and terminal work
-suspend the Actor and record the exact durable VOLUMES snapshot. Waiting tasks
+suspend the Actor and record the exact durable snapshot. Waiting tasks
 are not forkable. The Session stays logically READY, and Substrate ingress
 resumes it when another authorized interaction arrives.
 
@@ -234,6 +234,52 @@ replicas. Each worker scans at startup and, when idle, every minute by default
 leave an actor running until a surviving replica's next recovery scan; increasing
 the interval increases that delay and the time until its snapshot is available.
 Ordinary committed settlements do not wait for the recovery interval.
+
+`sessions.quiescenceDelay` (default `0s`, at most `1800s`) delays automatic
+suspension after a turn settles, so background processes such as dev servers keep
+running for a while. Settlement records the deadline with the database clock, so
+acknowledgement retries and controller restarts keep it; configuration changes
+affect only newly settled boundaries. Publication is not delayed: the task is
+visible immediately. A new turn supersedes unclaimed work during the delay. Claims
+check the deadline alongside the dispatch and lifecycle fences, and work that is not
+yet due does not count as pending, so idle workers notice it on their next recovery
+scan: suspension can land up to one recovery interval after the deadline. The
+delay does not wait for background processes to finish. Boundaries published on
+an ending runtime use no delay.
+
+The deadline column (migration 8) is nullable, and NULL means eligible now, so an
+older controller can still publish boundaries. Older workers ignore deadlines, so
+roll out in two steps: deploy the new controller with `quiescenceDelay: 0s`, wait
+for every old replica to exit (all replicas run quiescence workers), then raise the
+delay. To roll back the binary, set the delay to `0s` first and keep schema 8.
+
+### Runtime activity
+
+A runtime can be in use outside A2A tasks, for example by an attached client.
+Its harness reports busy and idle transitions with `TaskStoreService.ReportActivity`,
+which only the Session's authenticated Actor may call. An active report holds a
+one-minute lease, and the runtime renews it every 20 seconds while busy, so one
+lost report does not end it. An idle report ends the lease at once. Reports on a
+deleting Session fail with `FAILED_PRECONDITION`.
+
+While a lease runs, task boundaries are not claimable or pending, so a turn that
+settles while a client is attached does not suspend the runtime. Once the lease
+ends, the runtime becomes eligible `quiescenceDelay` later. A due task boundary is
+claimed first, because its claim records the task snapshot. Otherwise a separate
+activity claim, fenced like a task claim by dispatch, unpublished or pending task
+events, active tasks and checkpoint creation, suspends the Actor if it is still
+running and records no snapshot. The Session stays READY either way. A report
+after the claim leaves the activity boundary pending, so the next claim
+re-evaluates it. Activity claims never expire, and crash recovery and deletion
+retire them together with task boundaries.
+
+The latest report also counts as activity for idle expiration, and an unexpired
+lease blocks expiration.
+
+The Claude harness reports its SDK runner's busy/idle transitions through
+`go/adk/pkg/activity`. The reporter sends nothing until the first transition,
+retries transient failures with backoff, and stops after repeated
+`PERMISSION_DENIED` until the next transition.
 
 An empty claim is followed by a check for unclaimed work on ready sessions. If
 dispatch, checkpoint creation, a lifecycle operation, or a row lock blocks that
@@ -333,8 +379,8 @@ sequenceDiagram
     Gateway-->>Client: current public task
     Note over Worker,DB: Idle lifecycle runs independently of the client response
     Worker->>DB: claim idle boundary unless new execution superseded it
-    Worker->>Actor: suspend with VOLUMES snapshot
-    Actor-->>Worker: suspended Actor and durable VOLUMES snapshot
+    Worker->>Actor: suspend at the template's preferred fidelity
+    Actor-->>Worker: suspended Actor and durable snapshot
     Worker->>DB: record snapshot and finish idle claim
 ```
 
@@ -371,21 +417,54 @@ Stdout and stderr are combined, captured up to 64 KiB, and returned with an
 explicit truncation marker. Large results should be redirected to workspace files.
 Commands and their process groups are stopped when a call finishes, times out,
 or is canceled. Background processes are not durable work and have no process
-handle API in the bash tool. Suspending an Actor preserves files, not running
+handle API in the bash tool. With the default `Data` quiesce scope, suspending an Actor preserves files, not running
 commands. Command payloads and output are not logged by the shell helpers.
 
-Substrate v1.0.0 uses snapshot fidelity. Agent and standalone sandbox
-templates use VOLUMES. Resume starts fresh containers
-from the OCI image with the saved durable directories. Harnesses recover pending
-approvals and user input from their durable state; sandbox guests start with a
-fresh process registry. Agent checkpoints can be forked without carrying the
-source session's process memory or runtime identity into the new session.
+### Quiesce snapshot scope
+
+`spec.substrate.snapshotPolicy.onQuiesce` on a Harness or SandboxTemplate
+selects the ActorTemplate's preferred snapshot fidelity:
+
+| onQuiesce | Preferred fidelity | On resume |
+| --- | --- | --- |
+| `Data` (default) | VOLUMES | Fresh containers from the OCI image with the saved durable directories |
+| `Full` | MEMORY | Processes running at suspension continue where they stopped |
+
+Only processes that outlive a turn benefit. The Claude harness ends its whole
+native process tree at the end of every turn, including commands that Bash
+detached with `setsid`, so a dev server started from Claude's Bash tool does not
+survive a turn with either scope. The kagent bash tool likewise stops each
+command's process group when the call finishes. `Full` keeps standalone sandbox
+guest processes and any process the runtime itself keeps between turns.
+
+The template applies to every suspension of the Actor, whether the task is
+waiting for input or finished. Harnesses recover pending approvals and user
+input from their durable state with either scope; sandbox guests keep their
+process registry only with `Full`. `Data` hashes as an unset field, so
+existing revisions keep their digests; `Full` produces a new revision.
+
+Substrate v1.0.1 supports MEMORY on both the gVisor (`runsc checkpoint`) and
+microVM workers. The preferred fidelity is a ceiling, not a guarantee:
+
+- Substrate may package less than MEMORY, for example under host memory
+  pressure.
+- Resuming on a worker whose runtime cannot restore the snapshot falls back
+  to ROOTFS.
+- An Actor whose template was replaced restores only VOLUMES.
+
+So a Full Harness must still tolerate a cold start; processes that matter
+should be restartable from files.
 
 Kagent selects the highest snapshot generation and accepts its object-storage
 URI only after its durable status is COMPLETED. A pending generation cannot
-fall back to an older checkpoint. Suspension requires a durable VOLUMES snapshot;
-ROOTFS and MEMORY snapshots are rejected because they restore additional runtime
-state.
+fall back to an older checkpoint. Suspension requires a durable snapshot at
+VOLUMES, ROOTFS or MEMORY fidelity. Only VOLUMES checkpoints can be forked, so
+a fork never carries the source session's process memory or runtime identity
+into the new session; checkpoints of a `Full` Session are retained but return
+`FAILED_PRECONDITION` from `ForkSession`. Substrate restores an Actor created
+from a Tag at the Tag's fidelity under the same ActorTemplate, and offers no
+way to restore less, so a fork of a MEMORY checkpoint would resume the source
+Session's processes and identity.
 
 Codex and Claude record failed deferred continuations as `abandoned` in their
 existing input journals. Admission rejects abandoned or restored unfinished

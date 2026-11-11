@@ -283,7 +283,7 @@ func TestCrashedSessionRecoversAnOlderResumedTask(t *testing.T) {
 	hash := sha256.Sum256([]byte("waiting"))
 	waitingVersion, err := store.UpdateSessionTask(t.Context(), session.Id, version, hash[:], older, older, "")
 	require.NoError(t, err)
-	require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, string(older.ID), waitingVersion))
+	require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, string(older.ID), waitingVersion, 0))
 	work, err := store.ClaimSessionQuiescence(t.Context())
 	require.NoError(t, err)
 	require.NoError(t, store.FinishSessionQuiescence(t.Context(), work, &database.SessionTaskSnapshot{
@@ -297,7 +297,7 @@ func TestCrashedSessionRecoversAnOlderResumedTask(t *testing.T) {
 	hash = sha256.Sum256([]byte("newer completed task"))
 	newerVersion, err := store.CreateRuntimeTask(t.Context(), session.Id, hash[:], newer, "")
 	require.NoError(t, err)
-	require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, string(newer.ID), newerVersion))
+	require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, string(newer.ID), newerVersion, 0))
 	work, err = store.ClaimSessionQuiescence(t.Context())
 	require.NoError(t, err)
 	require.NoError(t, store.FinishSessionQuiescence(t.Context(), work, &database.SessionTaskSnapshot{
@@ -327,7 +327,7 @@ func TestExplicitRevertRespectsCheckpointCreation(t *testing.T) {
 	hash := sha256.Sum256([]byte("completed"))
 	version, err := store.UpdateSessionTask(t.Context(), session.Id, version, hash[:], task, task, "")
 	require.NoError(t, err)
-	require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, string(task.ID), version))
+	require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, string(task.ID), version, 0))
 	work, err := store.ClaimSessionQuiescence(t.Context())
 	require.NoError(t, err)
 	require.NoError(t, store.FinishSessionQuiescence(t.Context(), work, &database.SessionTaskSnapshot{
@@ -356,7 +356,7 @@ func TestExplicitRevertRetiresIdleSuspensionOfCrashedActor(t *testing.T) {
 	hash := sha256.Sum256([]byte("completed"))
 	version, err := store.UpdateSessionTask(t.Context(), session.Id, version, hash[:], task, task, "")
 	require.NoError(t, err)
-	require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, string(task.ID), version))
+	require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, string(task.ID), version, 0))
 	work, err := store.ClaimSessionQuiescence(t.Context())
 	require.NoError(t, err)
 	workflow := NewActorWorkflow(store, actors, make(chan struct{}, 1), time.Minute)
@@ -415,7 +415,7 @@ func TestExplicitRevertCannotCheckpointDiscardedTerminalState(t *testing.T) {
 	hash := sha256.Sum256([]byte("completed before snapshot"))
 	version, err := store.UpdateSessionTask(t.Context(), session.Id, version, hash[:], task, task, "")
 	require.NoError(t, err)
-	require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, string(task.ID), version))
+	require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, string(task.ID), version, 0))
 	workflow := NewActorWorkflow(store, actors, make(chan struct{}, 1), time.Minute)
 	_, err = workflow.Revert(t.Context(), session)
 	require.NoError(t, err)
@@ -439,7 +439,7 @@ func TestExplicitRevertPreservesOnlyCapturedWaits(t *testing.T) {
 				hash := sha256.Sum256([]byte(state))
 				version, err := store.UpdateSessionTask(t.Context(), session.Id, version, hash[:], task, task, "")
 				require.NoError(t, err)
-				require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, string(task.ID), version))
+				require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, string(task.ID), version, 0))
 				if captured {
 					work, err := store.ClaimSessionQuiescence(t.Context())
 					require.NoError(t, err)
@@ -473,7 +473,7 @@ func TestExplicitRevertRetainsWaitCapturedByLaterTurn(t *testing.T) {
 	hash := sha256.Sum256([]byte("waiting"))
 	version, err := store.UpdateSessionTask(t.Context(), session.Id, version, hash[:], waiting, waiting, "")
 	require.NoError(t, err)
-	require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, string(waiting.ID), version))
+	require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, string(waiting.ID), version, 0))
 	message := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("another turn"))
 	message.ContextID = session.ContextId
 	later := a2a.NewSubmittedTask(message, message)
@@ -481,7 +481,7 @@ func TestExplicitRevertRetainsWaitCapturedByLaterTurn(t *testing.T) {
 	hash = sha256.Sum256([]byte("later completed turn"))
 	version, err = store.CreateRuntimeTask(t.Context(), session.Id, hash[:], later, "")
 	require.NoError(t, err)
-	require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, string(later.ID), version))
+	require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, string(later.ID), version, 0))
 	work, err := store.ClaimSessionQuiescence(t.Context())
 	require.NoError(t, err)
 	require.NoError(t, store.FinishSessionQuiescence(t.Context(), work, &database.SessionTaskSnapshot{

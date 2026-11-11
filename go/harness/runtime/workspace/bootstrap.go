@@ -124,6 +124,21 @@ func (b *Bootstrapper) Ready(ctx context.Context) string {
 	return b.ensure(ctx)
 }
 
+// RestorePending returns the wrapped runner's turn that was waiting for input
+// when the Actor was last suspended. The executor asks the runner it was
+// given, so without this a Session with a workspace would lose a pending
+// approval or question across sleep. A waiting turn has already run, so its
+// workspace exists and needs no bootstrap here.
+func (b *Bootstrapper) RestorePending() (taskID, contextID string, pending runtime.PendingTurn, err error) {
+	restorer, ok := b.next.(interface {
+		RestorePending() (string, string, runtime.PendingTurn, error)
+	})
+	if !ok {
+		return "", "", nil, nil
+	}
+	return restorer.RestorePending()
+}
+
 // ensure returns a public failure message, or "" when the workspace is ready or
 // was never requested.
 func (b *Bootstrapper) ensure(ctx context.Context) string {

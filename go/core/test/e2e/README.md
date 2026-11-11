@@ -319,3 +319,17 @@ missing worker capacity fails the test rather than skipping continuation coverag
 There are no retries around list calls, so a Substrate token-format change fails
 on continuation. Run with `KAGENT_E2E_API_URL` and the normal kagent harness fixture
 configured, using `go test ./core/test/e2e -run '^TestSubstrateInventoryPagination$'`.
+
+`TestE2EGitInstanceProxy` runs only when `KAGENT_E2E_GIT_INSTANCE` names a
+Mainloop Git instance namespace, such as `mainloop-dev`. It serves a test
+repository through `git http-backend` on the test host and publishes it as that
+instance's `mainloop-git-read` and `mainloop-git-push` Services on port 80,
+creating the namespace when absent. `KAGENT_E2E_LOCAL_HOST` must therefore be
+an IP address the cluster can reach; on Docker Desktop, resolve
+`host.docker.internal` inside a node. The installed
+`config.server.auth.sessionPolicy` must list the instance's `git-read` and
+`git-push` tuples and the `git-instance-e2e` Agent. A Claude turn then commits
+and pushes; the test requires the checkout and push to reach only that
+instance's listeners, each with its own injected per-Session credential. It
+also checks that a Harness pairing two instances, and a Session binding the
+instance's Secret to another instance's listener, are refused.

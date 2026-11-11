@@ -47,6 +47,16 @@ class TaskStoreServiceStub:
                 request_serializer=kagent_dot_runtime_dot_v1_dot_task__store__pb2.TaskStoreServiceGetWorkspaceRequest.SerializeToString,
                 response_deserializer=kagent_dot_runtime_dot_v1_dot_task__store__pb2.TaskStoreServiceGetWorkspaceResponse.FromString,
                 _registered_method=True)
+        self.CompleteWorkspacePreparation = channel.unary_unary(
+                '/kagent.runtime.v1.TaskStoreService/CompleteWorkspacePreparation',
+                request_serializer=kagent_dot_runtime_dot_v1_dot_task__store__pb2.TaskStoreServiceCompleteWorkspacePreparationRequest.SerializeToString,
+                response_deserializer=kagent_dot_runtime_dot_v1_dot_task__store__pb2.TaskStoreServiceCompleteWorkspacePreparationResponse.FromString,
+                _registered_method=True)
+        self.ReportActivity = channel.unary_unary(
+                '/kagent.runtime.v1.TaskStoreService/ReportActivity',
+                request_serializer=kagent_dot_runtime_dot_v1_dot_task__store__pb2.TaskStoreServiceReportActivityRequest.SerializeToString,
+                response_deserializer=kagent_dot_runtime_dot_v1_dot_task__store__pb2.TaskStoreServiceReportActivityResponse.FromString,
+                _registered_method=True)
 
 
 class TaskStoreServiceServicer:
@@ -98,6 +108,27 @@ class TaskStoreServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def CompleteWorkspacePreparation(self, request, context):
+        """CompleteWorkspacePreparation reports the result of the assignment returned
+        by GetWorkspace. Only the originally assigned bytes are accepted; repeating
+        a completed report is a no-op.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ReportActivity(self, request, context):
+        """ReportActivity tells the control plane whether anything uses the Session
+        runtime outside A2A tasks, such as an attached client or background work.
+        An active report holds idle suspension until its lease ends; the runtime
+        renews it every renew_after. An idle report, or a lapsed lease, lets the
+        control plane suspend the runtime after sessions.quiescenceDelay. A report
+        also extends the Session's idle-expiration clock. Reports are idempotent.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_TaskStoreServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -130,6 +161,16 @@ def add_TaskStoreServiceServicer_to_server(servicer, server):
                     servicer.GetWorkspace,
                     request_deserializer=kagent_dot_runtime_dot_v1_dot_task__store__pb2.TaskStoreServiceGetWorkspaceRequest.FromString,
                     response_serializer=kagent_dot_runtime_dot_v1_dot_task__store__pb2.TaskStoreServiceGetWorkspaceResponse.SerializeToString,
+            ),
+            'CompleteWorkspacePreparation': grpc.unary_unary_rpc_method_handler(
+                    servicer.CompleteWorkspacePreparation,
+                    request_deserializer=kagent_dot_runtime_dot_v1_dot_task__store__pb2.TaskStoreServiceCompleteWorkspacePreparationRequest.FromString,
+                    response_serializer=kagent_dot_runtime_dot_v1_dot_task__store__pb2.TaskStoreServiceCompleteWorkspacePreparationResponse.SerializeToString,
+            ),
+            'ReportActivity': grpc.unary_unary_rpc_method_handler(
+                    servicer.ReportActivity,
+                    request_deserializer=kagent_dot_runtime_dot_v1_dot_task__store__pb2.TaskStoreServiceReportActivityRequest.FromString,
+                    response_serializer=kagent_dot_runtime_dot_v1_dot_task__store__pb2.TaskStoreServiceReportActivityResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -297,6 +338,60 @@ class TaskStoreService:
             '/kagent.runtime.v1.TaskStoreService/GetWorkspace',
             kagent_dot_runtime_dot_v1_dot_task__store__pb2.TaskStoreServiceGetWorkspaceRequest.SerializeToString,
             kagent_dot_runtime_dot_v1_dot_task__store__pb2.TaskStoreServiceGetWorkspaceResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def CompleteWorkspacePreparation(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kagent.runtime.v1.TaskStoreService/CompleteWorkspacePreparation',
+            kagent_dot_runtime_dot_v1_dot_task__store__pb2.TaskStoreServiceCompleteWorkspacePreparationRequest.SerializeToString,
+            kagent_dot_runtime_dot_v1_dot_task__store__pb2.TaskStoreServiceCompleteWorkspacePreparationResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ReportActivity(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kagent.runtime.v1.TaskStoreService/ReportActivity',
+            kagent_dot_runtime_dot_v1_dot_task__store__pb2.TaskStoreServiceReportActivityRequest.SerializeToString,
+            kagent_dot_runtime_dot_v1_dot_task__store__pb2.TaskStoreServiceReportActivityResponse.FromString,
             options,
             channel_credentials,
             insecure,

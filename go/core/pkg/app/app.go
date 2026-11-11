@@ -382,7 +382,7 @@ func Run(ctx context.Context, input *configv1.ControllerConfig, opts Options) er
 	quiescenceWake := make(chan struct{}, 1)
 	pushWake := make(chan struct{}, 1)
 	sessionWorkflow := sessionsvc.NewActorWorkflow(store, actors, quiescenceWake, quiescenceInterval, sessionsvc.WithOperationTimeout(deadlines.Operation))
-	runtimeTasks := taskstore.NewService(store, quiescenceWake, pushWake)
+	runtimeTasks := taskstore.NewService(store, quiescenceWake, pushWake, cfg.GetSessions().GetQuiescenceDelay().AsDuration())
 	if err := manager.Add(sessionWorkflow); err != nil {
 		return fmt.Errorf("register idle session worker: %w", err)
 	}

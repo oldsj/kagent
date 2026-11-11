@@ -144,6 +144,7 @@ func runtimeMethodPolicies() MethodPolicies {
 		runtimev1.TaskStoreService_UpdateTask_FullMethodName:                   auth.AccessRuntime,
 		runtimev1.TaskStoreService_SettleTask_FullMethodName:                   auth.AccessRuntime,
 		runtimev1.TaskStoreService_GetWorkspace_FullMethodName:                 auth.AccessRuntime,
+		runtimev1.TaskStoreService_ReportActivity_FullMethodName:               auth.AccessRuntime,
 		runtimev1.TaskStoreService_CompleteWorkspacePreparation_FullMethodName: auth.AccessRuntime,
 		runtimev1.TaskStoreService_ListTasks_FullMethodName:                    auth.AccessRuntime,
 		runtimev1.MemoryService_AddSession_FullMethodName:                      auth.AccessRuntime,

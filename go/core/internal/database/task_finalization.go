@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"errors"
+	"time"
 
 	a2apb "github.com/a2aproject/a2a-go/v2/a2apb/v1"
 	"github.com/a2aproject/a2a-go/v2/a2apb/v1/pbconv"
@@ -14,7 +15,9 @@ import (
 // atomically after native cleanup. It does not wait for runtime pause or snapshots.
 // Retries cannot republish an old state over a later turn. Callers authenticate
 // runtime authority; a missing or deleted session returns ErrNotFound.
-func (c *Client) SettleSessionTask(ctx context.Context, sessionID, taskID string, version int64) error {
+// quiesceDelay (clamped to 0-30m) sets the boundary's durable quiescence
+// deadline from the database clock; retries of a published boundary keep it.
+func (c *Client) SettleSessionTask(ctx context.Context, sessionID, taskID string, version int64, quiesceDelay time.Duration) error {
 	return c.withTx(ctx, func(tx pgx.Tx) error {
 		session, err := lockSession(ctx, tx, sessionID)
 		if err != nil {
@@ -23,8 +26,13 @@ func (c *Client) SettleSessionTask(ctx context.Context, sessionID, taskID string
 		if session.State == "RUNTIME_STATE_DELETED" {
 			return ErrNotFound
 		}
-		return settleSessionTask(ctx, tx, session, taskID, version)
+		return settleSessionTask(ctx, tx, session, taskID, version, quiesceDelay)
 	})
+}
+
+// boundedQuiesceDelay keeps post-turn execution within zero to thirty minutes.
+func boundedQuiesceDelay(delay time.Duration) time.Duration {
+	return min(max(delay, 0), 30*time.Minute)
 }
 
 // publishSavedSessionResults publishes every result the runtime saved whose
@@ -44,23 +52,27 @@ func publishSavedSessionResults(ctx context.Context, tx pgx.Tx, session sessionR
 		return err
 	}
 	for _, saved := range boundaries {
-		if err := settleSessionTask(ctx, tx, session, saved.TaskID, saved.Sequence); err != nil {
+		// The runtime is ending, so there is nothing to keep running.
+		if err := settleSessionTask(ctx, tx, session, saved.TaskID, saved.Sequence, 0); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// retireSessionQuiescence drops idle-work markers for a runtime that no longer
-// needs a later suspension.
+// retireSessionQuiescence drops idle-work markers, task and activity, for a
+// runtime that no longer needs a later suspension.
 func retireSessionQuiescence(ctx context.Context, tx pgx.Tx, session sessionRow) error {
-	return execSQL(ctx, tx, `UPDATE session_task_event SET quiescence_pending = FALSE WHERE history_id = $1 AND quiescence_pending`, session.HistoryID)
+	if err := execSQL(ctx, tx, `UPDATE session_task_event SET quiescence_pending = FALSE WHERE history_id = $1 AND quiescence_pending`, session.HistoryID); err != nil {
+		return err
+	}
+	return retireSessionActivity(ctx, tx, session)
 }
 
 // settleSessionTask publishes one saved boundary under the session lock. Runtime
 // acknowledgement, confirmed actor deletion, or a confirmed crash must establish
 // cleanup first.
-func settleSessionTask(ctx context.Context, tx pgx.Tx, session sessionRow, taskID string, version int64) error {
+func settleSessionTask(ctx context.Context, tx pgx.Tx, session sessionRow, taskID string, version int64, quiesceDelay time.Duration) error {
 	type boundary struct {
 		Data            []byte
 		ExpectedVersion int64
@@ -100,9 +112,12 @@ func settleSessionTask(ctx context.Context, tx pgx.Tx, session sessionRow, taskI
 		return err
 	}
 	if err := execSQL(ctx, tx, `
-		UPDATE session_task_event SET published = TRUE
+		UPDATE session_task_event SET published = TRUE,
+		    quiescence_due_at = CASE WHEN sequence = $4
+		        THEN clock_timestamp() + $5::bigint * INTERVAL '1 microsecond'
+		        ELSE quiescence_due_at END
 		WHERE history_id = $1 AND task_id = $2 AND sequence > $3 AND sequence <= $4
-	`, session.HistoryID, taskID, row.ExpectedVersion, version); err != nil {
+	`, session.HistoryID, taskID, row.ExpectedVersion, version, boundedQuiesceDelay(quiesceDelay).Microseconds()); err != nil {
 		return err
 	}
 	return publishPushBoundary(ctx, tx, session.HistoryID, taskID, version, task)

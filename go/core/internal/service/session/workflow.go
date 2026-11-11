@@ -20,6 +20,8 @@ type workflowStore interface {
 	ClaimSessionQuiescence(context.Context) (*database.SessionQuiescence, error)
 	HasPendingSessionQuiescence(context.Context) (bool, error)
 	FinishSessionQuiescence(context.Context, *database.SessionQuiescence, *database.SessionTaskSnapshot) error
+	ClaimSessionActivityQuiescence(context.Context) (*database.SessionActivityQuiescence, error)
+	FinishSessionActivityQuiescence(context.Context, *database.SessionActivityQuiescence) error
 	GetSessionForRuntime(context.Context, string, string) (*apiv1.Session, error)
 	GetSessionCheckpointSnapshot(context.Context, string, string) (*database.SessionTaskSnapshot, string, error)
 	GetRuntimeRevision(context.Context, string) (*database.RuntimeRevision, error)
@@ -101,7 +103,7 @@ func (w *ActorWorkflow) Quiesce(ctx context.Context, session *apiv1.Session) (*d
 		return nil, fmt.Errorf("suspend Actor %s/%s returned no snapshot", atespace, name)
 	}
 	fidelity := snapshot.GetFidelity()
-	if fidelity != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
+	if !substrate.SuspendFidelity(fidelity) {
 		return nil, fmt.Errorf("actor %s/%s returned invalid snapshot fidelity %s", atespace, name, fidelity)
 	}
 	return &database.SessionTaskSnapshot{
