@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kagent-dev/kagent/go/harness/claude/config"
 	"github.com/kagent-dev/kagent/go/harness/claude/internal/driver"
 	"github.com/kagent-dev/kagent/go/harness/claude/internal/sdkrunner"
 	"github.com/kagent-dev/kagent/go/harness/runtime/continuation"
@@ -29,12 +30,10 @@ const DriverEnvName = "KAGENT_CLAUDE_DRIVER"
 // router CONNECT.
 const ClientAddr = ":7682"
 
-// Image paths of the SDK bridge. The image installs Node from Alpine and the
-// bridge with its pinned SDK under /opt/kagent/sdk-runner.
-const (
-	sdkNode   = "node"
-	sdkScript = "/opt/kagent/sdk-runner/runner.mjs"
-)
+// imageSDKRunner is the harness image's SDK bridge: Node from Alpine on PATH
+// and the bridge with its pinned SDK under /opt/kagent/sdk-runner. A composed
+// runtime's configuration names the payload's instead.
+var imageSDKRunner = config.SDKRunner{Node: "node", Script: "/opt/kagent/sdk-runner/runner.mjs"}
 
 type driverMode string
 
@@ -86,17 +85,17 @@ type sdkWiring struct {
 	prepare func(context.Context) error
 }
 
-func newSDKWiring(ctx context.Context, cfg Config, base *driver.ProcessDriver, store *continuation.Store, grace time.Duration) (*sdkWiring, error) {
-	if _, err := exec.LookPath(sdkNode); err != nil {
-		return nil, fmt.Errorf("the SDK runner needs Node in the harness image: %w", err)
+func newSDKWiring(ctx context.Context, cfg Config, bridge config.SDKRunner, base *driver.ProcessDriver, store *continuation.Store, grace time.Duration) (*sdkWiring, error) {
+	if _, err := exec.LookPath(bridge.Node); err != nil {
+		return nil, fmt.Errorf("the SDK runner needs Node in the runtime: %w", err)
 	}
-	if _, err := os.Stat(sdkScript); err != nil {
-		return nil, fmt.Errorf("the SDK runner bridge is missing from the harness image: %w", err)
+	if _, err := os.Stat(bridge.Script); err != nil {
+		return nil, fmt.Errorf("the SDK runner bridge is missing from the runtime: %w", err)
 	}
 	w := &sdkWiring{current: &currentDriver{driver: base}}
 	dir := filepath.Join(cfg.DataDir, "sdk-runner")
 	session, err := sdkrunner.New(sdkrunner.Config{
-		Launcher: sdkrunner.NodeLauncher{Node: sdkNode, Script: sdkScript, Dir: "/", Env: bridgeEnvironment(cfg.Environment)},
+		Launcher: sdkrunner.NodeLauncher{Node: bridge.Node, Script: bridge.Script, ICUDataDir: bridge.ICUDataDir, Dir: "/", Env: bridgeEnvironment(cfg.Environment)},
 		Spec: func(profile sdkrunner.Profile) (sdkrunner.Spec, error) {
 			return w.current.get().SDKSpec(profile, filepath.Join(dir, "home"))
 		},

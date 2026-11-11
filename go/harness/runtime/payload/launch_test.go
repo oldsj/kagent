@@ -105,10 +105,10 @@ func TestLaunchClaudeDriver(t *testing.T) {
 		driver   string
 		wantErr  string
 	}{
-		{name: "Given a Claude payload, when the launcher starts with the sdk driver, assert that it refuses before touching durable state", provider: "claude", driver: "sdk", wantErr: `KAGENT_CLAUDE_DRIVER="sdk" is not supported`},
 		{name: "Given a Claude payload, when the launcher starts with an unknown driver, assert that it refuses before touching durable state", provider: "claude", driver: "other", wantErr: `KAGENT_CLAUDE_DRIVER="other" is not supported`},
 		{name: "Given a Claude payload, when the launcher starts with an empty driver, assert that it execs the harness", provider: "claude", driver: ""},
 		{name: "Given a Claude payload, when the launcher starts with the process driver, assert that it execs the harness", provider: "claude", driver: "process"},
+		{name: "Given a Claude payload with the SDK bridge, when the launcher starts with the sdk driver, assert that it execs the harness", provider: "claude", driver: "sdk"},
 		{name: "Given a Codex payload, when the launcher starts with the Claude sdk driver, assert that the unrelated selector is ignored", provider: "codex", driver: "sdk"},
 	}
 	for _, scenario := range scenarios {
@@ -142,6 +142,9 @@ func TestLaunchRejectsInvalidPayloadOrData(t *testing.T) {
 		}},
 		{name: "Given a payload binary whose bytes differ from the manifest, when the launcher starts, assert that it refuses", wantErr: "runtime checksum mismatch: bin/claude", given: func(t *testing.T, f *launchFixture) {
 			require.NoError(t, os.WriteFile(filepath.Join(f.root, "bin", "claude"), []byte("wrong bytes"), 0755))
+		}},
+		{name: "Given a Claude manifest without the SDK bridge, when the launcher starts, assert that it refuses", wantErr: "runtime manifest is missing libexec/sdk-runner/runner.mjs", given: func(t *testing.T, f *launchFixture) {
+			f.rewriteManifest(t, func(m *Manifest) { delete(m.Files, "libexec/sdk-runner/runner.mjs") })
 		}},
 		{name: "Given a manifest CLI version outside the release lock, when the launcher starts, assert that it refuses", wantErr: "does not match the CLI release lock", given: func(t *testing.T, f *launchFixture) {
 			f.rewriteManifest(t, func(m *Manifest) { m.CLIVersion = "0.0.1" })
@@ -277,6 +280,12 @@ func newLaunchFixture(t *testing.T, provider string) *launchFixture {
 	}
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "libexec"), 0755))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "libexec", provider), []byte("fixture cli"), 0755))
+	if provider == "claude" {
+		for _, name := range claudeFiles[1:] {
+			require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(root, name)), 0755))
+			require.NoError(t, os.WriteFile(filepath.Join(root, name), []byte("fixture "+name), 0755))
+		}
+	}
 	manifest, err := BuildManifest(root, provider)
 	require.NoError(t, err)
 	// Payloads are Linux-only; pin the running platform so the tests also run

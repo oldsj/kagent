@@ -31,6 +31,15 @@ environment from `/data`. The harness reads its configuration from the
 bootstrap bundle after exec and checks its own CLI version. D must provide a
 writable `/tmp` for the Claude harness's temporary files.
 
+The Claude payload also ships the Agent SDK driver (`KAGENT_CLAUDE_DRIVER=sdk`):
+Alpine's Node in `libexec/node`, the bridge and the SDK's self-contained entry
+module in `libexec/sdk-runner`, and Node's ICU data in `share/icu`. Node sits
+off the launcher's `PATH`, so it never shadows D's own `node`, and the bridge
+passes the ICU data with `--icu-data-dir` rather than `NODE_ICU_DATA`, so
+nothing Claude runs inherits it. The SDK, the payload's locked CLI and the
+Claude harness pin are one Claude Code release, which a test enforces. The
+Codex payload carries no Node.
+
 ## Admission
 
 Selection is refused unless `server.auth.session_policy` allows the Agent and
@@ -49,9 +58,9 @@ successful revision:
    catalog must have a payload for the harness and platform.
 2. `translator.ComposeRevision` derives the variant: image D, entrypoint
    `/opt/mainloop-runtime/bin/launch`, the CLI executable and expected version
-   from the payload, and `MAINLOOP_RUNTIME_PLATFORM`. Harness environment that
-   would redirect the payload's loader, homes or runtime paths is rejected, as
-   is the Claude SDK driver, which the payload does not ship.
+   from the payload (for Claude, also the SDK bridge's Node, script and ICU
+   data), and `MAINLOOP_RUNTIME_PLATFORM`. Harness environment that would
+   redirect the payload's loader, homes or runtime paths is rejected.
 3. The ActorTemplate mounts R as a read-only Substrate image volume at
    `/opt/mainloop-runtime` and adds `CHOWN`, `DAC_OVERRIDE`, `FOWNER`,
    `SETGID` and `SETUID` so development-image tooling can drop to its own
