@@ -14,9 +14,12 @@ import (
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 
+	"github.com/kagent-dev/kagent/go/adk/pkg/activity"
 	"github.com/kagent-dev/kagent/go/adk/pkg/app"
 	"github.com/kagent-dev/kagent/go/adk/pkg/bootstrap"
 	"github.com/kagent-dev/kagent/go/adk/pkg/controllerclient"
+	"github.com/kagent-dev/kagent/go/adk/pkg/taskstore"
+	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	"github.com/kagent-dev/kagent/go/harness/claude/config"
 	"github.com/kagent-dev/kagent/go/harness/claude/executor"
 	"github.com/kagent-dev/kagent/go/harness/runtime/workspace"
@@ -98,10 +101,21 @@ func run(ctx context.Context, check bool, getenv func(string) string, environmen
 			defer controller.Close()
 		}
 	}
+	if !check && controller == nil && cfg.ControlPlaneURL != "" {
+		// Activity reports need the control plane even without a workspace.
+		if controller, err = controllerclient.New(controllerclient.Config{APIURL: cfg.ControlPlaneURL, AgentName: card.Name}); err != nil {
+			return err
+		}
+		defer controller.Close()
+	}
 	execCfg := executor.Config{ConfigJSON: configJSON, DataDir: dataDir, Environment: environment, Workspace: source}
 	if !check {
 		execCfg.ClientAddr = executor.ClientAddr
-		execCfg.Activity = loggedActivity{ctx: ctx}
+		if controller != nil {
+			reporter := activity.NewReporter(taskstore.New(controller, apia2a.RuntimeIdentityPath), logging.FromContext(ctx))
+			go reporter.Run(ctx)
+			execCfg.Activity = reporter
+		}
 	}
 	exec, closer, err := executor.New(ctx, execCfg)
 	if err != nil {
@@ -128,12 +142,4 @@ type startMetrics func()
 func (start startMetrics) Intercept(ctx context.Context, _ *a2asrv.ExecutorContext) (context.Context, error) {
 	start()
 	return ctx, nil
-}
-
-// loggedActivity records the SDK runner's busy/idle changes. It stands in for
-// the control plane's activity reporter until that client lands on this branch.
-type loggedActivity struct{ ctx context.Context }
-
-func (a loggedActivity) SetActive(active bool) {
-	logging.FromContext(a.ctx).InfoContext(a.ctx, "sdk runner activity", "active", active)
 }

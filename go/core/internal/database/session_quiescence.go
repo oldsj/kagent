@@ -25,8 +25,10 @@ type SessionQuiescence struct {
 // dispatch, checkpoints, lifecycle operations, or row locks. Already claimed
 // work is excluded: its runtime outcome may be uncertain and cannot be retried
 // by another worker. Suspended/deleted sessions need no automatic runtime work.
-// Boundaries still inside their quiescence delay are not pending yet, so idle
-// workers fall back to the recovery interval instead of polling until they are due.
+// Task boundaries still inside their quiescence delay, or held by reported
+// runtime activity, are not pending yet, so idle workers fall back to the
+// recovery interval instead of polling until they are due. Due activity
+// boundaries count as pending work.
 func (c *Client) HasPendingSessionQuiescence(ctx context.Context) (bool, error) {
 	return queryOne(ctx, c.db, `
 		SELECT EXISTS (
@@ -34,6 +36,12 @@ func (c *Client) HasPendingSessionQuiescence(ctx context.Context) (bool, error) 
 			WHERE e.published AND e.quiescence_pending = TRUE
 			  AND e.quiescence_executor_id IS NULL
 			  AND (e.quiescence_due_at IS NULL OR e.quiescence_due_at <= statement_timestamp())
+			  AND NOT EXISTS (SELECT 1 FROM session_activity a WHERE a.session_id = i.id
+			      AND (a.idle_due_at > statement_timestamp() OR a.executor_id IS NOT NULL))
+			  AND i.state = 'RUNTIME_STATE_READY'
+		) OR EXISTS (
+			SELECT 1 FROM session_activity a JOIN session_record i ON i.id = a.session_id
+			WHERE a.pending AND a.executor_id IS NULL AND a.idle_due_at <= statement_timestamp()
 			  AND i.state = 'RUNTIME_STATE_READY'
 		)
 	`, pgx.RowTo[bool])
@@ -42,7 +50,9 @@ func (c *Client) HasPendingSessionQuiescence(ctx context.Context) (bool, error) 
 // ClaimSessionQuiescence claims an idle session at its latest settled task
 // version. A new turn supersedes unclaimed idle work; a claim blocks task writes,
 // checkpoints, and explicit lifecycle operations until it finishes. Missing work,
-// including boundaries before their durable quiescence deadline, returns ErrNotFound. Uncertain issued work is never reassigned after a timeout.
+// including boundaries before their durable quiescence deadline, returns ErrNotFound.
+// Reported runtime activity holds the claim until its idle deadline, so a turn
+// that settles while a client is attached does not suspend the runtime. Uncertain issued work is never reassigned after a timeout.
 func (c *Client) ClaimSessionQuiescence(ctx context.Context) (*SessionQuiescence, error) {
 	var result *SessionQuiescence
 	err := c.withTx(ctx, func(tx pgx.Tx) error {
@@ -57,6 +67,8 @@ func (c *Client) ClaimSessionQuiescence(ctx context.Context) (*SessionQuiescence
 			WHERE e.published AND e.quiescence_pending = TRUE
 			  AND e.quiescence_executor_id IS NULL
 			  AND (e.quiescence_due_at IS NULL OR e.quiescence_due_at <= statement_timestamp())
+			  AND NOT EXISTS (SELECT 1 FROM session_activity a WHERE a.session_id = i.id
+			      AND (a.idle_due_at > statement_timestamp() OR a.executor_id IS NOT NULL))
 			  AND i.state = 'RUNTIME_STATE_READY'
 			  AND i.operation = 'RUNTIME_OPERATION_NONE'
 			  AND (i.dispatch_expires_at IS NULL OR i.dispatch_expires_at <= clock_timestamp())
@@ -93,6 +105,8 @@ func (c *Client) ClaimSessionQuiescence(ctx context.Context) (*SessionQuiescence
 			WHERE sequence = $1 AND published AND quiescence_pending
 			  AND quiescence_executor_id IS NULL
 			  AND (quiescence_due_at IS NULL OR quiescence_due_at <= statement_timestamp())
+			  AND NOT EXISTS (SELECT 1 FROM session_activity WHERE session_id = $3
+			      AND (idle_due_at > clock_timestamp() OR executor_id IS NOT NULL))
 			  AND NOT EXISTS (SELECT 1 FROM session WHERE id = $3 AND dispatch_expires_at > clock_timestamp())
 			  AND NOT EXISTS (SELECT 1 FROM session_checkpoint WHERE source_session_id = $3 AND state = 'CREATING')
 		`, result.Version, result.ExecutorID, session.ID)

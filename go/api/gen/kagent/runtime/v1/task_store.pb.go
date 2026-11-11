@@ -12,6 +12,7 @@ import (
 	v11 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	durationpb "google.golang.org/protobuf/types/known/durationpb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -695,11 +696,118 @@ func (x *TaskStoreServiceGetWorkspaceResponse) GetFreshConversation() bool {
 	return false
 }
 
+type TaskStoreServiceReportActivityRequest struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	SessionId string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	// True while a client, turn, or background work uses the runtime.
+	Active        bool `protobuf:"varint,2,opt,name=active,proto3" json:"active,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TaskStoreServiceReportActivityRequest) Reset() {
+	*x = TaskStoreServiceReportActivityRequest{}
+	mi := &file_kagent_runtime_v1_task_store_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TaskStoreServiceReportActivityRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TaskStoreServiceReportActivityRequest) ProtoMessage() {}
+
+func (x *TaskStoreServiceReportActivityRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kagent_runtime_v1_task_store_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TaskStoreServiceReportActivityRequest.ProtoReflect.Descriptor instead.
+func (*TaskStoreServiceReportActivityRequest) Descriptor() ([]byte, []int) {
+	return file_kagent_runtime_v1_task_store_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *TaskStoreServiceReportActivityRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *TaskStoreServiceReportActivityRequest) GetActive() bool {
+	if x != nil {
+		return x.Active
+	}
+	return false
+}
+
+type TaskStoreServiceReportActivityResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// How long an active report holds idle suspension.
+	Lease *durationpb.Duration `protobuf:"bytes,1,opt,name=lease,proto3" json:"lease,omitempty"`
+	// When an active runtime should report again to keep its lease.
+	RenewAfter    *durationpb.Duration `protobuf:"bytes,2,opt,name=renew_after,json=renewAfter,proto3" json:"renew_after,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TaskStoreServiceReportActivityResponse) Reset() {
+	*x = TaskStoreServiceReportActivityResponse{}
+	mi := &file_kagent_runtime_v1_task_store_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TaskStoreServiceReportActivityResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TaskStoreServiceReportActivityResponse) ProtoMessage() {}
+
+func (x *TaskStoreServiceReportActivityResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_kagent_runtime_v1_task_store_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TaskStoreServiceReportActivityResponse.ProtoReflect.Descriptor instead.
+func (*TaskStoreServiceReportActivityResponse) Descriptor() ([]byte, []int) {
+	return file_kagent_runtime_v1_task_store_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *TaskStoreServiceReportActivityResponse) GetLease() *durationpb.Duration {
+	if x != nil {
+		return x.Lease
+	}
+	return nil
+}
+
+func (x *TaskStoreServiceReportActivityResponse) GetRenewAfter() *durationpb.Duration {
+	if x != nil {
+		return x.RenewAfter
+	}
+	return nil
+}
+
 var File_kagent_runtime_v1_task_store_proto protoreflect.FileDescriptor
 
 const file_kagent_runtime_v1_task_store_proto_rawDesc = "" +
 	"\n" +
-	"\"kagent/runtime/v1/task_store.proto\x12\x11kagent.runtime.v1\x1a\ta2a.proto\x1a\x1bbuf/validate/validate.proto\x1a\x1akagent/api/v1/common.proto\"K\n" +
+	"\"kagent/runtime/v1/task_store.proto\x12\x11kagent.runtime.v1\x1a\ta2a.proto\x1a\x1bbuf/validate/validate.proto\x1a\x1egoogle/protobuf/duration.proto\x1a\x1akagent/api/v1/common.proto\"K\n" +
 	"\n" +
 	"StoredTask\x12#\n" +
 	"\x04task\x18\x01 \x01(\v2\x0f.lf.a2a.v1.TaskR\x04task\x12\x18\n" +
@@ -749,7 +857,15 @@ const file_kagent_runtime_v1_task_store_proto_rawDesc = "" +
 	"session_id\x18\x01 \x01(\tB\b\xbaH\x05r\x03\xb0\x01\x01R\tsessionId\"\x8d\x01\n" +
 	"$TaskStoreServiceGetWorkspaceResponse\x126\n" +
 	"\tworkspace\x18\x01 \x01(\v2\x18.kagent.api.v1.WorkspaceR\tworkspace\x12-\n" +
-	"\x12fresh_conversation\x18\x05 \x01(\bR\x11freshConversation2\xee\x05\n" +
+	"\x12fresh_conversation\x18\x05 \x01(\bR\x11freshConversation\"h\n" +
+	"%TaskStoreServiceReportActivityRequest\x12'\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tB\b\xbaH\x05r\x03\xb0\x01\x01R\tsessionId\x12\x16\n" +
+	"\x06active\x18\x02 \x01(\bR\x06active\"\x95\x01\n" +
+	"&TaskStoreServiceReportActivityResponse\x12/\n" +
+	"\x05lease\x18\x01 \x01(\v2\x19.google.protobuf.DurationR\x05lease\x12:\n" +
+	"\vrenew_after\x18\x02 \x01(\v2\x19.google.protobuf.DurationR\n" +
+	"renewAfter2\xf6\x06\n" +
 	"\x10TaskStoreService\x12y\n" +
 	"\n" +
 	"CreateTask\x124.kagent.runtime.v1.TaskStoreServiceCreateTaskRequest\x1a5.kagent.runtime.v1.TaskStoreServiceCreateTaskResponse\x12p\n" +
@@ -759,7 +875,8 @@ const file_kagent_runtime_v1_task_store_proto_rawDesc = "" +
 	"\tListTasks\x123.kagent.runtime.v1.TaskStoreServiceListTasksRequest\x1a4.kagent.runtime.v1.TaskStoreServiceListTasksResponse\x12y\n" +
 	"\n" +
 	"SettleTask\x124.kagent.runtime.v1.TaskStoreServiceSettleTaskRequest\x1a5.kagent.runtime.v1.TaskStoreServiceSettleTaskResponse\x12\x7f\n" +
-	"\fGetWorkspace\x126.kagent.runtime.v1.TaskStoreServiceGetWorkspaceRequest\x1a7.kagent.runtime.v1.TaskStoreServiceGetWorkspaceResponseBEZCgithub.com/kagent-dev/kagent/go/api/gen/kagent/runtime/v1;runtimev1b\x06proto3"
+	"\fGetWorkspace\x126.kagent.runtime.v1.TaskStoreServiceGetWorkspaceRequest\x1a7.kagent.runtime.v1.TaskStoreServiceGetWorkspaceResponse\x12\x85\x01\n" +
+	"\x0eReportActivity\x128.kagent.runtime.v1.TaskStoreServiceReportActivityRequest\x1a9.kagent.runtime.v1.TaskStoreServiceReportActivityResponseBEZCgithub.com/kagent-dev/kagent/go/api/gen/kagent/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_kagent_runtime_v1_task_store_proto_rawDescOnce sync.Once
@@ -773,53 +890,60 @@ func file_kagent_runtime_v1_task_store_proto_rawDescGZIP() []byte {
 	return file_kagent_runtime_v1_task_store_proto_rawDescData
 }
 
-var file_kagent_runtime_v1_task_store_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_kagent_runtime_v1_task_store_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_kagent_runtime_v1_task_store_proto_goTypes = []any{
-	(*StoredTask)(nil),                           // 0: kagent.runtime.v1.StoredTask
-	(*TaskStoreServiceCreateTaskRequest)(nil),    // 1: kagent.runtime.v1.TaskStoreServiceCreateTaskRequest
-	(*TaskStoreServiceCreateTaskResponse)(nil),   // 2: kagent.runtime.v1.TaskStoreServiceCreateTaskResponse
-	(*TaskStoreServiceGetTaskRequest)(nil),       // 3: kagent.runtime.v1.TaskStoreServiceGetTaskRequest
-	(*TaskStoreServiceGetTaskResponse)(nil),      // 4: kagent.runtime.v1.TaskStoreServiceGetTaskResponse
-	(*TaskStoreServiceUpdateTaskRequest)(nil),    // 5: kagent.runtime.v1.TaskStoreServiceUpdateTaskRequest
-	(*TaskStoreServiceUpdateTaskResponse)(nil),   // 6: kagent.runtime.v1.TaskStoreServiceUpdateTaskResponse
-	(*TaskStoreServiceListTasksRequest)(nil),     // 7: kagent.runtime.v1.TaskStoreServiceListTasksRequest
-	(*TaskStoreServiceListTasksResponse)(nil),    // 8: kagent.runtime.v1.TaskStoreServiceListTasksResponse
-	(*TaskStoreServiceSettleTaskRequest)(nil),    // 9: kagent.runtime.v1.TaskStoreServiceSettleTaskRequest
-	(*TaskStoreServiceSettleTaskResponse)(nil),   // 10: kagent.runtime.v1.TaskStoreServiceSettleTaskResponse
-	(*TaskStoreServiceGetWorkspaceRequest)(nil),  // 11: kagent.runtime.v1.TaskStoreServiceGetWorkspaceRequest
-	(*TaskStoreServiceGetWorkspaceResponse)(nil), // 12: kagent.runtime.v1.TaskStoreServiceGetWorkspaceResponse
-	(*v1.Task)(nil),              // 13: lf.a2a.v1.Task
-	(*v1.StreamResponse)(nil),    // 14: lf.a2a.v1.StreamResponse
-	(*v1.ListTasksRequest)(nil),  // 15: lf.a2a.v1.ListTasksRequest
-	(*v1.ListTasksResponse)(nil), // 16: lf.a2a.v1.ListTasksResponse
-	(*v11.Workspace)(nil),        // 17: kagent.api.v1.Workspace
+	(*StoredTask)(nil),                             // 0: kagent.runtime.v1.StoredTask
+	(*TaskStoreServiceCreateTaskRequest)(nil),      // 1: kagent.runtime.v1.TaskStoreServiceCreateTaskRequest
+	(*TaskStoreServiceCreateTaskResponse)(nil),     // 2: kagent.runtime.v1.TaskStoreServiceCreateTaskResponse
+	(*TaskStoreServiceGetTaskRequest)(nil),         // 3: kagent.runtime.v1.TaskStoreServiceGetTaskRequest
+	(*TaskStoreServiceGetTaskResponse)(nil),        // 4: kagent.runtime.v1.TaskStoreServiceGetTaskResponse
+	(*TaskStoreServiceUpdateTaskRequest)(nil),      // 5: kagent.runtime.v1.TaskStoreServiceUpdateTaskRequest
+	(*TaskStoreServiceUpdateTaskResponse)(nil),     // 6: kagent.runtime.v1.TaskStoreServiceUpdateTaskResponse
+	(*TaskStoreServiceListTasksRequest)(nil),       // 7: kagent.runtime.v1.TaskStoreServiceListTasksRequest
+	(*TaskStoreServiceListTasksResponse)(nil),      // 8: kagent.runtime.v1.TaskStoreServiceListTasksResponse
+	(*TaskStoreServiceSettleTaskRequest)(nil),      // 9: kagent.runtime.v1.TaskStoreServiceSettleTaskRequest
+	(*TaskStoreServiceSettleTaskResponse)(nil),     // 10: kagent.runtime.v1.TaskStoreServiceSettleTaskResponse
+	(*TaskStoreServiceGetWorkspaceRequest)(nil),    // 11: kagent.runtime.v1.TaskStoreServiceGetWorkspaceRequest
+	(*TaskStoreServiceGetWorkspaceResponse)(nil),   // 12: kagent.runtime.v1.TaskStoreServiceGetWorkspaceResponse
+	(*TaskStoreServiceReportActivityRequest)(nil),  // 13: kagent.runtime.v1.TaskStoreServiceReportActivityRequest
+	(*TaskStoreServiceReportActivityResponse)(nil), // 14: kagent.runtime.v1.TaskStoreServiceReportActivityResponse
+	(*v1.Task)(nil),              // 15: lf.a2a.v1.Task
+	(*v1.StreamResponse)(nil),    // 16: lf.a2a.v1.StreamResponse
+	(*v1.ListTasksRequest)(nil),  // 17: lf.a2a.v1.ListTasksRequest
+	(*v1.ListTasksResponse)(nil), // 18: lf.a2a.v1.ListTasksResponse
+	(*v11.Workspace)(nil),        // 19: kagent.api.v1.Workspace
+	(*durationpb.Duration)(nil),  // 20: google.protobuf.Duration
 }
 var file_kagent_runtime_v1_task_store_proto_depIdxs = []int32{
-	13, // 0: kagent.runtime.v1.StoredTask.task:type_name -> lf.a2a.v1.Task
-	13, // 1: kagent.runtime.v1.TaskStoreServiceCreateTaskRequest.task:type_name -> lf.a2a.v1.Task
+	15, // 0: kagent.runtime.v1.StoredTask.task:type_name -> lf.a2a.v1.Task
+	15, // 1: kagent.runtime.v1.TaskStoreServiceCreateTaskRequest.task:type_name -> lf.a2a.v1.Task
 	0,  // 2: kagent.runtime.v1.TaskStoreServiceGetTaskResponse.stored:type_name -> kagent.runtime.v1.StoredTask
-	13, // 3: kagent.runtime.v1.TaskStoreServiceUpdateTaskRequest.task:type_name -> lf.a2a.v1.Task
-	14, // 4: kagent.runtime.v1.TaskStoreServiceUpdateTaskRequest.event:type_name -> lf.a2a.v1.StreamResponse
-	15, // 5: kagent.runtime.v1.TaskStoreServiceListTasksRequest.request:type_name -> lf.a2a.v1.ListTasksRequest
-	16, // 6: kagent.runtime.v1.TaskStoreServiceListTasksResponse.result:type_name -> lf.a2a.v1.ListTasksResponse
-	17, // 7: kagent.runtime.v1.TaskStoreServiceGetWorkspaceResponse.workspace:type_name -> kagent.api.v1.Workspace
-	1,  // 8: kagent.runtime.v1.TaskStoreService.CreateTask:input_type -> kagent.runtime.v1.TaskStoreServiceCreateTaskRequest
-	3,  // 9: kagent.runtime.v1.TaskStoreService.GetTask:input_type -> kagent.runtime.v1.TaskStoreServiceGetTaskRequest
-	5,  // 10: kagent.runtime.v1.TaskStoreService.UpdateTask:input_type -> kagent.runtime.v1.TaskStoreServiceUpdateTaskRequest
-	7,  // 11: kagent.runtime.v1.TaskStoreService.ListTasks:input_type -> kagent.runtime.v1.TaskStoreServiceListTasksRequest
-	9,  // 12: kagent.runtime.v1.TaskStoreService.SettleTask:input_type -> kagent.runtime.v1.TaskStoreServiceSettleTaskRequest
-	11, // 13: kagent.runtime.v1.TaskStoreService.GetWorkspace:input_type -> kagent.runtime.v1.TaskStoreServiceGetWorkspaceRequest
-	2,  // 14: kagent.runtime.v1.TaskStoreService.CreateTask:output_type -> kagent.runtime.v1.TaskStoreServiceCreateTaskResponse
-	4,  // 15: kagent.runtime.v1.TaskStoreService.GetTask:output_type -> kagent.runtime.v1.TaskStoreServiceGetTaskResponse
-	6,  // 16: kagent.runtime.v1.TaskStoreService.UpdateTask:output_type -> kagent.runtime.v1.TaskStoreServiceUpdateTaskResponse
-	8,  // 17: kagent.runtime.v1.TaskStoreService.ListTasks:output_type -> kagent.runtime.v1.TaskStoreServiceListTasksResponse
-	10, // 18: kagent.runtime.v1.TaskStoreService.SettleTask:output_type -> kagent.runtime.v1.TaskStoreServiceSettleTaskResponse
-	12, // 19: kagent.runtime.v1.TaskStoreService.GetWorkspace:output_type -> kagent.runtime.v1.TaskStoreServiceGetWorkspaceResponse
-	14, // [14:20] is the sub-list for method output_type
-	8,  // [8:14] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	15, // 3: kagent.runtime.v1.TaskStoreServiceUpdateTaskRequest.task:type_name -> lf.a2a.v1.Task
+	16, // 4: kagent.runtime.v1.TaskStoreServiceUpdateTaskRequest.event:type_name -> lf.a2a.v1.StreamResponse
+	17, // 5: kagent.runtime.v1.TaskStoreServiceListTasksRequest.request:type_name -> lf.a2a.v1.ListTasksRequest
+	18, // 6: kagent.runtime.v1.TaskStoreServiceListTasksResponse.result:type_name -> lf.a2a.v1.ListTasksResponse
+	19, // 7: kagent.runtime.v1.TaskStoreServiceGetWorkspaceResponse.workspace:type_name -> kagent.api.v1.Workspace
+	20, // 8: kagent.runtime.v1.TaskStoreServiceReportActivityResponse.lease:type_name -> google.protobuf.Duration
+	20, // 9: kagent.runtime.v1.TaskStoreServiceReportActivityResponse.renew_after:type_name -> google.protobuf.Duration
+	1,  // 10: kagent.runtime.v1.TaskStoreService.CreateTask:input_type -> kagent.runtime.v1.TaskStoreServiceCreateTaskRequest
+	3,  // 11: kagent.runtime.v1.TaskStoreService.GetTask:input_type -> kagent.runtime.v1.TaskStoreServiceGetTaskRequest
+	5,  // 12: kagent.runtime.v1.TaskStoreService.UpdateTask:input_type -> kagent.runtime.v1.TaskStoreServiceUpdateTaskRequest
+	7,  // 13: kagent.runtime.v1.TaskStoreService.ListTasks:input_type -> kagent.runtime.v1.TaskStoreServiceListTasksRequest
+	9,  // 14: kagent.runtime.v1.TaskStoreService.SettleTask:input_type -> kagent.runtime.v1.TaskStoreServiceSettleTaskRequest
+	11, // 15: kagent.runtime.v1.TaskStoreService.GetWorkspace:input_type -> kagent.runtime.v1.TaskStoreServiceGetWorkspaceRequest
+	13, // 16: kagent.runtime.v1.TaskStoreService.ReportActivity:input_type -> kagent.runtime.v1.TaskStoreServiceReportActivityRequest
+	2,  // 17: kagent.runtime.v1.TaskStoreService.CreateTask:output_type -> kagent.runtime.v1.TaskStoreServiceCreateTaskResponse
+	4,  // 18: kagent.runtime.v1.TaskStoreService.GetTask:output_type -> kagent.runtime.v1.TaskStoreServiceGetTaskResponse
+	6,  // 19: kagent.runtime.v1.TaskStoreService.UpdateTask:output_type -> kagent.runtime.v1.TaskStoreServiceUpdateTaskResponse
+	8,  // 20: kagent.runtime.v1.TaskStoreService.ListTasks:output_type -> kagent.runtime.v1.TaskStoreServiceListTasksResponse
+	10, // 21: kagent.runtime.v1.TaskStoreService.SettleTask:output_type -> kagent.runtime.v1.TaskStoreServiceSettleTaskResponse
+	12, // 22: kagent.runtime.v1.TaskStoreService.GetWorkspace:output_type -> kagent.runtime.v1.TaskStoreServiceGetWorkspaceResponse
+	14, // 23: kagent.runtime.v1.TaskStoreService.ReportActivity:output_type -> kagent.runtime.v1.TaskStoreServiceReportActivityResponse
+	17, // [17:24] is the sub-list for method output_type
+	10, // [10:17] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_kagent_runtime_v1_task_store_proto_init() }
@@ -835,7 +959,7 @@ func file_kagent_runtime_v1_task_store_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kagent_runtime_v1_task_store_proto_rawDesc), len(file_kagent_runtime_v1_task_store_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   13,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

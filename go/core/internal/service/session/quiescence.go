@@ -3,12 +3,17 @@ package session
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
+	ateapipb "go.ate.dev/substrate/api/ateapi/v1"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 
+	apiv1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1"
+
 	"github.com/kagent-dev/kagent/go/core/internal/database"
+	"github.com/kagent-dev/kagent/go/core/internal/substrate"
 	"github.com/kagent-dev/kagent/go/pkg/logging"
 )
 
@@ -45,6 +50,15 @@ func (w *ActorWorkflow) Start(ctx context.Context) error {
 					w.wakeQuiescence()
 					w.quiesceIdleSession(ctx, work)
 					continue
+				}
+				if errors.Is(err, database.ErrNotFound) {
+					activity, activityErr := w.store.ClaimSessionActivityQuiescence(ctx)
+					if activityErr == nil {
+						w.wakeQuiescence()
+						w.quiesceInactiveSession(ctx, activity)
+						continue
+					}
+					err = activityErr
 				}
 				delay := min(time.Second, w.recoveryInterval)
 				if errors.Is(err, database.ErrNotFound) {
@@ -101,4 +115,53 @@ func (w *ActorWorkflow) quiesceIdleSession(ctx context.Context, work *database.S
 		case <-time.After(delay):
 		}
 	}
+}
+
+// quiesceInactiveSession suspends a runtime whose reported activity ended. The
+// Session stays READY. An Actor that is no longer running only settles the
+// boundary. No task snapshot is recorded: no task ended here, and the latest
+// task keeps the snapshot of its own boundary.
+func (w *ActorWorkflow) quiesceInactiveSession(ctx context.Context, work *database.SessionActivityQuiescence) {
+	runtimeCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	err := w.suspendInactiveRuntime(runtimeCtx, work.Session)
+	cancel()
+	if err != nil {
+		// No timeout-based takeover: the Substrate request may still complete.
+		// The claim keeps admission closed until recovery or deletion retires it.
+		logging.FromContext(ctx).ErrorContext(ctx, "runtime activity boundary outcome unknown", "session_id", work.Session.Id, "error", err)
+		return
+	}
+	for delay := 100 * time.Millisecond; ; delay = min(2*delay, 5*time.Second) {
+		finishCtx, finishCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		err = w.store.FinishSessionActivityQuiescence(finishCtx, work)
+		finishCancel()
+		if err == nil || errors.Is(err, database.ErrNotFound) {
+			return
+		}
+		logging.FromContext(ctx).ErrorContext(ctx, "record runtime activity outcome", "session_id", work.Session.Id, "error", err)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(delay):
+		}
+	}
+}
+
+func (w *ActorWorkflow) suspendInactiveRuntime(ctx context.Context, session *apiv1.Session) error {
+	revision, err := w.store.GetRuntimeRevision(ctx, session.GetPreparedRevision())
+	if err != nil {
+		return fmt.Errorf("load prepared revision: %w", err)
+	}
+	actor, err := w.actors.GetActor(ctx, revision.ActorTemplateAtespace, substrate.ActorName(session.GetId()))
+	if err != nil {
+		return fmt.Errorf("observe runtime Actor: %w", err)
+	}
+	if err := w.verifyActor(ctx, session, revision, actor); err != nil {
+		return err
+	}
+	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		return nil
+	}
+	_, err = w.Quiesce(ctx, session)
+	return err
 }
