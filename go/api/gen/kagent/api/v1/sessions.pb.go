@@ -110,8 +110,11 @@ type Session struct {
 	// Session's runtime Actor. Absent means no association was verified by this
 	// read; it is never a creation or fork input.
 	RuntimeAssociation *RuntimeAssociation `protobuf:"bytes,20,opt,name=runtime_association,json=runtimeAssociation,proto3" json:"runtime_association,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// Output only. Set on a fork created with a fresh conversation: its restored
+	// data keeps the workspace, but the runtime discards native conversation state.
+	FreshConversation bool `protobuf:"varint,22,opt,name=fresh_conversation,json=freshConversation,proto3" json:"fresh_conversation,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *Session) Reset() {
@@ -261,6 +264,13 @@ func (x *Session) GetRuntimeAssociation() *RuntimeAssociation {
 		return x.RuntimeAssociation
 	}
 	return nil
+}
+
+func (x *Session) GetFreshConversation() bool {
+	if x != nil {
+		return x.FreshConversation
+	}
+	return false
 }
 
 // RuntimeAssociation is a bounded observation of the runtime Actor that serves
@@ -1653,7 +1663,7 @@ const file_kagent_api_v1_sessions_proto_rawDesc = "" +
 	"\x1ckagent/api/v1/sessions.proto\x12\rkagent.api.v1\x1a\x1bbuf/validate/validate.proto\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1akagent/api/v1/common.proto\x1a\x1bkagent/api/v1/runtime.proto\";\n" +
 	"\aFailure\x12\x16\n" +
 	"\x06reason\x18\x01 \x01(\tR\x06reason\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\x8c\a\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xbb\a\n" +
 	"\aSession\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x18\n" +
 	"\acreator\x18\x02 \x01(\tR\acreator\x124\n" +
@@ -1675,7 +1685,8 @@ const file_kagent_api_v1_sessions_proto_rawDesc = "" +
 	"\vcredentials\x18\x11 \x03(\v2 .kagent.api.v1.SessionCredentialR\vcredentials\x12^\n" +
 	"\x17development_environment\x18\x12 \x01(\v2%.kagent.api.v1.DevelopmentEnvironmentR\x16developmentEnvironment\x12R\n" +
 	"\x13runtime_composition\x18\x13 \x01(\v2!.kagent.api.v1.RuntimeCompositionR\x12runtimeComposition\x12R\n" +
-	"\x13runtime_association\x18\x14 \x01(\v2!.kagent.api.v1.RuntimeAssociationR\x12runtimeAssociation\"\xce\x01\n" +
+	"\x13runtime_association\x18\x14 \x01(\v2!.kagent.api.v1.RuntimeAssociationR\x12runtimeAssociation\x12-\n" +
+	"\x12fresh_conversation\x18\x16 \x01(\bR\x11freshConversation\"\xce\x01\n" +
 	"\x12RuntimeAssociation\x12#\n" +
 	"\rgeneration_id\x18\x01 \x01(\tR\fgenerationId\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +

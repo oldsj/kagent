@@ -288,7 +288,9 @@ func (a *snapshotTestActors) SuspendActor(ctx context.Context, atespace, name st
 	return actor, err
 }
 
-func TestQuiesceRequiresDurableVolumesSnapshot(t *testing.T) {
+// TestQuiesceAcceptsAnyDurableFidelity covers Full Harnesses: Substrate may
+// capture less than the template prefers, so any known fidelity can wake.
+func TestQuiesceAcceptsAnyDurableFidelity(t *testing.T) {
 	store, session := lifecycleFixture(t)
 	actors := &snapshotTestActors{lifecycleTestActors: &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}}
 	workflow := NewActorWorkflow(store, actors, make(chan struct{}, 1), time.Second)
@@ -308,7 +310,7 @@ func TestQuiesceRequiresDurableVolumesSnapshot(t *testing.T) {
 					Object: &ateapipb.ObjectSnapshot{SnapshotUri: "s3://snapshots/new"},
 				}}}
 			boundary, err := workflow.Quiesce(t.Context(), created)
-			if fidelity != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
+			if fidelity == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED {
 				require.ErrorContains(t, err, "invalid snapshot fidelity")
 				require.Nil(t, boundary)
 				return
@@ -352,7 +354,7 @@ func lifecycleForkFixture(t *testing.T, store *lifecycleTestStore, actors *lifec
 	_, err = store.FinalizeSessionCheckpoint(t.Context(), checkpoint.Id, "tag-uid", "s3://snapshots/snapshot-1", "")
 	require.NoError(t, err)
 	requestID := uuid.NewString()
-	fork, _, err := store.ForkSession(t.Context(), checkpoint.Id, source.Creator, requestID, uuid.NewString())
+	fork, _, err := store.ForkSession(t.Context(), checkpoint.Id, source.Creator, requestID, uuid.NewString(), false)
 	require.NoError(t, err)
 	// An ordinary Create must not reuse a fork request ID, even for the same pair.
 	_, _, err = store.CreateSession(t.Context(), &apiv1.Session{Id: uuid.NewString(), Creator: source.Creator, Agent: source.Agent, Name: fork.Name}, requestID)

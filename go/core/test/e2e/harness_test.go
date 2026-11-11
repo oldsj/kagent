@@ -1,9 +1,12 @@
 package e2e_test
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	adkconfig "github.com/kagent-dev/kagent/go/adk/pkg/config"
@@ -15,6 +18,42 @@ import (
 type testHarness struct {
 	name         string
 	runtimeLabel string
+	// bound is the Harness that Agents reference when it is not name: a copy
+	// of name with other options, so name's model and mock fixtures still apply.
+	bound string
+}
+
+// harnessRef is the Harness an Agent of this test harness references.
+func (h testHarness) harnessRef() string {
+	if h.bound != "" {
+		return h.bound
+	}
+	return h.name
+}
+
+// withGit returns the harness bound to a copy of its Harness that lets Sessions
+// bootstrap a Git workspace from origins. The copy is deleted with the test.
+func (h testHarness) withGit(t *testing.T, kube ctrlclient.Client, origins ...string) testHarness {
+	t.Helper()
+	source := &v1alpha3.Harness{}
+	if err := kube.Get(t.Context(), ctrlclient.ObjectKey{Namespace: "kagent", Name: h.harnessRef()}, source); err != nil {
+		t.Fatalf("read Harness %s: %v", h.harnessRef(), err)
+	}
+	harness := &v1alpha3.Harness{
+		ObjectMeta: metav1.ObjectMeta{GenerateName: h.runtimeLabel + "-git-", Namespace: source.Namespace, Labels: h.labels()},
+		Spec:       *source.Spec.DeepCopy(),
+	}
+	harness.Spec.Git = &v1alpha3.HarnessGit{Origins: origins}
+	if err := kube.Create(t.Context(), harness); err != nil {
+		t.Fatalf("create Git Harness: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := kube.Delete(context.Background(), harness); err != nil && !apierrors.IsNotFound(err) {
+			t.Errorf("delete Git Harness: %v", err)
+		}
+	})
+	h.bound = harness.Name
+	return h
 }
 
 // Every shared AgentTemplate test runs on every harness type. BYO uses the Go

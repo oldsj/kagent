@@ -66,6 +66,9 @@ message Session {
   // Session's runtime Actor. Absent means no association was verified by this
   // read; it is never a creation or fork input.
   RuntimeAssociation runtime_association = 20;
+  // Output only. Set on a fork created with a fresh conversation: its restored
+  // data keeps the workspace, but the runtime discards native conversation state.
+  bool fresh_conversation = 22;
 }
 
 // RuntimeAssociation is a bounded observation of the runtime Actor that serves

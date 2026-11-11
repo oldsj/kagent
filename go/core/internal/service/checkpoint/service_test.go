@@ -89,6 +89,7 @@ func (s *testStore) FinalizeSessionCheckpoint(_ context.Context, _ string, tagUI
 	}
 	if failure != "" {
 		s.prepared.State, s.failed = apiv1.CheckpointState_CHECKPOINT_STATE_FAILED, failure
+		s.prepared.Failure = &apiv1.Failure{Reason: "SnapshotTagFailed", Message: failure}
 	} else {
 		s.prepared.State, s.tagUID = apiv1.CheckpointState_CHECKPOINT_STATE_READY, tagUID
 		s.snapshot.URI = snapshotURI
@@ -144,11 +145,12 @@ func (s *testStore) UpdateCheckpointName(_ context.Context, _, _, name string) (
 	return s.prepared, nil
 }
 
-func (s *testStore) ForkSession(_ context.Context, _ string, userID, _ string, sessionID string) (*apiv1.Session, bool, error) {
+func (s *testStore) ForkSession(_ context.Context, _ string, userID, _ string, sessionID string, fresh bool) (*apiv1.Session, bool, error) {
 	if s.forked == nil {
 		s.forked = &apiv1.Session{
 			Id: sessionID, Creator: userID,
-			State: apiv1.RuntimeState_RUNTIME_STATE_CREATING,
+			State:             apiv1.RuntimeState_RUNTIME_STATE_CREATING,
+			FreshConversation: fresh,
 		}
 		return s.forked, true, nil
 	}
@@ -177,6 +179,7 @@ type testTags struct {
 	createErr              error
 	deleteErr              error
 	actorErr               error
+	actorState             ateapipb.ActorState
 	mutateTag              func(*ateapipb.Tag)
 	beforeDelete           func()
 }
@@ -193,9 +196,13 @@ func (t *testTags) GetActor(_ context.Context, atespace, name string) (*ateapipb
 	if t.created != nil && t.actorUIDAfterCreate != "" {
 		actorUID = t.actorUIDAfterCreate
 	}
+	state := ateapipb.ActorState_ACTOR_STATE_SUSPENDED
+	if t.actorState != ateapipb.ActorState_ACTOR_STATE_UNSPECIFIED {
+		state = t.actorState
+	}
 	return &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: atespace, Name: name, Uid: actorUID},
-		Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+		Status: &ateapipb.ActorStatus{State: state,
 			Snapshots: []*ateapipb.Snapshot{{Generation: 1, Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ActorTemplateUid: "template-uid", DurableSnapshot: &ateapipb.SnapshotStorage{State: ateapipb.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED, Object: &ateapipb.ObjectSnapshot{SnapshotUri: uri}}}}},
 	}, nil
 }
@@ -338,6 +345,50 @@ func TestCreateCleansTagBeforeFailing(t *testing.T) {
 	}
 }
 
+func TestCreateOnUnsuspendedActor(t *testing.T) {
+	t.Run("Given a running checkpoint Actor, when a checkpoint is requested, assert that it fails as a definite precondition without a tag", func(t *testing.T) {
+		store := &testStore{}
+		tags := &testTags{snapshotURI: "s3://snapshots/snapshot-1", actorState: ateapipb.ActorState_ACTOR_STATE_RUNNING}
+		service := NewService(store, testAuthorizer{}, tags, nil)
+		ctx := auth.AuthSessionTo(t.Context(), testSession{userID: "alice"})
+
+		_, err := service.Create(ctx, "018f47a2-4efb-7c21-a848-123456789abc", "request-1", "task-1")
+
+		requireCheckpointFailure(t, err, "KAGENT_CHECKPOINT_RUNTIME_NOT_SUSPENDED")
+		require.Equal(t, apiv1.CheckpointState_CHECKPOINT_STATE_FAILED, store.prepared.State)
+		require.Zero(t, tags.createCalls)
+	})
+
+	t.Run("Given a request that failed on a running Actor, when the same request is retried after the Actor suspends, assert that it replays the failure instead of acknowledging a missing checkpoint", func(t *testing.T) {
+		store := &testStore{}
+		tags := &testTags{snapshotURI: "s3://snapshots/snapshot-1", actorState: ateapipb.ActorState_ACTOR_STATE_RUNNING}
+		service := NewService(store, testAuthorizer{}, tags, nil)
+		ctx := auth.AuthSessionTo(t.Context(), testSession{userID: "alice"})
+		_, err := service.Create(ctx, "018f47a2-4efb-7c21-a848-123456789abc", "request-1", "task-1")
+		require.Error(t, err)
+		tags.actorState = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
+
+		checkpoint, err := service.Create(ctx, "018f47a2-4efb-7c21-a848-123456789abc", "request-1", "task-1")
+
+		require.Nil(t, checkpoint)
+		requireCheckpointFailure(t, err, "KAGENT_CHECKPOINT_FAILED")
+		require.ErrorContains(t, err, "ACTOR_STATE_RUNNING")
+		require.Zero(t, tags.createCalls)
+	})
+}
+
+func requireCheckpointFailure(t *testing.T, err error, reason string) {
+	t.Helper()
+	failure, ok := status.FromError(err)
+	require.True(t, ok, "error %v has no gRPC status", err)
+	require.Equal(t, codes.FailedPrecondition, failure.Code())
+	require.Len(t, failure.Details(), 1)
+	info, ok := failure.Details()[0].(*errdetails.ErrorInfo)
+	require.True(t, ok)
+	require.Equal(t, "kagent.dev", info.GetDomain())
+	require.Equal(t, reason, info.GetReason())
+}
+
 func TestDeleteHidesCheckpointBeforeDeletingTag(t *testing.T) {
 	checkpoint := &apiv1.Checkpoint{SessionId: "11111111-1111-4111-8111-111111111111", Id: "018f47a2-4efb-7c21-a848-123456789abc", State: apiv1.CheckpointState_CHECKPOINT_STATE_READY}
 	store := &testStore{prepared: checkpoint, snapshot: &database.SessionTaskSnapshot{Atespace: "team-a", URI: "s3://snapshots/snapshot-1"}, tagUID: "tag-uid"}
@@ -431,7 +482,7 @@ func TestForkCreatesSessionFromRetainedCheckpointAfterSourceDeletion(t *testing.
 	service := NewService(store, &restrictiveAuthorizer{resource: "Checkpoint", verb: auth.VerbCreate}, tags, workflow)
 	ctx := auth.AuthSessionTo(context.Background(), testSession{userID: "alice"})
 
-	session, err := service.Fork(ctx, checkpoint.GetId(), "fork-request")
+	session, err := service.Fork(ctx, checkpoint.GetId(), "fork-request", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -439,7 +490,7 @@ func TestForkCreatesSessionFromRetainedCheckpointAfterSourceDeletion(t *testing.
 		workflow.session != store.forked || store.forked.GetId() == "" {
 		t.Fatalf("fork = %+v, checkpoint = %+v", session, checkpoint)
 	}
-	retried, err := service.Fork(ctx, checkpoint.GetId(), "fork-request")
+	retried, err := service.Fork(ctx, checkpoint.GetId(), "fork-request", false)
 	require.NoError(t, err)
 	require.Equal(t, session.GetId(), retried.GetId())
 	require.Zero(t, store.sourceReads.Load(), "retained provenance must not require a live source Session")
@@ -512,7 +563,7 @@ func TestForkRejectsReplacedTag(t *testing.T) {
 			}}
 			service := NewService(store, testAuthorizer{}, tags, &testWorkflow{})
 			ctx := auth.AuthSessionTo(t.Context(), testSession{userID: "alice"})
-			_, err := service.Fork(ctx, checkpoint.Id, "fork-request")
+			_, err := service.Fork(ctx, checkpoint.Id, "fork-request", false)
 			require.Error(t, err)
 			require.Nil(t, store.forked)
 		})
@@ -620,7 +671,7 @@ func TestCheckpointComposesPermissionsBeforeEffects(t *testing.T) {
 			if test.operation == "create" {
 				_, err = service.Create(ctx, sourceID, "request", "head")
 			} else {
-				_, err = service.Fork(ctx, checkpointID, "request")
+				_, err = service.Fork(ctx, checkpointID, "request", false)
 			}
 			code := serviceerrors.CodePermissionDenied
 			if test.ownerDenied {
@@ -682,7 +733,7 @@ func TestCheckpointSharesAndCategoryDenialsProtectEveryOperation(t *testing.T) {
 				_, err := s.Create(ctx, id, "request", "head")
 				return err
 			}},
-			{"fork", auth.VerbGet, func(ctx context.Context, s *Service) error { _, err := s.Fork(ctx, id, "request"); return err }},
+			{"fork", auth.VerbGet, func(ctx context.Context, s *Service) error { _, err := s.Fork(ctx, id, "request", false); return err }},
 		} {
 			t.Run(fmt.Sprintf("%s/share=%v", operation.name, shared), func(t *testing.T) {
 				ctx := auth.AuthSessionTo(t.Context(), testSession{userID: "alice"})
@@ -739,7 +790,7 @@ func TestForkAuthorizesResolvedTargetNamespaceBeforeTagRead(t *testing.T) {
 			store := &testStore{prepared: checkpoint, checkpointOwner: "alice", sourceErr: database.ErrNotFound, snapshot: &database.SessionTaskSnapshot{Fidelity: "SNAPSHOT_FIDELITY_VOLUMES"}}
 			tags := &testTags{getErr: tagErr}
 			svc := NewService(store, forkNamespacePolicy{namespace: namespace}, tags, nil)
-			_, err := svc.Fork(auth.AuthSessionTo(t.Context(), testSession{userID: "alice"}), checkpoint.Id, "request")
+			_, err := svc.Fork(auth.AuthSessionTo(t.Context(), testSession{userID: "alice"}), checkpoint.Id, "request", false)
 			if namespace == "team-a" {
 				require.ErrorIs(t, err, tagErr, "resolved namespace should pass authorization")
 				require.Equal(t, 1, tags.getCalls)
@@ -790,7 +841,7 @@ func TestCheckpointCanonicalIdentityDenialsCannotBeBypassed(t *testing.T) {
 				case "delete":
 					err = svc.Delete(ctx, encoded)
 				case "fork":
-					_, err = svc.Fork(ctx, encoded, "request")
+					_, err = svc.Fork(ctx, encoded, "request", false)
 				}
 				require.True(t, serviceerrors.IsCode(err, serviceerrors.CodePermissionDenied), "%v", err)
 				require.Equal(t, resource, policy.calls[len(policy.calls)-1])
@@ -847,7 +898,7 @@ func TestForkCanonicalizesSavedSourceIdentity(t *testing.T) {
 	store := &testStore{prepared: &apiv1.Checkpoint{Id: "22222222-2222-4222-8222-222222222222", SessionId: strings.ToUpper(source)}}
 	policy := &exactIdentityPolicy{denied: auth.Resource{Type: "Session", Name: source}}
 	svc := NewService(store, policy, nil, nil)
-	_, err := svc.Fork(auth.AuthSessionTo(t.Context(), testSession{userID: "alice"}), store.prepared.Id, "request")
+	_, err := svc.Fork(auth.AuthSessionTo(t.Context(), testSession{userID: "alice"}), store.prepared.Id, "request", false)
 	require.True(t, serviceerrors.IsCode(err, serviceerrors.CodePermissionDenied))
 	require.Equal(t, policy.denied, policy.calls[len(policy.calls)-1])
 	require.Equal(t, 1, store.forkSourceReads)

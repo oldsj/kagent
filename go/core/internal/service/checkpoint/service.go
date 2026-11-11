@@ -34,7 +34,7 @@ type store interface {
 	ListSessionCheckpoints(context.Context, string, string, string, int) ([]*apiv1.Checkpoint, error)
 	BeginDeleteSessionCheckpoint(context.Context, string, string) (*database.SessionTaskSnapshot, string, error)
 	DeleteSessionCheckpoint(context.Context, string, string) error
-	ForkSession(context.Context, string, string, string, string) (*apiv1.Session, bool, error)
+	ForkSession(context.Context, string, string, string, string, bool) (*apiv1.Session, bool, error)
 	UpdateCheckpointName(context.Context, string, string, string) (*apiv1.Checkpoint, error)
 }
 
@@ -111,11 +111,7 @@ func (s *Service) create(ctx context.Context, userID, sessionID, requestID, expe
 		if errors.Is(err, database.ErrSnapshotPending) {
 			reason = "KAGENT_CHECKPOINT_SNAPSHOT_PENDING"
 		}
-		failure, detailErr := status.New(codes.FailedPrecondition, err.Error()).WithDetails(&errdetails.ErrorInfo{Domain: "kagent.dev", Reason: reason})
-		if detailErr != nil {
-			return nil, detailErr
-		}
-		return nil, failure.Err()
+		return nil, checkpointFailure(reason, err.Error())
 	}
 	if errors.Is(err, database.ErrIdempotencyConflict) {
 		return nil, serviceerrors.NewAlreadyExists("request_id was already used for a different checkpoint", err)
@@ -129,20 +125,34 @@ func (s *Service) create(ctx context.Context, userID, sessionID, requestID, expe
 	if err != nil {
 		return nil, serviceerrors.NewInternal("Failed to reserve checkpoint", err)
 	}
-	if checkpoint.State != apiv1.CheckpointState_CHECKPOINT_STATE_CREATING {
+	// Only a READY checkpoint is readable. Acknowledging any other replay would
+	// name a checkpoint that Get, List, and Fork report as missing.
+	switch checkpoint.State {
+	case apiv1.CheckpointState_CHECKPOINT_STATE_READY:
 		return checkpoint, nil
+	case apiv1.CheckpointState_CHECKPOINT_STATE_CREATING:
+	case apiv1.CheckpointState_CHECKPOINT_STATE_FAILED:
+		return nil, checkpointFailure("KAGENT_CHECKPOINT_FAILED", "checkpoint request failed: "+checkpoint.GetFailure().GetMessage())
+	default:
+		return nil, serviceerrors.NewFailedPrecondition(fmt.Sprintf("request_id names a checkpoint in state %s", checkpoint.State), nil)
 	}
 
 	tag, err := s.ensureTag(ctx, checkpoint, snapshot)
 	if err != nil {
 		cleanupErr := s.tags.DeleteTag(ctx, snapshot.Atespace, tagName(checkpoint.GetId()), "")
-		if cleanupErr == nil || status.Code(cleanupErr) == codes.NotFound {
-			_, finalizeErr := s.store.FinalizeSessionCheckpoint(ctx, checkpoint.GetId(), "", "", err.Error())
-			err = errors.Join(err, finalizeErr)
-		} else {
-			err = errors.Join(err, fmt.Errorf("cleanup checkpoint tag: %w", cleanupErr))
+		if cleanupErr != nil && status.Code(cleanupErr) != codes.NotFound {
+			// The row stays CREATING, so a retry of this request resumes the cleanup.
+			return nil, serviceerrors.NewUnavailable("Failed to retain checkpoint snapshot", errors.Join(err, fmt.Errorf("cleanup checkpoint tag: %w", cleanupErr)))
 		}
-		return nil, serviceerrors.NewUnavailable("Failed to retain checkpoint snapshot", err)
+		if _, finalizeErr := s.store.FinalizeSessionCheckpoint(ctx, checkpoint.GetId(), "", "", err.Error()); finalizeErr != nil {
+			return nil, serviceerrors.NewUnavailable("Failed to retain checkpoint snapshot", errors.Join(err, finalizeErr))
+		}
+		// The attempt is now FAILED and a retry of this request replays that failure,
+		// so report it as definite: the caller must use a new request_id.
+		if errors.Is(err, errActorNotSuspended) {
+			return nil, checkpointFailure("KAGENT_CHECKPOINT_RUNTIME_NOT_SUSPENDED", err.Error())
+		}
+		return nil, checkpointFailure("KAGENT_CHECKPOINT_FAILED", "checkpoint request failed: "+err.Error())
 	}
 	checkpoint, err = s.store.FinalizeSessionCheckpoint(ctx, checkpoint.GetId(), tag.GetMetadata().GetUid(), substrate.SnapshotURI(tag.GetStatus().GetSnapshot()), "")
 	if err != nil {
@@ -193,8 +203,10 @@ func (s *Service) verifySnapshot(ctx context.Context, actorName string, referenc
 		return nil, fmt.Errorf("get checkpoint Actor: %w", err)
 	}
 	metadata, snapshot := actor.GetMetadata(), substrate.LatestActorSnapshot(actor)
+	if state := actor.GetStatus().GetState(); state != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		return nil, fmt.Errorf("checkpoint Actor %s/%s is %s: %w", reference.Atespace, actorName, state, errActorNotSuspended)
+	}
 	if metadata.GetAtespace() != reference.Atespace || metadata.GetName() != actorName || metadata.GetUid() == "" ||
-		actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED ||
 		reference.URI == "" || substrate.SnapshotURI(snapshot) != reference.URI || snapshot.GetActorTemplateUid() == "" {
 		return nil, fmt.Errorf("checkpoint Actor %s/%s snapshot changed", reference.Atespace, actorName)
 	}
@@ -313,7 +325,9 @@ func (s *Service) Rename(ctx context.Context, checkpointID, name string) (*apiv1
 	return checkpoint, nil
 }
 
-func (s *Service) Fork(ctx context.Context, checkpointID, requestID string) (*apiv1.Session, error) {
+// Fork creates a Session from a checkpoint. freshConversation keeps the
+// checkpoint's workspace but starts with no A2A history or native conversation.
+func (s *Service) Fork(ctx context.Context, checkpointID, requestID string, freshConversation bool) (*apiv1.Session, error) {
 	checkpointID, err := validateCreate(checkpointID, requestID)
 	if err != nil {
 		return nil, err
@@ -367,7 +381,7 @@ func (s *Service) Fork(ctx context.Context, checkpointID, requestID string) (*ap
 	if err != nil {
 		return nil, serviceerrors.NewInternal("Failed to generate Session identifier", err)
 	}
-	session, _, err := s.store.ForkSession(ctx, checkpointID, userID, requestID, id.String())
+	session, _, err := s.store.ForkSession(ctx, checkpointID, userID, requestID, id.String(), freshConversation)
 	if errors.Is(err, database.ErrIdempotencyConflict) {
 		return nil, serviceerrors.NewAlreadyExists("request_id was already used for a different Session", err)
 	}
@@ -432,6 +446,19 @@ func encodePageToken(id string) string {
 }
 
 func tagName(checkpointID string) string { return "checkpoint-" + checkpointID }
+
+// errActorNotSuspended marks a checkpoint whose Actor is running or otherwise
+// not suspended, so it has no stable snapshot to copy.
+var errActorNotSuspended = errors.New("checkpoint Actor is not suspended")
+
+// checkpointFailure is a definite FailedPrecondition carrying a kagent.dev reason.
+func checkpointFailure(reason, message string) error {
+	failure, err := status.New(codes.FailedPrecondition, message).WithDetails(&errdetails.ErrorInfo{Domain: "kagent.dev", Reason: reason})
+	if err != nil {
+		return err
+	}
+	return failure.Err()
+}
 
 func decodePageToken(token string) (string, error) {
 	if token == "" {

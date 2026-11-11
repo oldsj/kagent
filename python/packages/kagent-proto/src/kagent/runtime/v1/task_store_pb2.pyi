@@ -104,10 +104,12 @@ class TaskStoreServiceGetWorkspaceRequest(_message.Message):
     def __init__(self, session_id: _Optional[str] = ...) -> None: ...
 
 class TaskStoreServiceGetWorkspaceResponse(_message.Message):
-    __slots__ = ("workspace",)
+    __slots__ = ("workspace", "fresh_conversation")
     WORKSPACE_FIELD_NUMBER: _ClassVar[int]
+    FRESH_CONVERSATION_FIELD_NUMBER: _ClassVar[int]
     workspace: _common_pb2.Workspace
-    def __init__(self, workspace: _Optional[_Union[_common_pb2.Workspace, _Mapping]] = ...) -> None: ...
+    fresh_conversation: bool
+    def __init__(self, workspace: _Optional[_Union[_common_pb2.Workspace, _Mapping]] = ..., fresh_conversation: _Optional[bool] = ...) -> None: ...
 
 class TaskStoreServiceReportActivityRequest(_message.Message):
     __slots__ = ("session_id", "active")

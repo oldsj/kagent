@@ -112,6 +112,10 @@ message TaskStoreServiceGetWorkspaceRequest {
 message TaskStoreServiceGetWorkspaceResponse {
   // Unset when the Session has no workspace.
   kagent.api.v1.Workspace workspace = 1;
+  // Fields 2-4 are reserved for workspace preparation.
+  // True for a fork created with a fresh conversation: before its first turn the
+  // runtime discards native conversation state restored from the checkpoint.
+  bool fresh_conversation = 5;
 }
 
 message TaskStoreServiceReportActivityRequest {

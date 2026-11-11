@@ -14,6 +14,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 
 	"github.com/kagent-dev/kagent/go/api/bootstrap"
+	"github.com/kagent-dev/kagent/go/api/v1alpha3"
 	"github.com/kagent-dev/kagent/go/core/internal/translator"
 	"github.com/kagent-dev/kagent/go/harness/runtime/payload"
 )
@@ -350,4 +351,32 @@ func TestActorTemplateForComposedRevision(t *testing.T) {
 		}
 		require.Nil(t, template.GetContainers()[0].GetSecurityContext())
 	})
+}
+
+func TestActorTemplateQuiesceFidelity(t *testing.T) {
+	for _, test := range []struct {
+		scope v1alpha3.RuntimeSnapshotScope
+		want  ateapipb.SnapshotFidelity
+	}{
+		{"", ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES},
+		{v1alpha3.RuntimeSnapshotScopeData, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES},
+		{v1alpha3.RuntimeSnapshotScopeFull, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY},
+	} {
+		t.Run(string(test.scope), func(t *testing.T) {
+			spec := &translator.Revision{ControlPlaneURL: testControlPlaneURL, CPU: "1", Memory: "1Gi", Namespace: "agents", AgentName: "helper",
+				Image:          "agent.example/image@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				WorkerPoolName: "default", SnapshotLocation: "snapshots", OnQuiesce: test.scope, ConfigJSON: []byte(`{}`),
+				AgentCard: &a2apb.AgentCard{Name: "helper", Version: "v1", Capabilities: &a2apb.AgentCapabilities{Streaming: new(true)},
+					SupportedInterfaces: []*a2apb.AgentInterface{{Url: "http://127.0.0.1:80", ProtocolBinding: "GRPC", ProtocolVersion: "1.0"}}, DefaultInputModes: []string{"text"}, DefaultOutputModes: []string{"text"}}}
+			revisionID, err := spec.Digest()
+			require.NoError(t, err)
+			bundle, err := spec.BootstrapBundle(revisionID)
+			require.NoError(t, err)
+			template, err := ActorTemplateForRevision(spec, revisionID, bundle)
+			require.NoError(t, err)
+			require.Equal(t, test.want, template.GetSnapshotConfig().GetPreferredFidelity())
+		})
+	}
+	_, err := QuiesceFidelity("Memory")
+	require.ErrorContains(t, err, "unsupported quiesce snapshot scope")
 }

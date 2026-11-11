@@ -103,7 +103,7 @@ func (w *ActorWorkflow) Quiesce(ctx context.Context, session *apiv1.Session) (*d
 		return nil, fmt.Errorf("suspend Actor %s/%s returned no snapshot", atespace, name)
 	}
 	fidelity := snapshot.GetFidelity()
-	if fidelity != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
+	if !substrate.SuspendFidelity(fidelity) {
 		return nil, fmt.Errorf("actor %s/%s returned invalid snapshot fidelity %s", atespace, name, fidelity)
 	}
 	return &database.SessionTaskSnapshot{

@@ -174,8 +174,7 @@ func (c *Compiler) compileConfiguration(ctx context.Context, agent *v1alpha3.Age
 	}
 	result.AgentName = agent.Name
 	result.Image = image
-	result.CPU = c.settings.GetCpu()
-	result.Memory = c.settings.GetMemory()
+	result.CPU, result.Memory = harnessLimits(harness, c.settings)
 	result.SandboxClass = (*workerPool).Spec.DefaultSandboxClass()
 	result.Harness = harnessType(harness)
 	if template := (*workerPool).Spec.Template; template != nil {
@@ -201,6 +200,21 @@ func harnessType(harness *HarnessConfiguration) HarnessType {
 	default:
 		return ""
 	}
+}
+
+// harnessLimits returns the runtime CPU and memory limits a Harness selects,
+// using the runtime defaults for any limit it omits.
+func harnessLimits(harness *HarnessConfiguration, defaults *configv1.RuntimeDefaultsConfig) (cpu, memory string) {
+	cpu, memory = defaults.GetCpu(), defaults.GetMemory()
+	if resources := harness.Spec.Resources; resources != nil {
+		if resources.CPU != nil {
+			cpu = resources.CPU.String()
+		}
+		if resources.Memory != nil {
+			memory = resources.Memory.String()
+		}
+	}
+	return cpu, memory
 }
 
 func (c *Compiler) resolveTree(ctx context.Context, harness *HarnessConfiguration, root *TemplateConfiguration) (*resolvedTemplateTree, error) {
