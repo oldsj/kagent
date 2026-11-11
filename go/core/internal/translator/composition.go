@@ -123,6 +123,7 @@ func ComposeRevision(base Revision, selection Composition) (Revision, error) {
 		}
 		config.ClaudeExecutable = payload.Root + "/bin/claude"
 		config.ExpectedClaudeVersion = selection.CLIVersion
+		config.SDKRunner = &claudeconfig.SDKRunner{Node: payload.SDKNode, Script: payload.SDKRunnerScript, ICUDataDir: payload.SDKICUData}
 		configJSON, err = json.Marshal(config)
 	case HarnessTypeCodex:
 		config, parseErr := codexconfig.Parse(base.ConfigJSON)
@@ -155,8 +156,7 @@ func withoutLauncherSandbox(environment []corev1.EnvVar, provider HarnessType) [
 }
 
 // checkComposedEnvironment rejects Harness environment that would redirect the
-// payload's loader, homes or runtime paths, or select a driver the payload
-// does not ship.
+// payload's loader, homes or runtime paths.
 func checkComposedEnvironment(environment []corev1.EnvVar) error {
 	for _, variable := range environment {
 		if variable.ValueFrom != nil || reservedCompositionEnvironment(variable.Name) {
@@ -165,9 +165,6 @@ func checkComposedEnvironment(environment []corev1.EnvVar) error {
 		value := variable.Value
 		if strings.Contains(value, payload.Root) || strings.Contains(value, "/run/kagent/") || strings.Contains(value, "/data/") || value == "/data" || value == "/run/kagent" {
 			return fmt.Errorf("environment %q references reserved runtime paths", variable.Name)
-		}
-		if variable.Name == "KAGENT_CLAUDE_DRIVER" && value != "" && value != "process" {
-			return fmt.Errorf("composed Claude runtimes support only the process driver")
 		}
 	}
 	return nil

@@ -119,7 +119,9 @@ cancellation of the turn.
 
 Setting Harness environment `KAGENT_CLAUDE_DRIVER=sdk` (default `process`)
 replaces the per-turn `claude -p` process with one long-lived Agent SDK
-`query()` per Session. `kagent-claude` stays PID 1 and keeps A2A on `:80`,
+`query()` per Session. It runs from this image and from the Claude runtime
+payload of a composed Session, whose configuration names the payload's Node,
+bridge and ICU data instead of the image's. `kagent-claude` stays PID 1 and keeps A2A on `:80`,
 `/readyz` on `:8081`, task reporting and the continuation store. A Node child,
 `/opt/kagent/sdk-runner/runner.mjs`, holds the `query()` and speaks JSON lines
 over stdio; it opens no listener.

@@ -41,8 +41,25 @@ func TestComposeRevision(t *testing.T) {
 		if got := environmentValue(composed.Environment, payload.PlatformEnvironment); got != "linux/arm64" {
 			t.Errorf("%s = %q, want linux/arm64", payload.PlatformEnvironment, got)
 		}
+		if want := (claudeconfig.SDKRunner{Node: payload.SDKNode, Script: payload.SDKRunnerScript, ICUDataDir: payload.SDKICUData}); config.SDKRunner == nil || *config.SDKRunner != want {
+			t.Errorf("config SDK runner = %+v, want the payload bridge %+v", config.SDKRunner, want)
+		}
 		if base.Composition != nil || base.Image == composed.Image {
 			t.Error("composition modified the base revision")
+		}
+	})
+
+	t.Run("Given a compiled Claude revision that selects the SDK driver, when it is composed, assert that the driver selection is kept for the payload bridge", func(t *testing.T) {
+		base := claudeBaseRevision(t)
+		base.Environment = append(base.Environment, corev1.EnvVar{Name: "KAGENT_CLAUDE_DRIVER", Value: "sdk"})
+
+		composed, err := ComposeRevision(base, claudeSelection())
+		if err != nil {
+			t.Fatalf("ComposeRevision() error = %v", err)
+		}
+
+		if got := environmentValue(composed.Environment, "KAGENT_CLAUDE_DRIVER"); got != "sdk" {
+			t.Errorf("KAGENT_CLAUDE_DRIVER = %q, want sdk", got)
 		}
 	})
 
@@ -109,9 +126,6 @@ func TestComposeRevision(t *testing.T) {
 		{"Harness environment that turns the Claude sandbox off", func(r *Revision, _ *Composition) {
 			r.Environment = append(r.Environment, corev1.EnvVar{Name: claudeconfig.SandboxEnvName, Value: "0"})
 		}, "conflicts with the composed runtime"},
-		{"the Claude SDK driver", func(r *Revision, _ *Composition) {
-			r.Environment = append(r.Environment, corev1.EnvVar{Name: "KAGENT_CLAUDE_DRIVER", Value: "sdk"})
-		}, "process driver"},
 		{"a Harness command override", func(r *Revision, _ *Composition) { r.Command = []string{"/bin/sh"} }, "launch command"},
 		{"an already composed revision", func(r *Revision, c *Composition) { selection := *c; r.Composition = &selection }, "already composed"},
 	}

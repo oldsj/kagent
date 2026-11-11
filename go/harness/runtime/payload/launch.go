@@ -9,9 +9,9 @@ import (
 )
 
 // claudeDriverEnvironment mirrors the Claude harness's driver selector
-// (executor.DriverEnvName). The payload ships no Node or SDK bridge, so only
-// the default "process" driver can run from it. The launcher keeps its own copy
-// so the static launcher does not link the Claude executor.
+// (executor.DriverEnvName). The Claude payload ships Node and the SDK bridge,
+// so both drivers run from it. The launcher keeps its own copy so the static
+// launcher does not link the Claude executor.
 const claudeDriverEnvironment = "KAGENT_CLAUDE_DRIVER"
 
 // Launch validates the immutable payload and durable directories, then replaces
@@ -47,7 +47,7 @@ func Launch(root, system, data, platform string, check bool, environment []strin
 		return err
 	}
 	if manifest.Provider == "claude" {
-		if err := requireProcessDriver(environment); err != nil {
+		if err := checkClaudeDriver(environment); err != nil {
 			return err
 		}
 	}
@@ -100,13 +100,13 @@ func Launch(root, system, data, platform string, check bool, environment []strin
 	return replace(harness, []string{harness}, cleaned)
 }
 
-// requireProcessDriver rejects the Claude Agent SDK driver, which needs Node
-// and the SDK bridge from the Claude harness image.
-func requireProcessDriver(environment []string) error {
+// checkClaudeDriver refuses an unknown Claude driver before the launcher
+// touches durable state. The harness checks the same selector again.
+func checkClaudeDriver(environment []string) error {
 	for _, entry := range environment {
 		name, value, _ := strings.Cut(entry, "=")
-		if name == claudeDriverEnvironment && value != "" && value != "process" {
-			return fmt.Errorf("%s=%q is not supported by the runtime payload; only the default \"process\" driver runs from it", claudeDriverEnvironment, value)
+		if name == claudeDriverEnvironment && value != "" && value != "process" && value != "sdk" {
+			return fmt.Errorf("%s=%q is not supported; use \"process\" or \"sdk\"", claudeDriverEnvironment, value)
 		}
 	}
 	return nil

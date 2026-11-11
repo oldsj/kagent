@@ -12,6 +12,16 @@ import (
 // Root is where Substrate mounts the payload image volume.
 const Root = "/opt/mainloop-runtime"
 
+// SDKNode and SDKRunnerScript are the Claude payload's Agent SDK bridge. They
+// sit in libexec, off the PATH the launcher builds, so the payload's Node
+// never shadows the development image's own. Alpine's Node loads ICU data at
+// run time from SDKICUData, which a development image does not provide.
+const (
+	SDKNode         = Root + "/libexec/node"
+	SDKRunnerScript = Root + "/libexec/sdk-runner/runner.mjs"
+	SDKICUData      = Root + "/share/icu"
+)
+
 // Schema versions the payload layout and manifest contract.
 const Schema = 1
 

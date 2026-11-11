@@ -11,6 +11,15 @@ import (
 	"runtime"
 )
 
+// claudeFiles are the Claude payload's own required files: ripgrep and the
+// Agent SDK bridge with its SDK entry module.
+var claudeFiles = []string{
+	"bin/rg",
+	"libexec/node",
+	"libexec/sdk-runner/runner.mjs",
+	"libexec/sdk-runner/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs",
+}
+
 // Manifest identifies the payload ABI and every shipped regular file.
 type Manifest struct {
 	Schema         uint32            `json:"schema"`
@@ -79,8 +88,12 @@ func ValidateManifest(root, platform string) (Manifest, error) {
 			return manifest, fmt.Errorf("runtime manifest is missing %s", required)
 		}
 	}
-	if manifest.Provider == "claude" && manifest.Files["bin/rg"] == "" {
-		return manifest, fmt.Errorf("runtime manifest is missing bin/rg")
+	if manifest.Provider == "claude" {
+		for _, required := range claudeFiles {
+			if manifest.Files[required] == "" {
+				return manifest, fmt.Errorf("runtime manifest is missing %s", required)
+			}
+		}
 	}
 	if manifest.Provider == "codex" && manifest.Files["bin/kagent-credential-refresh"] == "" {
 		return manifest, fmt.Errorf("runtime manifest is missing credential refresh helper")

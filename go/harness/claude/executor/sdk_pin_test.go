@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/kagent-dev/kagent/go/harness/claude/config"
+	"github.com/kagent-dev/kagent/go/harness/runtime/payload"
 )
 
 // The bridge drives the image's pinned claude, so its SDK must be the release
@@ -26,5 +27,13 @@ func TestSDKRunnerPinMatchesClaudeVersion(t *testing.T) {
 	cli := config.PinnedClaudeVersion
 	if sdk[strings.LastIndex(sdk, ".")+1:] != cli[strings.LastIndex(cli, ".")+1:] || !strings.HasPrefix(sdk, "0.3.") || !strings.HasPrefix(cli, "2.1.") {
 		t.Fatalf("SDK %s does not match pinned Claude %s; update sdk-runner/package.json and its lockfile", sdk, cli)
+	}
+}
+
+// The runtime payload ships the same bridge, so its locked CLI must be the
+// harness image's pinned one and therefore match the SDK too.
+func TestRuntimePayloadPinMatchesClaudeVersion(t *testing.T) {
+	if locked := payload.LockedRelease("claude").Version; locked != config.PinnedClaudeVersion {
+		t.Fatalf("runtime-lock.json pins Claude %s, the harness pins %s; the payload bridge's SDK must match both", locked, config.PinnedClaudeVersion)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -80,18 +81,22 @@ func OwnsEnvironment(name string) bool {
 }
 
 type Config struct {
-	MaxContentLength      *int64                 `json:"max_content_length,omitempty"`
-	ControlPlaneURL       string                 `json:"control_plane_url"`
-	LogLevel              string                 `json:"log_level,omitempty"`
-	Version               int                    `json:"version"`
-	ClaudeExecutable      string                 `json:"claude_executable"`
-	ExpectedClaudeVersion string                 `json:"expected_claude_version"`
-	StrictVersion         bool                   `json:"strict_version"`
-	Model                 string                 `json:"model,omitempty"`
-	AppendSystemPrompt    string                 `json:"append_system_prompt,omitempty"`
-	Agents                map[string]Agent       `json:"agents,omitempty"`
-	SkillResources        *agentplugin.Resources `json:"skill_resources,omitempty"`
-	MCPServers            map[string]MCPServer   `json:"mcp_servers,omitempty"`
+	MaxContentLength      *int64 `json:"max_content_length,omitempty"`
+	ControlPlaneURL       string `json:"control_plane_url"`
+	LogLevel              string `json:"log_level,omitempty"`
+	Version               int    `json:"version"`
+	ClaudeExecutable      string `json:"claude_executable"`
+	ExpectedClaudeVersion string `json:"expected_claude_version"`
+	StrictVersion         bool   `json:"strict_version"`
+	// SDKRunner locates the Agent SDK bridge for KAGENT_CLAUDE_DRIVER=sdk.
+	// Absent selects the harness image's Node on PATH and its bridge under
+	// /opt/kagent/sdk-runner; a composed runtime points both into the payload.
+	SDKRunner          *SDKRunner             `json:"sdk_runner,omitempty"`
+	Model              string                 `json:"model,omitempty"`
+	AppendSystemPrompt string                 `json:"append_system_prompt,omitempty"`
+	Agents             map[string]Agent       `json:"agents,omitempty"`
+	SkillResources     *agentplugin.Resources `json:"skill_resources,omitempty"`
+	MCPServers         map[string]MCPServer   `json:"mcp_servers,omitempty"`
 	// Git is the repository policy for Session workspaces. Absent means Sessions
 	// cannot request a workspace.
 	Git *workspace.Git `json:"git,omitempty"`
@@ -114,6 +119,15 @@ type Config struct {
 	// DisallowedTools replaces the default set of built-in tools Claude may
 	// not use. Empty selects DefaultDisallowedTools.
 	DisallowedTools []string `json:"disallowed_tools,omitempty"`
+}
+
+// SDKRunner is the Node executable and bridge script of the Agent SDK driver.
+type SDKRunner struct {
+	Node   string `json:"node"`
+	Script string `json:"script"`
+	// ICUDataDir holds the ICU data a system-ICU Node build loads at run time.
+	// Empty keeps Node's compiled-in location.
+	ICUDataDir string `json:"icu_data_dir,omitempty"`
 }
 
 // DefaultDisallowedTools are built-in tools that schedule work beyond the
@@ -189,6 +203,10 @@ func (c Config) Validate() error {
 	}
 	if c.StrictVersion && strings.TrimSpace(c.ExpectedClaudeVersion) == "" {
 		return fmt.Errorf("expected_claude_version is required when strict_version is enabled")
+	}
+	if c.SDKRunner != nil && (!filepath.IsAbs(c.SDKRunner.Node) || !filepath.IsAbs(c.SDKRunner.Script) ||
+		(c.SDKRunner.ICUDataDir != "" && !filepath.IsAbs(c.SDKRunner.ICUDataDir))) {
+		return fmt.Errorf("sdk_runner node, script and icu_data_dir must be absolute paths")
 	}
 	if c.MaxEventBytes <= 0 || c.MaxStderrBytes <= 0 || c.InterruptGraceMillis <= 0 {
 		return fmt.Errorf("event, stderr, and interrupt grace limits must be positive")

@@ -209,3 +209,29 @@ func TestExecutionBoundsDefaultAndOverride(t *testing.T) {
 		}
 	}
 }
+
+func TestConfigValidatesSDKRunner(t *testing.T) {
+	scenarios := []struct {
+		name    string
+		runner  *SDKRunner
+		wantErr bool
+	}{
+		{name: "Given no SDK runner, when the config is validated, assert that it is accepted for the image bridge"},
+		{name: "Given absolute payload paths, when the config is validated, assert that it is accepted", runner: &SDKRunner{Node: "/opt/mainloop-runtime/libexec/node", Script: "/opt/mainloop-runtime/libexec/sdk-runner/runner.mjs", ICUDataDir: "/opt/mainloop-runtime/share/icu"}},
+		{name: "Given a Node name looked up on PATH, when the config is validated, assert that it is refused", runner: &SDKRunner{Node: "node", Script: "/opt/mainloop-runtime/libexec/sdk-runner/runner.mjs"}, wantErr: true},
+		{name: "Given a missing script, when the config is validated, assert that it is refused", runner: &SDKRunner{Node: "/opt/mainloop-runtime/libexec/node"}, wantErr: true},
+		{name: "Given a relative ICU data directory, when the config is validated, assert that it is refused", runner: &SDKRunner{Node: "/opt/mainloop-runtime/libexec/node", Script: "/opt/mainloop-runtime/libexec/sdk-runner/runner.mjs", ICUDataDir: "share/icu"}, wantErr: true},
+	}
+	for _, scenario := range scenarios {
+		t.Run(scenario.name, func(t *testing.T) {
+			cfg := Production("claude-sonnet-4-5", "help")
+			cfg.SDKRunner = scenario.runner
+
+			err := cfg.Validate()
+
+			if scenario.wantErr != (err != nil) {
+				t.Fatalf("Validate() error = %v, want error %v", err, scenario.wantErr)
+			}
+		})
+	}
+}

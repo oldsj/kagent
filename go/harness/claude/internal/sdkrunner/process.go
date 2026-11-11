@@ -28,17 +28,25 @@ type Launcher interface {
 	Launch(ctx context.Context) (Process, error)
 }
 
-// NodeLauncher starts `node <Script>` in its own process group with Env.
+// NodeLauncher starts `node [--icu-data-dir=ICUDataDir] <Script>` in its own
+// process group with Env.
 type NodeLauncher struct {
 	Node   string
 	Script string
-	Dir    string
-	Env    []string
-	Stderr io.Writer
+	// ICUDataDir is passed as a flag, not NODE_ICU_DATA, so it never reaches
+	// Claude or the tools Claude runs, which may start their own Node.
+	ICUDataDir string
+	Dir        string
+	Env        []string
+	Stderr     io.Writer
 }
 
 func (l NodeLauncher) Launch(_ context.Context) (Process, error) {
-	cmd := exec.Command(l.Node, l.Script)
+	args := []string{l.Script}
+	if l.ICUDataDir != "" {
+		args = append([]string{"--icu-data-dir=" + l.ICUDataDir}, args...)
+	}
+	cmd := exec.Command(l.Node, args...)
 	cmd.Dir = l.Dir
 	cmd.Env = l.Env
 	cmd.Stderr = l.Stderr

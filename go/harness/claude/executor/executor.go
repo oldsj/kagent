@@ -105,7 +105,11 @@ func New(ctx context.Context, cfg Config) (a2asrv.AgentExecutor, io.Closer, erro
 	var runnerCloser io.Closer = runner
 	var sdk *sdkWiring
 	if mode == modeSDK {
-		if sdk, err = newSDKWiring(ctx, cfg, runner, store, parsed.InterruptGrace()); err != nil {
+		bridge := imageSDKRunner
+		if parsed.SDKRunner != nil {
+			bridge = *parsed.SDKRunner
+		}
+		if sdk, err = newSDKWiring(ctx, cfg, bridge, runner, store, parsed.InterruptGrace()); err != nil {
 			_ = runner.Close()
 			return nil, nil, err
 		}
