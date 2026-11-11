@@ -33,14 +33,14 @@ func TestCodexFailureThroughA2A(t *testing.T) {
 	}{
 		{name: "native auth failure", failure: nativeFailureFixture{Message: "Bearer SYNTHETIC_CREDENTIAL", AdditionalDetails: "private native detail", CodexErrorInfo: json.RawMessage(`"unauthorized"`)}, want: "Codex authentication failed; renew the configured model credential in the control plane."},
 		{name: "HTTP auth failure", failure: nativeFailureFixture{Message: "Bearer SYNTHETIC_CREDENTIAL", CodexErrorInfo: json.RawMessage(`{"httpConnectionFailed":{"httpStatusCode":401}}`)}, want: "Codex authentication failed; renew the configured model credential in the control plane."},
-		{name: "unclassified upstream detail", failure: nativeFailureFixture{Message: "upstream unavailable"}, want: "Codex execution failed"},
-		{name: "credential withheld", failure: nativeFailureFixture{Message: "Authorization: Custom SYNTHETIC_CREDENTIAL"}, want: "Codex execution failed"},
-		{name: "long Unicode detail", failure: nativeFailureFixture{Message: strings.Repeat("界", 1000)}, want: "Codex execution failed"},
-		{name: "signed URL query", failure: nativeFailureFixture{Message: "error sending request for url (https://upstream.example/responses?sig=Q7m9v2R8d4)"}, want: "Codex execution failed"},
-		{name: "URL userinfo", failure: nativeFailureFixture{Message: "error sending request for url (https://alice:Q7m9v2R8d4@upstream.example/responses)"}, want: "Codex execution failed"},
-		{name: "account identifier", failure: nativeFailureFixture{Message: `unexpected status 403 Forbidden: {"error":{"message":"Account 11111111-2222-4333-8444-555555555555 is disabled","account_id":"11111111-2222-4333-8444-555555555555"}}`}, want: "Codex execution failed"},
-		{name: "unlabelled JWT", failure: nativeFailureFixture{Message: "unexpected status 403 Forbidden: invalid credential e30.eyJleHAiOjE5MDAwMDAwMDB9.c2lnbmF0dXJl"}, want: "Codex execution failed"},
-		{name: "custom auth header", failure: nativeFailureFixture{Message: "unexpected status 403 Forbidden: X-Auth: Q7m9v2R8d4"}, want: "Codex execution failed"},
+		{name: "unclassified upstream detail", failure: nativeFailureFixture{Message: "upstream unavailable"}, want: "Codex execution failed: upstream unavailable"},
+		{name: "credential withheld", failure: nativeFailureFixture{Message: "Authorization: Custom SYNTHETIC_CREDENTIAL"}, want: "Codex execution failed: upstream error (details withheld: possible credential)"},
+		{name: "long Unicode detail", failure: nativeFailureFixture{Message: strings.Repeat("界", 1000)}, want: "Codex execution failed: " + strings.Repeat("界", 161) + "..."},
+		{name: "signed URL query", failure: nativeFailureFixture{Message: "error sending request for url (https://upstream.example/responses?sig=Q7m9v2R8d4)"}, want: "Codex execution failed: error sending request for url ([url])"},
+		{name: "URL userinfo", failure: nativeFailureFixture{Message: "error sending request for url (https://alice:Q7m9v2R8d4@upstream.example/responses)"}, want: "Codex execution failed: error sending request for url ([url])"},
+		{name: "account identifier", failure: nativeFailureFixture{Message: `unexpected status 403 Forbidden: {"error":{"message":"Account 11111111-2222-4333-8444-555555555555 is disabled","account_id":"11111111-2222-4333-8444-555555555555"}}`}, want: "Codex execution failed: upstream status 403: Account [id] is disabled"},
+		{name: "unlabelled JWT", failure: nativeFailureFixture{Message: "unexpected status 403 Forbidden: invalid credential e30.eyJleHAiOjE5MDAwMDAwMDB9.c2lnbmF0dXJl"}, want: "Codex execution failed: upstream status 403: invalid credential [redacted]"},
+		{name: "custom auth header", failure: nativeFailureFixture{Message: "unexpected status 403 Forbidden: X-Auth: Q7m9v2R8d4"}, want: "Codex execution failed: upstream status 403: X-Auth: [redacted]"},
 		{name: "unknown private category", failure: nativeFailureFixture{CodexErrorInfo: json.RawMessage(`"Q7m9v2R8d4"`)}, want: "Codex execution failed"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -96,10 +96,29 @@ while read ignored; do :; done
 				require.NotContains(t, got, "SYNTHETIC_CREDENTIAL")
 			}
 			require.Equal(t, 1, failed)
+			require.Equal(t, test.want, loggedFailure(t, &logs), "the Actor log carries the published failure")
 			for _, private := range []string{"SYNTHETIC_CREDENTIAL", "Q7m9v2R8d4", "alice", "11111111-2222-4333-8444-555555555555", "e30.eyJleHAiOjE5MDAwMDAwMDB9.c2lnbmF0dXJl", "private native detail"} {
 				require.NotContains(t, events.String(), private)
 				require.NotContains(t, logs.String(), private)
 			}
 		})
 	}
+}
+
+// loggedFailure returns the failure the executor logged for a failed turn.
+func loggedFailure(t *testing.T, logs *bytes.Buffer) string {
+	t.Helper()
+	decoder := json.NewDecoder(bytes.NewReader(logs.Bytes()))
+	for decoder.More() {
+		var record struct {
+			Msg     string `json:"msg"`
+			Failure string `json:"failure"`
+		}
+		require.NoError(t, decoder.Decode(&record))
+		if record.Msg == "Harness runtime turn failed" {
+			return record.Failure
+		}
+	}
+	t.Fatal("no failed-turn log record")
+	return ""
 }

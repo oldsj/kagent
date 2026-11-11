@@ -57,6 +57,14 @@ zero retry budgets through an internal test switch while upstream denial
 handling still triggers long backoffs. The built-in Bedrock provider rejects
 retry-budget overrides and retains its bounded native retries.
 
+A failed turn reaches the A2A status as `Codex execution failed: upstream
+status <code>: <text>`, and the harness logs the same message to stderr. The
+status comes from Codex's error category or the HTTP response. From a JSON
+response body only the error type and message are kept. The text is vetted as
+for Claude: a credential indicator withholds it whole, and URLs, email
+addresses, UUIDs and token-like words are replaced. An authentication failure
+keeps its fixed message, which tells the operator to renew the credential.
+
 ## Human-in-the-loop flow
 
 An MCP binding with `requireApproval: true` is emitted with Codex's default

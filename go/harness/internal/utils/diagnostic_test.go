@@ -74,3 +74,51 @@ func TestSafeDiagnosticSplitIndicators(t *testing.T) {
 		})
 	}
 }
+
+func TestSafeDiagnosticRedactsIdentifiers(t *testing.T) {
+	for _, scenario := range []struct {
+		name, input, want string
+	}{
+		{
+			name:  "Given an upstream error naming a signed URL, when it is vetted, assert that the whole URL is replaced",
+			input: "error sending request for url (https://upstream.example/responses?sig=Q7m9v2R8d4)",
+			want:  "error sending request for url ([url])",
+		},
+		{
+			name:  "Given an upstream error naming a URL with userinfo, when it is vetted, assert that the whole URL is replaced",
+			input: "connect https://alice:Q7m9v2R8d4@upstream.example/v1 failed",
+			want:  "connect [url] failed",
+		},
+		{
+			name:  "Given an upstream error naming an email address, when it is vetted, assert that the address is replaced",
+			input: "seat for alice@example.com is inactive",
+			want:  "seat for [email] is inactive",
+		},
+		{
+			name:  "Given an upstream error naming an account UUID, when it is vetted, assert that the UUID is replaced",
+			input: "Account 11111111-2222-4333-8444-555555555555 is disabled",
+			want:  "Account [id] is disabled",
+		},
+		{
+			name:  "Given an upstream error carrying an unlabelled JWT, when it is vetted, assert that the token is replaced",
+			input: "invalid credential e30.eyJleHAiOjE5MDAwMDAwMDB9.c2lnbmF0dXJl",
+			want:  "invalid credential [redacted]",
+		},
+		{
+			name:  "Given an upstream error carrying a mixed-case token, when it is vetted, assert that the token is replaced",
+			input: "X-Auth: Q7m9v2R8d4",
+			want:  "X-Auth: [redacted]",
+		},
+		{
+			name:  "Given an upstream error naming a model and an error code, when it is vetted, assert that both stay readable",
+			input: "API Error: 400 invalid_request_error: model gpt-5.5-codex is not supported",
+			want:  "API Error: 400 invalid_request_error: model gpt-5.5-codex is not supported",
+		},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			got := utils.SafeDiagnostic(scenario.input)
+			require.Equal(t, scenario.want, got)
+			require.Equal(t, got, utils.SafeDiagnostic(got), "vetting is idempotent")
+		})
+	}
+}
