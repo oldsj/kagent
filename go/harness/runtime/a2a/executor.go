@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
@@ -459,7 +460,11 @@ func (e *Executor) Execute(ctx context.Context, reqCtx *a2asrv.ExecutorContext) 
 		}
 		result = tracing.Result{TaskState: string(a2atype.TaskStateFailed), Error: "runtime_failure"}
 		endInvocation()
-		message := taskMessage(reqCtx, safeFailure(outcome.Failure.Message))
+		failure := safeFailure(outcome.Failure.Message)
+		// The runtime vets the message for A2A readers, so the Actor's log may
+		// carry it too; without it a failed turn leaves nothing to diagnose.
+		a2alog.Warn(ctx, "Harness runtime turn failed", "failure", failure)
+		message := taskMessage(reqCtx, failure)
 		apia2a.SetTimelinePosition(message, sink.nextTimelinePosition())
 		yield(a2atype.NewStatusUpdateEvent(reqCtx, a2atype.TaskStateFailed, message), nil)
 	}
@@ -1016,11 +1021,24 @@ func requiresInput(state a2atype.TaskState) bool {
 	return state == a2atype.TaskStateInputRequired || state == a2atype.TaskStateAuthRequired
 }
 
+// maxFailureBytes bounds a published failure message.
+const maxFailureBytes = 512
+
+// safeFailure bounds a runtime's vetted failure message, keeping its start,
+// which names the failure, rather than replacing a long one.
 func safeFailure(message string) string {
-	if message == "" || len(message) > 512 {
+	if message == "" {
 		return "Harness runtime execution failed"
 	}
-	return message
+	if len(message) <= maxFailureBytes {
+		return message
+	}
+	const suffix = "..."
+	message = message[:maxFailureBytes-len(suffix)]
+	for !utf8.ValidString(message) {
+		message = message[:len(message)-1]
+	}
+	return message + suffix
 }
 
 var _ runtime.EventSink = (*executionSink)(nil)

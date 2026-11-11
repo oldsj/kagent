@@ -94,7 +94,8 @@ func TestTerminalFailureThroughA2A(t *testing.T) {
 		{name: "indicator after limit", detail: longDetail + " token=Q7m9v2R8d4", stderr: longDetail + " token=Q7m9v2R8d4", wantStderr: withheld, want: withheld, exit: "1"},
 		{name: "long clean diagnostic", detail: longDetail, stderr: longDetail, wantStderr: longWant, want: longWant, exit: "1"},
 		{name: "zero exit withholds credential", detail: secretText, want: withheld, exit: "0"},
-		{name: "zero exit keeps long failure fallback", detail: longDetail, want: "Harness runtime execution failed", exit: "0"},
+		{name: "zero exit truncates a long failure", detail: longDetail, want: longBounded + strings.Repeat("界", 166) + "...", exit: "0"},
+		{name: "signed URL in the upstream error", detail: "API Error: 400 request to https://upstream.example/v1/messages?sig=Q7m9v2R8d4 rejected", want: "API Error: 400 request to [url] rejected", exit: "0"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -148,14 +149,17 @@ func TestTerminalFailureThroughA2A(t *testing.T) {
 			}
 			var stderrLogged bool
 			var failureLogged bool
+			var turnFailure string
 			for line := range strings.SplitSeq(strings.TrimSpace(logs.String()), "\n") {
 				if line == "" {
 					continue
 				}
 				var record struct {
-					Level  string `json:"level"`
-					Stderr string `json:"stderr"`
-					Error  string `json:"error"`
+					Level   string `json:"level"`
+					Msg     string `json:"msg"`
+					Stderr  string `json:"stderr"`
+					Error   string `json:"error"`
+					Failure string `json:"failure"`
 				}
 				require.NoError(t, json.Unmarshal([]byte(line), &record))
 				require.LessOrEqual(t, len(record.Error), utils.MaxDiagnosticBytes)
@@ -168,6 +172,9 @@ func TestTerminalFailureThroughA2A(t *testing.T) {
 					}
 					require.Equal(t, wantError, record.Error)
 				}
+				if record.Msg == "Harness runtime turn failed" {
+					turnFailure = record.Failure
+				}
 				if record.Stderr != "" {
 					stderrLogged = true
 					require.Equal(t, "WARN", record.Level)
@@ -176,6 +183,9 @@ func TestTerminalFailureThroughA2A(t *testing.T) {
 			}
 			require.Equal(t, test.stderr != "" && !test.omitResult, stderrLogged)
 			require.Equal(t, test.exit != "0", failureLogged)
+			if test.exit == "0" {
+				require.Equal(t, test.want, turnFailure, "the Actor log carries the published failure")
+			}
 		})
 	}
 }

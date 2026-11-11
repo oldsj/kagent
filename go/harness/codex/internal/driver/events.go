@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
 
+	"github.com/kagent-dev/kagent/go/harness/internal/utils"
 	"github.com/kagent-dev/kagent/go/harness/runtime"
 	"github.com/kagent-dev/kagent/go/pkg/tracing"
 )
@@ -61,10 +64,13 @@ type activeTool struct {
 	approvalMatched bool
 }
 
-// turnError decodes only Codex's structured error category. The native message
-// is deliberately not decoded: it can carry signed URLs, account identifiers or
-// credential text, and a failure message is published to every A2A reader.
+// turnError decodes Codex's structured error category and its message. The
+// message is upstream text that can carry signed URLs, account identifiers or
+// credentials, and a failure message is published to every A2A reader, so it
+// reaches the failure only through upstreamDetail. additionalDetails is never
+// decoded.
 type turnError struct {
+	Message        string          `json:"message"`
 	CodexErrorInfo json.RawMessage `json:"codexErrorInfo"`
 }
 
@@ -73,14 +79,70 @@ const (
 	codexAuthFailure = "Codex authentication failed; renew the configured model credential in the control plane."
 )
 
-// codexTurnFailure summarizes a failed turn from recognized structured fields,
-// with a fixed fallback. Upstream kagent reports Codex's own message here; this
-// fork does not.
+// codexTurnFailure summarizes a failed turn: a fixed message for an
+// authentication failure, otherwise the upstream status and vetted error text.
 func codexTurnFailure(failure *turnError) *runtime.Failure {
-	if failure != nil && unauthorized(failure.CodexErrorInfo) {
+	if failure == nil {
+		return &runtime.Failure{Message: codexFailure}
+	}
+	if unauthorized(failure.CodexErrorInfo) {
 		return &runtime.Failure{Message: codexAuthFailure}
 	}
+	if detail := upstreamDetail(failure); detail != "" {
+		return &runtime.Failure{Message: codexFailure + ": " + detail}
+	}
 	return &runtime.Failure{Message: codexFailure}
+}
+
+// unexpectedStatus matches the prefix Codex gives an HTTP error response, as in
+// "unexpected status 400 Bad Request: {...}".
+var unexpectedStatus = regexp.MustCompile(`^unexpected status ([1-5][0-9]{2})\b[^:]*:\s*`)
+
+var upstreamErrorType = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+
+// upstreamDetail renders a failed turn's HTTP status and error text. The status
+// comes from Codex's structured category, else from the response. A JSON
+// response body contributes only its error type and message, never sibling
+// fields such as account identifiers. SafeDiagnostic vets the text.
+func upstreamDetail(failure *turnError) string {
+	status := httpStatus(failure.CodexErrorInfo)
+	text := strings.TrimSpace(failure.Message)
+	if match := unexpectedStatus.FindStringSubmatch(text); match != nil {
+		if status == 0 {
+			status, _ = strconv.Atoi(match[1])
+		}
+		text = text[len(match[0]):]
+	}
+	var body struct {
+		Status int    `json:"status"`
+		Detail string `json:"detail"`
+		Error  struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal([]byte(text), &body) == nil {
+		if status == 0 && body.Status >= 100 && body.Status <= 599 {
+			status = body.Status
+		}
+		switch {
+		case body.Error.Message != "" && upstreamErrorType.MatchString(body.Error.Type):
+			text = body.Error.Type + ": " + body.Error.Message
+		case body.Error.Message != "":
+			text = body.Error.Message
+		default:
+			text = body.Detail
+		}
+	}
+	text = utils.SafeDiagnostic(text)
+	switch {
+	case status != 0 && text != "":
+		return fmt.Sprintf("upstream status %d: %s", status, text)
+	case status != 0:
+		return fmt.Sprintf("upstream status %d", status)
+	default:
+		return text
+	}
 }
 
 // unauthorized recognizes authentication failures only from Codex's structured
@@ -90,6 +152,12 @@ func unauthorized(info json.RawMessage) bool {
 	if json.Unmarshal(info, &code) == nil && code == "unauthorized" {
 		return true
 	}
+	return httpStatus(info) == 401
+}
+
+// httpStatus returns the HTTP status of a recognized Codex error category, or
+// 0. Unknown categories are not read: their fields are not known to be safe.
+func httpStatus(info json.RawMessage) int {
 	type httpFailure struct {
 		HTTPStatusCode int `json:"httpStatusCode"`
 	}
@@ -100,14 +168,14 @@ func unauthorized(info json.RawMessage) bool {
 		ResponseTooManyFailedAttempts  *httpFailure `json:"responseTooManyFailedAttempts"`
 	}
 	if json.Unmarshal(info, &structured) != nil {
-		return false
+		return 0
 	}
 	for _, failure := range []*httpFailure{structured.HTTPConnectionFailed, structured.ResponseStreamConnectionFailed, structured.ResponseStreamDisconnected, structured.ResponseTooManyFailedAttempts} {
-		if failure != nil && failure.HTTPStatusCode == 401 {
-			return true
+		if failure != nil && failure.HTTPStatusCode >= 100 && failure.HTTPStatusCode <= 599 {
+			return failure.HTTPStatusCode
 		}
 	}
-	return false
+	return 0
 }
 
 func (t *eventTranslator) translate(message rpcMessage, sink runtime.EventSink) (runtime.Outcome, bool, error) {

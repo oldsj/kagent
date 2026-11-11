@@ -1,21 +1,26 @@
 package a2a
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"iter"
+	"log/slog"
 	"reflect"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2apb/v1/pbconv"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/a2aproject/a2a-go/v2/a2asrv/taskstore"
+	a2alog "github.com/a2aproject/a2a-go/v2/log"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
 
@@ -360,6 +365,54 @@ func TestExecuteFailureBoundary(t *testing.T) {
 	last := events[len(events)-1].(*a2atype.TaskStatusUpdateEvent)
 	if last.Status.State != a2atype.TaskStateFailed || last.Status.Message.Parts[0].Text() != "budget limit reached" {
 		t.Fatalf("failure event = %#v", last)
+	}
+}
+
+func TestExecuteReportsRuntimeFailure(t *testing.T) {
+	long := "Codex execution failed: upstream status 400: " + strings.Repeat("界", 200)
+	for _, scenario := range []struct {
+		name, failure, want string
+	}{
+		{
+			name:    "Given a runtime that fails a turn, when the turn ends, assert that the task and the Actor log carry its message",
+			failure: "Codex execution failed: upstream status 400: model not supported",
+			want:    "Codex execution failed: upstream status 400: model not supported",
+		},
+		{
+			name:    "Given a runtime failure longer than 512 bytes, when the turn ends, assert that its start is published truncated",
+			failure: long,
+			want:    long[:507] + "...",
+		},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			executor, err := New(fakeRunner{run: func(context.Context, runtime.Turn, runtime.EventSink) (runtime.Outcome, error) {
+				return runtime.Outcome{Failure: &runtime.Failure{Message: scenario.failure}}, nil
+			}}, &fakeContinuation{}, tracing.RuntimeTelemetry{})
+			require.NoError(t, err)
+			var logs bytes.Buffer
+			ctx := a2alog.AttachLogger(t.Context(), slog.New(slog.NewJSONHandler(&logs, nil)))
+
+			events, errs := collect(executor.Execute(ctx, requestContext("task-1", "hello")))
+
+			require.Empty(t, errs)
+			last := events[len(events)-1].(*a2atype.TaskStatusUpdateEvent)
+			require.Equal(t, a2atype.TaskStateFailed, last.Status.State)
+			got := last.Status.Message.Parts[0].Text()
+			require.Equal(t, scenario.want, got)
+			require.True(t, utf8.ValidString(got))
+			var record struct {
+				Msg     string `json:"msg"`
+				Failure string `json:"failure"`
+			}
+			for decoder := json.NewDecoder(&logs); decoder.More(); {
+				require.NoError(t, decoder.Decode(&record))
+				if record.Msg == "Harness runtime turn failed" {
+					break
+				}
+			}
+			require.Equal(t, "Harness runtime turn failed", record.Msg)
+			require.Equal(t, scenario.want, record.Failure)
+		})
 	}
 }
 

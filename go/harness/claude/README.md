@@ -90,9 +90,10 @@ failure with an execution-budget message. Time spent waiting for a deferred
 input is outside any process and is not counted.
 
 **Failures.** A failed Claude result reaches the A2A status as a vetted
-message: a diagnostic that might contain a credential is withheld whole, and
-long ones are bounded. Stderr stays in logs. Unexpected runtime errors keep the
-generic status.
+message: a diagnostic that might contain a credential is withheld whole, URLs,
+email addresses, UUIDs and token-like words are replaced, and long ones are
+truncated. The harness logs the same message to stderr. Unexpected runtime
+errors keep the generic status.
 
 **Process ownership (Linux).** The harness is a child subreaper and owns one
 native tree at a time. Before launch it reaps exited orphans outside its own
