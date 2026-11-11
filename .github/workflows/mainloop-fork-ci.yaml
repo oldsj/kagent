@@ -2,6 +2,8 @@ name: Mainloop Fork Fixture CI
 
 on:
   pull_request:
+    # edited: a stacked PR retargeted here after its base merges gets CI.
+    types: [opened, synchronize, reopened, edited]
     branches: [mainloop-substrate-1-0]
   push:
     branches: [mainloop-substrate-1-0]
