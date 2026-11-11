@@ -9,6 +9,8 @@ import (
 	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/kagent-dev/kagent/go/api/v1alpha3"
 )
 
 func TestRevisionDigestIncludesSandboxClass(t *testing.T) {
@@ -153,4 +155,15 @@ func TestRevisionDigestIncludesResources(t *testing.T) {
 		require.NoError(t, err)
 		require.NotEqual(t, before, after)
 	}
+}
+
+func TestRevisionDigestOnQuiesce(t *testing.T) {
+	unset, err := (&Revision{}).Digest()
+	require.NoError(t, err)
+	data, err := (&Revision{OnQuiesce: v1alpha3.RuntimeSnapshotScopeData}).Digest()
+	require.NoError(t, err)
+	require.Equal(t, unset, data, "the default scope keeps existing revision digests")
+	full, err := (&Revision{OnQuiesce: v1alpha3.RuntimeSnapshotScopeFull}).Digest()
+	require.NoError(t, err)
+	require.NotEqual(t, unset, full)
 }

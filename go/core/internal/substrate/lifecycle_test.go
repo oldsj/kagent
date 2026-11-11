@@ -235,16 +235,14 @@ func TestActorDeletionDoesNotSuspend(t *testing.T) {
 	}
 }
 
-func TestActorSuspendRequiresDurableVolumesSnapshot(t *testing.T) {
+func TestActorSuspendRequiresDurableSnapshot(t *testing.T) {
 	for _, test := range []struct {
 		name     string
 		snapshot *ateapipb.Snapshot
 	}{
 		{name: "missing URI", snapshot: &ateapipb.Snapshot{Generation: 1, Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES}},
-		{name: "MEMORY rejected", snapshot: &ateapipb.Snapshot{Generation: 1, Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-			DurableSnapshot: &ateapipb.SnapshotStorage{State: ateapipb.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED, Object: &ateapipb.ObjectSnapshot{SnapshotUri: "s3://snapshots/memory"}}}},
-		{name: "ROOTFS rejected", snapshot: &ateapipb.Snapshot{Generation: 1, Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
-			DurableSnapshot: &ateapipb.SnapshotStorage{State: ateapipb.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED, Object: &ateapipb.ObjectSnapshot{SnapshotUri: "s3://snapshots/rootfs"}}}},
+		{name: "unspecified fidelity", snapshot: &ateapipb.Snapshot{Generation: 1,
+			DurableSnapshot: &ateapipb.SnapshotStorage{State: ateapipb.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED, Object: &ateapipb.ObjectSnapshot{SnapshotUri: "s3://snapshots/unspecified"}}}},
 		{name: "pending upload", snapshot: &ateapipb.Snapshot{Generation: 1, Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			DurableSnapshot: &ateapipb.SnapshotStorage{State: ateapipb.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING, Object: &ateapipb.ObjectSnapshot{SnapshotUri: "s3://snapshots/pending"}}}},
 	} {
@@ -254,7 +252,7 @@ func TestActorSuspendRequiresDurableVolumesSnapshot(t *testing.T) {
 			require.NoError(t, err)
 			transition, err := PrepareActorTransition(t.Context(), actors, ActorBinding{Revision: "revision", Atespace: "team", Name: "instance", TemplateAtespace: "team", TemplateName: "revision"}, apiv1.RuntimeOperation_RUNTIME_OPERATION_SUSPEND, nil)
 			require.NoError(t, err)
-			require.ErrorContains(t, ApplyActorTransition(t.Context(), actors, transition), "durable VOLUMES snapshot")
+			require.ErrorContains(t, ApplyActorTransition(t.Context(), actors, transition), "durable snapshot")
 		})
 	}
 }
@@ -310,6 +308,20 @@ func TestActorRevertKeepsTheRecordedActor(t *testing.T) {
 				require.NoError(t, err)
 			}
 			require.Equal(t, test.wantCalls, actors.calls)
+		})
+	}
+}
+
+func TestActorSuspendAcceptsFullFidelities(t *testing.T) {
+	for _, fidelity := range []ateapipb.SnapshotFidelity{ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY} {
+		t.Run(fidelity.String(), func(t *testing.T) {
+			actors := &transitionActors{suspendSnapshot: &ateapipb.Snapshot{Generation: 1, Fidelity: fidelity,
+				DurableSnapshot: &ateapipb.SnapshotStorage{State: ateapipb.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED, Object: &ateapipb.ObjectSnapshot{SnapshotUri: "s3://snapshots/full"}}}}
+			_, err := actors.CreateActor(t.Context(), "team", "instance", "team", "revision")
+			require.NoError(t, err)
+			transition, err := PrepareActorTransition(t.Context(), actors, ActorBinding{Revision: "revision", Atespace: "team", Name: "instance", TemplateAtespace: "team", TemplateName: "revision"}, apiv1.RuntimeOperation_RUNTIME_OPERATION_SUSPEND, nil)
+			require.NoError(t, err)
+			require.NoError(t, ApplyActorTransition(t.Context(), actors, transition))
 		})
 	}
 }

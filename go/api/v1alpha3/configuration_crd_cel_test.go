@@ -28,6 +28,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -214,6 +215,21 @@ func TestConfigurationCRDValidation(t *testing.T) {
 		}
 	})
 
+	t.Run("Harness and SandboxTemplate quiesce snapshot scope", func(t *testing.T) {
+		for _, scope := range []RuntimeSnapshotScope{RuntimeSnapshotScopeData, RuntimeSnapshotScopeFull} {
+			harness := validHarness(namespace, "quiesce-"+strings.ToLower(string(scope)), HarnessSpec{Kagent: &KagentHarness{}})
+			harness.Spec.Substrate.SnapshotPolicy.OnQuiesce = scope
+			require.NoError(t, cl.Create(ctx, harness))
+		}
+		sandbox := sandboxTemplateForValidation(namespace, "quiesce-full", func(spec *SandboxTemplateSpec) {
+			spec.Substrate.SnapshotPolicy.OnQuiesce = RuntimeSnapshotScopeFull
+		})
+		require.NoError(t, cl.Create(ctx, sandbox))
+		harness := validHarness(namespace, "quiesce-memory", HarnessSpec{Kagent: &KagentHarness{}})
+		harness.Spec.Substrate.SnapshotPolicy.OnQuiesce = "Memory"
+		require.ErrorContains(t, cl.Create(ctx, harness), "spec.substrate.snapshotPolicy.onQuiesce")
+	})
+
 	t.Run("Harness image defaulting", func(t *testing.T) {
 		for _, variant := range []struct {
 			name string
@@ -248,6 +264,76 @@ func TestConfigurationCRDValidation(t *testing.T) {
 					}
 				})
 			}
+		}
+	})
+
+	t.Run("Harness runtime resources", func(t *testing.T) {
+		createHarness := func(t *testing.T, name string, resources map[string]any) (*unstructured.Unstructured, error) {
+			t.Helper()
+			harness := validHarness(namespace, name, HarnessSpec{Kagent: &KagentHarness{}})
+			harness.SetGroupVersionKind(GroupVersion.WithKind("Harness"))
+			data, err := json.Marshal(harness)
+			require.NoError(t, err)
+			object := &unstructured.Unstructured{}
+			require.NoError(t, object.UnmarshalJSON(data))
+			require.NoError(t, unstructured.SetNestedMap(object.Object, resources, "spec", "resources"))
+			return object, cl.Create(ctx, object)
+		}
+		quantity := func(value *resource.Quantity) string {
+			if value == nil {
+				return ""
+			}
+			return value.String()
+		}
+
+		for i, scenario := range []struct {
+			name       string
+			resources  map[string]any
+			wantCPU    string
+			wantMemory string
+		}{
+			{
+				name:      "Given a kagent Harness, when it is created with CPU and memory limits, assert that both limits are stored",
+				resources: map[string]any{"cpu": "500m", "memory": "2Gi"},
+				wantCPU:   "500m", wantMemory: "2Gi",
+			},
+			{
+				name:      "Given a kagent Harness, when it is created with an integer CPU limit, assert that only the CPU limit is stored",
+				resources: map[string]any{"cpu": int64(2)},
+				wantCPU:   "2",
+			},
+		} {
+			t.Run(scenario.name, func(t *testing.T) {
+				object, err := createHarness(t, fmt.Sprintf("resources-accepted-%d", i), scenario.resources)
+				require.NoError(t, err)
+				stored := &Harness{}
+				require.NoError(t, cl.Get(ctx, ctrlclient.ObjectKeyFromObject(object), stored))
+				require.NotNil(t, stored.Spec.Resources)
+				require.Equal(t, scenario.wantCPU, quantity(stored.Spec.Resources.CPU))
+				require.Equal(t, scenario.wantMemory, quantity(stored.Spec.Resources.Memory))
+			})
+		}
+
+		for i, scenario := range []struct {
+			name       string
+			resources  map[string]any
+			wantReject string
+		}{
+			{
+				name:       "Given a kagent Harness, when it is created with a zero CPU limit, assert that admission rejects it",
+				resources:  map[string]any{"cpu": "0"},
+				wantReject: "cpu must be positive",
+			},
+			{
+				name:       "Given a kagent Harness, when it is created with a negative memory limit, assert that admission rejects it",
+				resources:  map[string]any{"memory": "-1Gi"},
+				wantReject: "memory must be positive",
+			},
+		} {
+			t.Run(scenario.name, func(t *testing.T) {
+				_, err := createHarness(t, fmt.Sprintf("resources-rejected-%d", i), scenario.resources)
+				require.ErrorContains(t, err, scenario.wantReject)
+			})
 		}
 	})
 
