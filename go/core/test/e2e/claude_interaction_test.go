@@ -17,9 +17,12 @@ import (
 
 	apiv1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1"
 	"github.com/kagent-dev/kagent/go/api/v1alpha3"
+	kagentenv "github.com/kagent-dev/kagent/go/core/pkg/env"
 )
 
-const claudeE2EHarness = "claude-e2e"
+// claudeE2EHarness is the Harness every Claude case runs on: claude-e2e (the
+// process driver) by default, or claude-sdk-e2e for the Agent SDK driver.
+var claudeE2EHarness = kagentenv.E2EClaudeHarness.Get()
 
 //go:embed mocks/invoke_claude_builtin_tools.json mocks/invoke_claude_local_subagent.json mocks/invoke_claude_resources.json
 var claudeInteractionMocks embed.FS
@@ -70,6 +73,11 @@ func createClaudeMockTemplate(t *testing.T, baseURL string) string {
 
 func createClaudeMockModel(t *testing.T, kube ctrlclient.Client, baseURL string) *v1alpha3.ModelConfig {
 	t.Helper()
+	return createClaudeMockModelNamed(t, kube, "claude-sonnet-4-5", baseURL)
+}
+
+func createClaudeMockModelNamed(t *testing.T, kube ctrlclient.Client, modelName, baseURL string) *v1alpha3.ModelConfig {
+	t.Helper()
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{GenerateName: "claude-mock-", Namespace: "kagent"},
 		Data:       map[string][]byte{"ANTHROPIC_API_KEY": []byte("mock-key")},
@@ -86,7 +94,7 @@ func createClaudeMockModel(t *testing.T, kube ctrlclient.Client, baseURL string)
 		ObjectMeta: metav1.ObjectMeta{GenerateName: "claude-mock-", Namespace: "kagent"},
 		Spec: v1alpha3.ModelConfigSpec{
 			Provider:     v1alpha3.ModelProviderAnthropic,
-			Model:        "claude-sonnet-4-5",
+			Model:        modelName,
 			APIKeySecret: secret.Name, APIKeySecretKey: "ANTHROPIC_API_KEY",
 			Anthropic: &v1alpha3.AnthropicConfig{BaseURL: baseURL},
 		},
