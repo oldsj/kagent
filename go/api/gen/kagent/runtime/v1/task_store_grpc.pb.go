@@ -19,12 +19,13 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	TaskStoreService_CreateTask_FullMethodName   = "/kagent.runtime.v1.TaskStoreService/CreateTask"
-	TaskStoreService_GetTask_FullMethodName      = "/kagent.runtime.v1.TaskStoreService/GetTask"
-	TaskStoreService_UpdateTask_FullMethodName   = "/kagent.runtime.v1.TaskStoreService/UpdateTask"
-	TaskStoreService_ListTasks_FullMethodName    = "/kagent.runtime.v1.TaskStoreService/ListTasks"
-	TaskStoreService_SettleTask_FullMethodName   = "/kagent.runtime.v1.TaskStoreService/SettleTask"
-	TaskStoreService_GetWorkspace_FullMethodName = "/kagent.runtime.v1.TaskStoreService/GetWorkspace"
+	TaskStoreService_CreateTask_FullMethodName     = "/kagent.runtime.v1.TaskStoreService/CreateTask"
+	TaskStoreService_GetTask_FullMethodName        = "/kagent.runtime.v1.TaskStoreService/GetTask"
+	TaskStoreService_UpdateTask_FullMethodName     = "/kagent.runtime.v1.TaskStoreService/UpdateTask"
+	TaskStoreService_ListTasks_FullMethodName      = "/kagent.runtime.v1.TaskStoreService/ListTasks"
+	TaskStoreService_SettleTask_FullMethodName     = "/kagent.runtime.v1.TaskStoreService/SettleTask"
+	TaskStoreService_GetWorkspace_FullMethodName   = "/kagent.runtime.v1.TaskStoreService/GetWorkspace"
+	TaskStoreService_ReportActivity_FullMethodName = "/kagent.runtime.v1.TaskStoreService/ReportActivity"
 )
 
 // TaskStoreServiceClient is the client API for TaskStoreService service.
@@ -48,6 +49,13 @@ type TaskStoreServiceClient interface {
 	// GetWorkspace returns the Git checkout the Session asked for, or an empty
 	// response when it asked for none. The runtime calls it before the first turn.
 	GetWorkspace(ctx context.Context, in *TaskStoreServiceGetWorkspaceRequest, opts ...grpc.CallOption) (*TaskStoreServiceGetWorkspaceResponse, error)
+	// ReportActivity tells the control plane whether anything uses the Session
+	// runtime outside A2A tasks, such as an attached client or background work.
+	// An active report holds idle suspension until its lease ends; the runtime
+	// renews it every renew_after. An idle report, or a lapsed lease, lets the
+	// control plane suspend the runtime after sessions.quiescenceDelay. A report
+	// also extends the Session's idle-expiration clock. Reports are idempotent.
+	ReportActivity(ctx context.Context, in *TaskStoreServiceReportActivityRequest, opts ...grpc.CallOption) (*TaskStoreServiceReportActivityResponse, error)
 }
 
 type taskStoreServiceClient struct {
@@ -118,6 +126,16 @@ func (c *taskStoreServiceClient) GetWorkspace(ctx context.Context, in *TaskStore
 	return out, nil
 }
 
+func (c *taskStoreServiceClient) ReportActivity(ctx context.Context, in *TaskStoreServiceReportActivityRequest, opts ...grpc.CallOption) (*TaskStoreServiceReportActivityResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TaskStoreServiceReportActivityResponse)
+	err := c.cc.Invoke(ctx, TaskStoreService_ReportActivity_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // TaskStoreServiceServer is the server API for TaskStoreService service.
 // All implementations must embed UnimplementedTaskStoreServiceServer
 // for forward compatibility.
@@ -139,6 +157,13 @@ type TaskStoreServiceServer interface {
 	// GetWorkspace returns the Git checkout the Session asked for, or an empty
 	// response when it asked for none. The runtime calls it before the first turn.
 	GetWorkspace(context.Context, *TaskStoreServiceGetWorkspaceRequest) (*TaskStoreServiceGetWorkspaceResponse, error)
+	// ReportActivity tells the control plane whether anything uses the Session
+	// runtime outside A2A tasks, such as an attached client or background work.
+	// An active report holds idle suspension until its lease ends; the runtime
+	// renews it every renew_after. An idle report, or a lapsed lease, lets the
+	// control plane suspend the runtime after sessions.quiescenceDelay. A report
+	// also extends the Session's idle-expiration clock. Reports are idempotent.
+	ReportActivity(context.Context, *TaskStoreServiceReportActivityRequest) (*TaskStoreServiceReportActivityResponse, error)
 	mustEmbedUnimplementedTaskStoreServiceServer()
 }
 
@@ -166,6 +191,9 @@ func (UnimplementedTaskStoreServiceServer) SettleTask(context.Context, *TaskStor
 }
 func (UnimplementedTaskStoreServiceServer) GetWorkspace(context.Context, *TaskStoreServiceGetWorkspaceRequest) (*TaskStoreServiceGetWorkspaceResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetWorkspace not implemented")
+}
+func (UnimplementedTaskStoreServiceServer) ReportActivity(context.Context, *TaskStoreServiceReportActivityRequest) (*TaskStoreServiceReportActivityResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReportActivity not implemented")
 }
 func (UnimplementedTaskStoreServiceServer) mustEmbedUnimplementedTaskStoreServiceServer() {}
 func (UnimplementedTaskStoreServiceServer) testEmbeddedByValue()                          {}
@@ -296,6 +324,24 @@ func _TaskStoreService_GetWorkspace_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TaskStoreService_ReportActivity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TaskStoreServiceReportActivityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskStoreServiceServer).ReportActivity(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskStoreService_ReportActivity_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskStoreServiceServer).ReportActivity(ctx, req.(*TaskStoreServiceReportActivityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // TaskStoreService_ServiceDesc is the grpc.ServiceDesc for TaskStoreService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -326,6 +372,10 @@ var TaskStoreService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetWorkspace",
 			Handler:    _TaskStoreService_GetWorkspace_Handler,
+		},
+		{
+			MethodName: "ReportActivity",
+			Handler:    _TaskStoreService_ReportActivity_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

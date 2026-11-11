@@ -39,3 +39,7 @@ func (s *taskStoreServer) SettleTask(ctx context.Context, req *runtimev1.TaskSto
 func (s *taskStoreServer) GetWorkspace(ctx context.Context, req *runtimev1.TaskStoreServiceGetWorkspaceRequest) (*runtimev1.TaskStoreServiceGetWorkspaceResponse, error) {
 	return s.service.GetWorkspace(ctx, req)
 }
+
+func (s *taskStoreServer) ReportActivity(ctx context.Context, req *runtimev1.TaskStoreServiceReportActivityRequest) (*runtimev1.TaskStoreServiceReportActivityResponse, error) {
+	return s.service.ReportActivity(ctx, req)
+}

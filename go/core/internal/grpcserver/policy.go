@@ -138,14 +138,15 @@ func DefaultMethodPolicies() MethodPolicies {
 // Shared APIs accept either caller identity and authorize in their services.
 func runtimeMethodPolicies() MethodPolicies {
 	return MethodPolicies{
-		runtimev1.TaskStoreService_CreateTask_FullMethodName:   auth.AccessRuntime,
-		runtimev1.TaskStoreService_GetTask_FullMethodName:      auth.AccessRuntime,
-		runtimev1.TaskStoreService_UpdateTask_FullMethodName:   auth.AccessRuntime,
-		runtimev1.TaskStoreService_SettleTask_FullMethodName:   auth.AccessRuntime,
-		runtimev1.TaskStoreService_GetWorkspace_FullMethodName: auth.AccessRuntime,
-		runtimev1.TaskStoreService_ListTasks_FullMethodName:    auth.AccessRuntime,
-		runtimev1.MemoryService_AddSession_FullMethodName:      auth.AccessRuntime,
-		runtimev1.MemoryService_AddSessionBatch_FullMethodName: auth.AccessRuntime,
-		runtimev1.MemoryService_Search_FullMethodName:          auth.AccessRuntime,
+		runtimev1.TaskStoreService_CreateTask_FullMethodName:     auth.AccessRuntime,
+		runtimev1.TaskStoreService_GetTask_FullMethodName:        auth.AccessRuntime,
+		runtimev1.TaskStoreService_UpdateTask_FullMethodName:     auth.AccessRuntime,
+		runtimev1.TaskStoreService_SettleTask_FullMethodName:     auth.AccessRuntime,
+		runtimev1.TaskStoreService_GetWorkspace_FullMethodName:   auth.AccessRuntime,
+		runtimev1.TaskStoreService_ReportActivity_FullMethodName: auth.AccessRuntime,
+		runtimev1.TaskStoreService_ListTasks_FullMethodName:      auth.AccessRuntime,
+		runtimev1.MemoryService_AddSession_FullMethodName:        auth.AccessRuntime,
+		runtimev1.MemoryService_AddSessionBatch_FullMethodName:   auth.AccessRuntime,
+		runtimev1.MemoryService_Search_FullMethodName:            auth.AccessRuntime,
 	}
 }

@@ -253,6 +253,34 @@ roll out in two steps: deploy the new controller with `quiescenceDelay: 0s`, wai
 for every old replica to exit (all replicas run quiescence workers), then raise the
 delay. To roll back the binary, set the delay to `0s` first and keep schema 8.
 
+### Runtime activity
+
+A runtime can be in use outside A2A tasks, for example by an attached client.
+Its harness reports busy and idle transitions with `TaskStoreService.ReportActivity`,
+which only the Session's authenticated Actor may call. An active report holds a
+one-minute lease, and the runtime renews it every 20 seconds while busy, so one
+lost report does not end it. An idle report ends the lease at once. Reports on a
+deleting Session fail with `FAILED_PRECONDITION`.
+
+While a lease runs, task boundaries are not claimable or pending, so a turn that
+settles while a client is attached does not suspend the runtime. Once the lease
+ends, the runtime becomes eligible `quiescenceDelay` later. A due task boundary is
+claimed first, because its claim records the task snapshot. Otherwise a separate
+activity claim, fenced like a task claim by dispatch, unpublished or pending task
+events, active tasks and checkpoint creation, suspends the Actor if it is still
+running and records no snapshot. The Session stays READY either way. A report
+after the claim leaves the activity boundary pending, so the next claim
+re-evaluates it. Activity claims never expire, and crash recovery and deletion
+retire them together with task boundaries.
+
+The latest report also counts as activity for idle expiration, and an unexpired
+lease blocks expiration.
+
+The Claude harness reports its SDK runner's busy/idle transitions through
+`go/adk/pkg/activity`. The reporter sends nothing until the first transition,
+retries transient failures with backoff, and stops after repeated
+`PERMISSION_DENIED` until the next transition.
+
 An empty claim is followed by a check for unclaimed work on ready sessions. If
 dispatch, checkpoint creation, a lifecycle operation, or a row lock blocks that
 work, workers retry within one second until it becomes eligible or is superseded.
