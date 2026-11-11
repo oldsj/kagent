@@ -733,10 +733,16 @@ func (s *Session) setStateLocked(state string, extra map[string]any) {
 	s.emitLocked("runner", fields)
 }
 
-// busyLocked is the activity predicate from the contract.
+// busyLocked is the activity predicate from the contract. SDK work that is
+// blocked on a prompt for a human (a pending permission or question, or SDK
+// state requires_action) is not activity by itself: with no client attached
+// and no A2A turn, the question is parked at a durable boundary, and counting
+// it would hold the Actor awake until someone answers. An attached client, a
+// running A2A turn and background tasks still count.
 func (s *Session) busyLocked() bool {
-	return len(s.clients) > 0 || s.turn != nil || len(s.perms) > 0 || len(s.outstanding) > 0 ||
-		s.sdkState == "running" || s.sdkState == "requires_action" || s.background > 0
+	waitingForHuman := len(s.perms) > 0 || s.sdkState == "requires_action"
+	working := !waitingForHuman && (len(s.outstanding) > 0 || s.sdkState == "running")
+	return len(s.clients) > 0 || s.turn != nil || working || s.background > 0
 }
 
 // updateActivity reports a busy/idle change.

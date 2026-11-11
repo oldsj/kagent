@@ -275,6 +275,13 @@ func sdkError(err error) error {
 	}
 }
 
+// ServesSession reports whether this runtime has a Session identity. It is
+// false while a golden snapshot is being made.
+func (s *Store) ServesSession() bool {
+	_, err := s.sessionID()
+	return err == nil
+}
+
 // ReportActivity tells the control plane whether anything uses this runtime
 // outside A2A tasks, and returns when an active runtime should report again.
 // It makes one attempt; activity.Reporter owns renewal and retries.
