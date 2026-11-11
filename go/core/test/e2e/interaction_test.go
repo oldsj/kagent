@@ -212,7 +212,7 @@ func sendToolDecision(t *testing.T, fixture *interactionFixture, prompt, wantToo
 	fixture.ctx = metadata.AppendToOutgoingContext(fixture.ctx, strings.ToLower(a2atype.SvcParamExtensions), kagenta2a.HITLExtensionURI)
 	_, _, waiting := fixture.send(t, prompt)
 	if waiting.Status.State != a2atype.TaskStateInputRequired {
-		t.Fatalf("A2A task state = %s, want INPUT_REQUIRED", waiting.Status.State)
+		t.Fatalf("A2A task state = %s, text = %q, want INPUT_REQUIRED", waiting.Status.State, taskText(waiting))
 	}
 	request, err := kagenta2a.ParseToolApprovalRequest(waiting.Status.Message)
 	if err != nil {
@@ -1225,7 +1225,7 @@ func createMCPReferenceTemplate(t *testing.T, harness testHarness, server *v1alp
 			}}},
 		},
 	}
-	createAndWaitInteractionTemplateForHarness(t, kube, template, harness.name)
+	createAndWaitInteractionTemplateForHarness(t, kube, template, harness.harnessRef())
 	return template.Name, toolName
 }
 
@@ -1315,7 +1315,7 @@ func createInteractionModel(t *testing.T, kube ctrlclient.Client, modelURL strin
 
 func createAndWaitInteractionTemplate(t *testing.T, harness testHarness, kube ctrlclient.Client, template *v1alpha3.AgentTemplate) {
 	t.Helper()
-	createAndWaitInteractionTemplateForHarness(t, kube, template, harness.name)
+	createAndWaitInteractionTemplateForHarness(t, kube, template, harness.harnessRef())
 }
 
 func createAndWaitInteractionTemplateForHarness(t *testing.T, kube ctrlclient.Client, template *v1alpha3.AgentTemplate, harnessName string) {

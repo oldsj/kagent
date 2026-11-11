@@ -4,6 +4,7 @@ package kagent.runtime.v1;
 
 import "a2a.proto";
 import "buf/validate/validate.proto";
+import "google/protobuf/duration.proto";
 import "kagent/api/v1/common.proto";
 
 option go_package = "github.com/kagent-dev/kagent/go/api/gen/kagent/runtime/v1;runtimev1";
@@ -25,6 +26,13 @@ service TaskStoreService {
   // GetWorkspace returns the Git checkout the Session asked for, or an empty
   // response when it asked for none. The runtime calls it before the first turn.
   rpc GetWorkspace(TaskStoreServiceGetWorkspaceRequest) returns (TaskStoreServiceGetWorkspaceResponse);
+  // ReportActivity tells the control plane whether anything uses the Session
+  // runtime outside A2A tasks, such as an attached client or background work.
+  // An active report holds idle suspension until its lease ends; the runtime
+  // renews it every renew_after. An idle report, or a lapsed lease, lets the
+  // control plane suspend the runtime after sessions.quiescenceDelay. A report
+  // also extends the Session's idle-expiration clock. Reports are idempotent.
+  rpc ReportActivity(TaskStoreServiceReportActivityRequest) returns (TaskStoreServiceReportActivityResponse);
 }
 
 message StoredTask {
@@ -108,4 +116,17 @@ message TaskStoreServiceGetWorkspaceResponse {
   // True for a fork created with a fresh conversation: before its first turn the
   // runtime discards native conversation state restored from the checkpoint.
   bool fresh_conversation = 5;
+}
+
+message TaskStoreServiceReportActivityRequest {
+  string session_id = 1 [(buf.validate.field).string.uuid = true];
+  // True while a client, turn, or background work uses the runtime.
+  bool active = 2;
+}
+
+message TaskStoreServiceReportActivityResponse {
+  // How long an active report holds idle suspension.
+  google.protobuf.Duration lease = 1;
+  // When an active runtime should report again to keep its lease.
+  google.protobuf.Duration renew_after = 2;
 }
