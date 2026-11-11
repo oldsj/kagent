@@ -38,7 +38,7 @@ func TestDeferredTraceOriginSurvivesRestoreAndAnotherPause(t *testing.T) {
 	origin := runtime.NewTraceOrigin(trace.NewSpanContext(trace.SpanContextConfig{TraceID: trace.TraceID{1}, SpanID: trace.SpanID{2}, TraceFlags: trace.FlagsSampled}))
 	turn := runtime.Turn{TaskID: "task", ContextID: "context", Origin: origin}
 	for _, id := range []string{"call-1", "call-2"} {
-		_, err := d.parkDeferred(turn, "session", &DeferredTool{ID: id, Name: "mcp__protected__write", Input: map[string]any{"value": 7}})
+		_, err := d.parkDeferred(turn, "session", &DeferredTool{ID: id, Name: "mcp__protected__write", Input: map[string]any{"value": 7}}, d.run)
 		require.NoError(t, err)
 		// A new driver reads the record instead of retaining the pending handle.
 		restored := NewProcessDriver(ProcessConfig{ApprovalBroker: b, MaxEventBytes: 1 << 20})

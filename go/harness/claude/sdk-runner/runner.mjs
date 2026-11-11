@@ -7,7 +7,7 @@
 //
 //   stdin  (Go -> runner): first line {op:"start", options}, then
 //          {op:"user", uuid, text} | {op:"interrupt"|"model"|"effort"|"mode", ref, ...}
-//          | {op:"perm", id, behavior, always?, message?}
+//          | {op:"perm", id, behavior, always?, message?, updatedInput?}
 //   stdout (runner -> Go): {k:"init"} | {k:"sdk", m} | {k:"perm", ...} | {k:"perm_aborted", id}
 //          | {k:"ack", ref, what, ms, error?} | {k:"ended", error?}
 //
@@ -124,7 +124,9 @@ export function createRunner({ query, send }) {
           if (!p) return;
           perms.delete(op.id);
           p.resolve(op.behavior === 'allow'
-            ? { behavior: 'allow', updatedInput: p.input, ...(op.always && p.suggestions ? { updatedPermissions: p.suggestions } : {}) }
+            // updatedInput replaces the input Claude asked about; an
+            // AskUserQuestion call receives its answers this way.
+            ? { behavior: 'allow', updatedInput: op.updatedInput ?? p.input, ...(op.always && p.suggestions ? { updatedPermissions: p.suggestions } : {}) }
             : { behavior: 'deny', message: op.message || 'The user declined this tool call.' });
           return;
         }

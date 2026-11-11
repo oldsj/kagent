@@ -278,7 +278,7 @@ func (srv *Server) command(ctx context.Context, msg clientMessage) error {
 		if _, err := uuid.Parse(id); err != nil {
 			id = uuid.NewString()
 		}
-		return srv.session.Submit(ctx, msg.Text, id, OriginClient)
+		return srv.session.SubmitFromClient(ctx, msg.Text, id)
 	case "interrupt":
 		return srv.session.Control(ctx, "interrupt", "", msg.ID)
 	case "model":

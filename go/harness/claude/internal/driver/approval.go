@@ -31,6 +31,19 @@ type ApprovalBroker struct {
 	listener  net.Listener
 	server    *http.Server
 	mu        sync.Mutex
+	// deferNew reports whether a protected call that has no saved input yet
+	// may be deferred. Nil defers every one. It is set before the first turn.
+	deferNew func() bool
+}
+
+// DeferNewCallsWhen limits deferral of a new protected call to when allowed
+// reports true. A deferred call ends its turn and needs an owner that can park
+// it durably. The SDK driver has one only while an A2A turn is active; at other
+// times the call falls through to the ask rules and a live prompt.
+func (b *ApprovalBroker) DeferNewCallsWhen(allowed func() bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.deferNew = allowed
 }
 
 type permissionPromptInput struct {
@@ -179,16 +192,6 @@ func (b *ApprovalBroker) SettingsJSON() ([]byte, error) {
 	return json.Marshal(settings)
 }
 
-// askRules lists the permission rules for the protected MCP servers, sorted.
-func (b *ApprovalBroker) askRules() []string {
-	rules := make([]string, 0, len(b.protected))
-	for server := range b.protected {
-		rules = append(rules, "mcp__"+server+"__*")
-	}
-	slices.Sort(rules)
-	return rules
-}
-
 func (b *ApprovalBroker) authorizeAndLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if subtle.ConstantTimeCompare([]byte("Bearer "+b.token), []byte(r.Header.Get("Authorization"))) != 1 {
@@ -266,6 +269,9 @@ func (b *ApprovalBroker) resolveHook(r *http.Request, output *hookOutput) error 
 	}
 	if record == nil || record.Phase == phaseComplete || record.Phase == phaseCanceled {
 		output.Specific.Decision = "defer"
+		if b.deferNew != nil && !b.deferNew() {
+			output.Specific.Decision = ""
+		}
 		return nil
 	}
 	if record.SessionID != input.SessionID || record.Tool.ID != input.ToolID || record.Tool.Name != input.ToolName || !equalArguments(record.Tool.Input, input.Input) {

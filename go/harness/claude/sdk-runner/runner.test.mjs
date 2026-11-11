@@ -54,6 +54,14 @@ test('relays turns, controls and permission answers', async () => {
   const decided = out.find((o) => o.m?.type === 'assistant').m.decision;
   assert.deepEqual(decided, { behavior: 'allow', updatedInput: { command: 'touch x' }, updatedPermissions: [{ type: 'addRules' }] });
 
+  // An answer may replace the tool input, which is how AskUserQuestion gets its answers.
+  await runner.handle({ op: 'user', uuid: 'u3', text: 'ask' });
+  await tick();
+  const second = out.filter((o) => o.k === 'perm').at(-1);
+  await runner.handle({ op: 'perm', id: second.id, behavior: 'allow', updatedInput: { command: 'touch y' } });
+  await tick();
+  assert.deepEqual(out.filter((o) => o.m?.type === 'assistant').at(-1).m.decision, { behavior: 'allow', updatedInput: { command: 'touch y' } });
+
   await runner.handle({ op: 'model', ref: 'r1', model: 'sonnet' });
   await runner.handle({ op: 'effort', ref: 'r2', effort: 'high' });
   // An empty effort returns to the model's default.

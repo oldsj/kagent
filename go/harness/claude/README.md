@@ -130,10 +130,26 @@ over stdio; it opens no listener.
 - **A2A turns** are user messages with a fresh UUID. A turn ends at the SDK
   `result` whose `user_message_uuids` names that UUID; results of other
   messages pass by.
-- **Approvals are live, not durable.** The bridge installs no deferral hook.
-  A protected tool's prompt reaches `canUseTool` and parks the A2A task; the
-  first answer, A2A or client, wins. A prompt that is pending when the Actor
-  sleeps is lost with the bridge, unlike the process driver's deferred input.
+- **Approvals in an A2A turn are durable.** The bridge loads the same
+  `PreToolUse` hooks as the process driver. While an A2A turn is active, a
+  protected MCP call or `AskUserQuestion` is deferred: the turn ends with a
+  `tool_deferred` result, the driver saves the pending input, stops the bridge
+  and returns `input-required`. Nothing then keeps the Actor awake. The answer,
+  also after a DATA restore, starts a fresh bridge that resumes the session
+  without a new user message; Claude runs the hook for the same call again and
+  the hook returns the saved answer. The ask rules still send an allowed call
+  to `canUseTool`, where the driver answers from the same saved input and
+  refuses any other protected call, as the process driver's permission host
+  does. Cancellation refuses the call and interrupts Claude.
+- **Other prompts are live.** A protected call in a turn a client started on
+  the client port, and any prompt outside the approval boundary (for example
+  one raised by the user profile's own permission mode), reaches `canUseTool`
+  and waits in the bridge. The first answer, A2A or client, wins, and such a
+  prompt is lost if the Actor sleeps.
+- **No new message while a call waits.** Claude answers a user message sent
+  after a deferred call without running the call. The client port therefore
+  refuses user messages until the deferred call has been answered and
+  replayed.
 - **Client port `:7682`**, reached only through the Substrate router:
   `PUT /bootstrap` sets the Session's client token on first use (and may
   install a Claude user home), `GET /healthz`, and `GET /ws?t=&since=` with
@@ -141,13 +157,19 @@ over stdio; it opens no listener.
   and accepts user messages, interrupts, model, effort, mode and permission
   answers.
 - **Profiles.** By default the bridge uses the compiled configuration with the
-  harness-owned user scope, every hook disabled, and strict MCP. After a
-  bootstrap installs a user home it uses that home with user and project
-  setting sources and the user's own hooks.
+  harness-owned user scope, the harness's approval hooks, and strict MCP. After
+  a bootstrap installs a user home it uses that home with user and project
+  setting sources; the user's own hooks run beside the harness's.
 - **Activity.** The driver reports busy/idle changes (clients attached, a turn,
   a pending prompt, SDK background tasks) to an `ActivityReporter` and never
   reports before serving a Session. Until the control-plane client lands on
   this branch the reporter only logs.
+
+The deferral and replay behavior the driver depends on can be checked against
+a real CLI and bridge, offline against a fake model API: set
+`KAGENT_TEST_CLAUDE_CLI` to the pinned CLI and `KAGENT_TEST_CLAUDE_SDK_RUNNER`
+to a `runner.mjs` beside an installed SDK, then run
+`go test ./harness/claude/internal/driver -run TestRealBridge`.
 
 The SDK version in [`sdk-runner/package.json`](sdk-runner/package.json) must be
 the release built for the pinned Claude CLI (SDK `0.3.N` with Claude Code
