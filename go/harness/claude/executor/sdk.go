@@ -107,16 +107,6 @@ func newSDKWiring(ctx context.Context, cfg Config, bridge config.SDKRunner, base
 		},
 		Continuation: store, Activity: cfg.Activity, Dir: dir, StopGrace: grace,
 		Logger: logging.FromContext(ctx),
-		ClientGate: func() error {
-			waiting, err := w.current.get().AwaitingReplay()
-			if err != nil {
-				return fmt.Errorf("read the pending approval: %w", err)
-			}
-			if waiting {
-				return errors.New("the conversation is waiting for an answer to a pending approval or question")
-			}
-			return nil
-		},
 	})
 	if err != nil {
 		return nil, err

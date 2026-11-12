@@ -6,7 +6,6 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -211,53 +210,6 @@ func TestReplayResumesTheConversationOnAFreshBridge(t *testing.T) {
 	})
 }
 
-func TestClientMessagesWaitForAPendingAnswer(t *testing.T) {
-	refused := errors.New("the conversation is waiting for an answer")
-	for _, scenario := range []struct {
-		name    string
-		gate    error
-		wantErr error
-		sent    int
-	}{
-		{name: "Given a deferred call waiting for its answer, when a client sends a message, assert that it is refused and never reaches Claude", gate: refused, wantErr: refused},
-		{name: "Given nothing waiting, when a client sends a message, assert that it reaches Claude", sent: 1},
-	} {
-		t.Run(scenario.name, func(t *testing.T) {
-			launcher := sdkrunnertest.NewLauncher(sdkrunnertest.Echo("22222222-2222-2222-2222-222222222222"))
-			session, err := sdkrunner.New(sdkrunner.Config{
-				Launcher: launcher,
-				Spec: func(sdkrunner.Profile) (sdkrunner.Spec, error) {
-					return sdkrunner.Spec{Cwd: "/data/workspace", Executable: "/usr/local/bin/claude"}, nil
-				},
-				Continuation: &sdkrunnertest.Continuation{}, Dir: t.TempDir(), StopGrace: time.Second,
-				ClientGate: func() error { return scenario.gate },
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = session.Close() })
-
-			err = session.SubmitFromClient(context.Background(), "hello", "u1")
-
-			if !errors.Is(err, scenario.wantErr) {
-				t.Fatalf("SubmitFromClient() error = %v, want %v", err, scenario.wantErr)
-			}
-			if scenario.sent == 1 {
-				eventually(t, "the message to reach the bridge", func() bool { return len(launcher.Ops()) > 1 })
-			}
-			users := 0
-			for _, op := range launcher.Ops() {
-				if op.Op == "user" {
-					users++
-				}
-			}
-			if users != scenario.sent {
-				t.Fatalf("user messages sent to Claude = %d, want %d", users, scenario.sent)
-			}
-		})
-	}
-}
-
 func TestPermissionAnswerCanReplaceTheToolInput(t *testing.T) {
 	f := newFixture(t, func(b *sdkrunnertest.Bridge, op sdkrunnertest.Op) {
 		if op.Op == "user" {
@@ -394,7 +346,9 @@ func TestServerWebSocketHelloCommandsAndAuth(t *testing.T) {
 		t.Fatal("attach did not start the bridge")
 	}
 	eventually(t, "busy", func() bool { got := f.activity.Got(); return len(got) == 1 && got[0] })
-	_ = conn.Write(ctx, websocket.MessageText, []byte(`{"k":"user","text":"hello","uuid":"44444444-4444-4444-4444-444444444444"}`))
+	if err := f.session.Submit(ctx, "hello", "44444444-4444-4444-4444-444444444444", sdkrunner.OriginA2A); err != nil {
+		t.Fatal(err)
+	}
 	var kinds []string
 	var lastSeq float64
 	for {
@@ -405,7 +359,7 @@ func TestServerWebSocketHelloCommandsAndAuth(t *testing.T) {
 			lastSeq = seq
 		}
 		kinds = append(kinds, event["k"].(string))
-		if event["k"] == "user" && event["origin"] != "client" {
+		if event["k"] == "user" && event["origin"] != "a2a" {
 			t.Fatalf("user event = %v", event)
 		}
 		if event["k"] == "turn" {
@@ -509,4 +463,101 @@ func attachBacklog(t *testing.T, session *sdkrunner.Session) []map[string]any {
 		t.Fatal(err)
 	}
 	return hello.Backlog
+}
+
+func TestClientPortTakesNoInputThatBypassesA2A(t *testing.T) {
+	for _, scenario := range []struct {
+		op    string
+		frame string
+	}{
+		{op: "user", frame: `{"k":"user","id":"r1","text":"hello","uuid":"44444444-4444-4444-4444-444444444444"}`},
+		{op: "interrupt", frame: `{"k":"interrupt","id":"r1"}`},
+		{op: "model", frame: `{"k":"model","id":"r1","model":"opus"}`},
+		{op: "effort", frame: `{"k":"effort","id":"r1","effort":"high"}`},
+	} {
+		t.Run("Given an attached client, when it sends "+scenario.op+", assert that it is refused and never reaches Claude", func(t *testing.T) {
+			f := newFixture(t, sdkrunnertest.Echo("66666666-6666-6666-6666-666666666666"))
+			conn := attachClient(t, f.session)
+			if f.launcher.Started(wait) == nil {
+				t.Fatal("attach did not start the bridge")
+			}
+			before := len(f.launcher.Ops())
+
+			reply := conn.Send(scenario.frame)
+
+			if reply["k"] != "err" || reply["ref"] != "r1" || !strings.Contains(reply["text"].(string), "A2A") {
+				t.Fatalf("reply = %v, want an error pointing to A2A", reply)
+			}
+			if ops := f.launcher.Ops(); len(ops) != before {
+				t.Fatalf("ops sent to Claude = %v, want none after the refusal", ops[before:])
+			}
+		})
+	}
+
+	t.Run("Given an attached client, when it sets the permission mode, assert that the mode reaches Claude", func(t *testing.T) {
+		f := newFixture(t, sdkrunnertest.Echo("66666666-6666-6666-6666-666666666666"))
+		conn := attachClient(t, f.session)
+
+		conn.Send(`{"k":"mode","id":"r1","mode":"plan"}`)
+
+		eventually(t, "the mode to reach Claude", func() bool {
+			for _, op := range f.launcher.Ops() {
+				if op.Op == "mode" {
+					return true
+				}
+			}
+			return false
+		})
+	})
+}
+
+type clientConn struct {
+	t    *testing.T
+	conn *websocket.Conn
+}
+
+// attachClient attaches a client past its hello.
+func attachClient(t *testing.T, session *sdkrunner.Session) *clientConn {
+	t.Helper()
+	srv := httptest.NewServer(sdkrunner.NewServer(context.Background(), session))
+	t.Cleanup(srv.Close)
+	token := strings.Repeat("t", 32)
+	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/bootstrap", nil)
+	req.Header.Set("x-runner-token", token)
+	if resp, err := http.DefaultClient.Do(req); err != nil || resp.StatusCode != 200 {
+		t.Fatalf("bootstrap: %v %v", resp, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), wait)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+"/ws?t="+token, &websocket.DialOptions{Subprotocols: []string{sdkrunner.Subprotocol}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.CloseNow() })
+	if _, _, err := conn.Read(ctx); err != nil {
+		t.Fatal(err)
+	}
+	return &clientConn{t: t, conn: conn}
+}
+
+// Send writes frame and returns the next frame addressed to its ref, or the
+// next frame of any kind when nothing is addressed to it within the wait.
+func (c *clientConn) Send(frame string) map[string]any {
+	c.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), wait)
+	defer cancel()
+	if err := c.conn.Write(ctx, websocket.MessageText, []byte(frame)); err != nil {
+		c.t.Fatal(err)
+	}
+	for {
+		_, data, err := c.conn.Read(ctx)
+		if err != nil {
+			return nil
+		}
+		var event map[string]any
+		_ = json.Unmarshal(data, &event)
+		if event["ref"] == "r1" {
+			return event
+		}
+	}
 }

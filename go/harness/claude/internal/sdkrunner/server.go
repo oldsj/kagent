@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/google/uuid"
 )
 
 // Subprotocol is the versioned client event protocol.
@@ -270,21 +269,12 @@ func (srv *Server) websocket(w http.ResponseWriter, r *http.Request) {
 
 func (srv *Server) command(ctx context.Context, msg clientMessage) error {
 	switch msg.K {
-	case "user":
-		if strings.TrimSpace(msg.Text) == "" {
-			return errors.New("message text is required")
-		}
-		id := msg.UUID
-		if _, err := uuid.Parse(id); err != nil {
-			id = uuid.NewString()
-		}
-		return srv.session.SubmitFromClient(ctx, msg.Text, id)
-	case "interrupt":
-		return srv.session.Control(ctx, "interrupt", "", msg.ID)
-	case "model":
-		return srv.session.Control(ctx, "model", msg.Model, msg.ID)
-	case "effort":
-		return srv.session.Control(ctx, "effort", msg.Effort, msg.ID)
+	case "user", "interrupt", "model", "effort":
+		// The A2A task is the record of what was asked of the agent. A client
+		// sends a message or a steer, cancels a task, and sets a turn's model
+		// and effort through the agent's A2A endpoint, so none of them bypass
+		// that record.
+		return fmt.Errorf("%s is not accepted on the client port; use the agent's A2A endpoint", msg.K)
 	case "mode":
 		return srv.session.Control(ctx, "mode", msg.Mode, msg.ID)
 	case "perm":
