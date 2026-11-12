@@ -18,8 +18,7 @@ import (
 type Origin string
 
 const (
-	OriginClient Origin = "client"
-	OriginA2A    Origin = "a2a"
+	OriginA2A Origin = "a2a"
 )
 
 // Runner states reported to clients.
@@ -414,9 +413,6 @@ func (s *Session) answerPerm(id, behavior string, always bool, message string, u
 	}
 	s.removePermLocked(id)
 	s.emitLocked("perm_done", map[string]any{"id": id, "behavior": behavior, "always": always, "by": by})
-	if s.turn != nil && by != OriginA2A {
-		s.turn.push(Item{Kind: ItemPermDone, PermID: id})
-	}
 	s.mu.Unlock()
 	s.updateActivity()
 	op := map[string]any{"op": "perm", "id": id, "behavior": behavior, "always": always, "message": message}

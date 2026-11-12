@@ -158,19 +158,20 @@ over stdio; it opens no listener.
 - **Other prompts are live.** A protected call in a turn a client started on
   the client port, and any prompt outside the approval boundary (for example
   one raised by the user profile's own permission mode), reaches `canUseTool`
-  and waits in the bridge. The first answer, A2A or client, wins, and such a
-  prompt is lost if the Actor sleeps.
+  and waits in the bridge. It is answered through the A2A task's input
+  request, and is lost if the Actor sleeps.
 - **Input goes through A2A.** The A2A task is the record of what was asked of
-  the agent, so the client port refuses user messages, interrupts, model and
-  effort. A client sends a message or a steer, cancels a task, and sets a
-  turn's model and effort through the agent's A2A endpoint. A steer is refused
+  the agent, so the client port refuses user messages, interrupts, model,
+  effort and permission answers. A client sends a message or a steer, cancels
+  a task, sets a turn's model and effort, and answers a permission prompt
+  through the agent's A2A endpoint. A steer is refused
   while a deferred call waits: Claude answers a user message sent after a
   deferred call without running the call.
 - **Client port `:7682`**, reached only through the Substrate router:
   `PUT /bootstrap` sets the Session's client token on first use (and may
   install a Claude user home), `GET /healthz`, and `GET /ws?t=&since=` with
   subprotocol `kagent.sdk-runner.v1`, which replays the in-memory event backlog
-  and accepts permission mode and permission answers.
+  and accepts only the permission mode.
 - **Profiles.** By default the bridge uses the compiled configuration with the
   harness-owned user scope, the harness's approval hooks, and strict MCP. After
   a bootstrap installs a user home it uses that home with user and project
