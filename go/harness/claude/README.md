@@ -173,7 +173,10 @@ over stdio; it opens no listener.
   subprotocol `kagent.sdk-runner.v1`, which replays the in-memory event backlog
   and accepts only the permission mode.
 - **Profiles.** By default the bridge uses the compiled configuration with the
-  harness-owned user scope, the harness's approval hooks, and strict MCP. After
+  harness-owned user scope, the harness's approval hooks, and strict MCP. It
+  starts in the permission mode named by Harness environment
+  `KAGENT_CLAUDE_PERMISSION_MODE` (`bypassPermissions`, the default, `auto`,
+  `default` or `acceptEdits`); any other value fails the runtime's start. After
   a bootstrap installs a user home it uses that home with user and project
   setting sources; the user's own hooks run beside the harness's.
 - **Activity.** The driver reports busy/idle changes (clients attached, a turn,

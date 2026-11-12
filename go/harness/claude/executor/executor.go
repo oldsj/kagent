@@ -105,6 +105,11 @@ func New(ctx context.Context, cfg Config) (a2asrv.AgentExecutor, io.Closer, erro
 	var runnerCloser io.Closer = runner
 	var sdk *sdkWiring
 	if mode == modeSDK {
+		// A wrong mode would otherwise fail only when the bridge first starts.
+		if _, err := driver.ManagedPermissionMode(cfg.Environment); err != nil {
+			_ = runner.Close()
+			return nil, nil, err
+		}
 		bridge := imageSDKRunner
 		if parsed.SDKRunner != nil {
 			bridge = *parsed.SDKRunner
