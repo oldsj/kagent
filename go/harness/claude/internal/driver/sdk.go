@@ -25,6 +25,33 @@ import (
 // server is left out of the bridge's MCP configuration.
 const approvalServerName = "kagent_hitl"
 
+// PermissionModeEnvName sets the managed profile's initial Claude permission
+// mode from the Harness environment. A client may still change the mode on the
+// client port once the conversation runs.
+const PermissionModeEnvName = "KAGENT_CLAUDE_PERMISSION_MODE"
+
+// managedPermissionModes are the modes a Harness may start the managed profile
+// in. plan is not one: an agent that only plans cannot complete a task.
+var managedPermissionModes = []string{"bypassPermissions", "auto", "default", "acceptEdits"}
+
+// ManagedPermissionMode is the permission mode the managed profile starts in:
+// the Harness's PermissionModeEnvName, or bypassPermissions when it is unset.
+func ManagedPermissionMode(environment []string) (string, error) {
+	mode := ""
+	for _, item := range environment {
+		if name, value, ok := strings.Cut(item, "="); ok && name == PermissionModeEnvName {
+			mode = value
+		}
+	}
+	if mode == "" {
+		return managedPermissionModes[0], nil
+	}
+	if !slices.Contains(managedPermissionModes, mode) {
+		return "", fmt.Errorf("%s must be one of %s, got %q", PermissionModeEnvName, strings.Join(managedPermissionModes, ", "), mode)
+	}
+	return mode, nil
+}
+
 // SDKSpec compiles the Agent SDK bridge's start operation from the same
 // adapter output the process driver turns into CLI arguments.
 func (d *ProcessDriver) SDKSpec(profile sdkrunner.Profile, home string) (sdkrunner.Spec, error) {
@@ -81,7 +108,9 @@ func (d *ProcessDriver) SDKSpec(profile sdkrunner.Profile, home string) (sdkrunn
 		}
 		spec.Settings = settings
 		spec.StrictMCPConfig = true
-		spec.PermissionMode = "bypassPermissions"
+		if spec.PermissionMode, err = ManagedPermissionMode(d.config.Environment); err != nil {
+			return sdkrunner.Spec{}, err
+		}
 	case sdkrunner.ProfileUser:
 		// The user's own Claude home: their settings, hooks, skills, plugins.
 		// Provider, credentials, proxy and CA stay owned by kagent through

@@ -301,3 +301,51 @@ func TestSDKSpecProfiles(t *testing.T) {
 		}
 	}
 }
+
+func TestSDKManagedPermissionMode(t *testing.T) {
+	for _, scenario := range []struct {
+		name string
+		env  []string
+		want string
+	}{
+		{name: "no permission mode", want: "bypassPermissions"},
+		{name: "an empty permission mode", env: []string{"KAGENT_CLAUDE_PERMISSION_MODE="}, want: "bypassPermissions"},
+		{name: "auto", env: []string{"KAGENT_CLAUDE_PERMISSION_MODE=auto"}, want: "auto"},
+		{name: "default", env: []string{"KAGENT_CLAUDE_PERMISSION_MODE=default"}, want: "default"},
+		{name: "acceptEdits", env: []string{"KAGENT_CLAUDE_PERMISSION_MODE=acceptEdits"}, want: "acceptEdits"},
+		{name: "bypassPermissions", env: []string{"KAGENT_CLAUDE_PERMISSION_MODE=bypassPermissions"}, want: "bypassPermissions"},
+		{name: "a mode set twice", env: []string{"KAGENT_CLAUDE_PERMISSION_MODE=default", "KAGENT_CLAUDE_PERMISSION_MODE=auto"}, want: "auto"},
+	} {
+		t.Run("Given a Harness with "+scenario.name+", when the managed profile is compiled, assert that Claude starts in "+scenario.want, func(t *testing.T) {
+			d := NewProcessDriver(ProcessConfig{Executable: "sh", Workspace: "/data/workspace", Environment: scenario.env})
+
+			managed, err := d.SDKSpec(sdkrunner.ProfileManaged, "/data/sdk-runner/home")
+
+			if err != nil || managed.PermissionMode != scenario.want {
+				t.Fatalf("permission mode = %q, %v; want %q", managed.PermissionMode, err, scenario.want)
+			}
+		})
+	}
+
+	t.Run("Given a Harness with a permission mode, when the user profile is compiled, assert that the user's profile keeps auto", func(t *testing.T) {
+		d := NewProcessDriver(ProcessConfig{Executable: "sh", Workspace: "/data/workspace", Environment: []string{"KAGENT_CLAUDE_PERMISSION_MODE=default"}})
+
+		user, err := d.SDKSpec(sdkrunner.ProfileUser, "/data/sdk-runner/home")
+
+		if err != nil || user.PermissionMode != "auto" {
+			t.Fatalf("user permission mode = %q, %v; want auto", user.PermissionMode, err)
+		}
+	})
+
+	for _, mode := range []string{"plan", "dontAsk", "Auto"} {
+		t.Run("Given a Harness with permission mode "+mode+", when the managed profile is compiled, assert that it is refused", func(t *testing.T) {
+			d := NewProcessDriver(ProcessConfig{Executable: "sh", Workspace: "/data/workspace", Environment: []string{"KAGENT_CLAUDE_PERMISSION_MODE=" + mode}})
+
+			_, err := d.SDKSpec(sdkrunner.ProfileManaged, "/data/sdk-runner/home")
+
+			if err == nil || !strings.Contains(err.Error(), "KAGENT_CLAUDE_PERMISSION_MODE") {
+				t.Fatalf("err = %v, want a refusal naming KAGENT_CLAUDE_PERMISSION_MODE", err)
+			}
+		})
+	}
+}
