@@ -198,25 +198,6 @@ func TestSDKPromptsOutsideTheJournal(t *testing.T) {
 		require.Equal(t, "deployed", sink.text.String())
 		require.False(t, restarted.session.TurnActive())
 	})
-
-	t.Run("Given a call waiting for its answer, when the driver is asked whether a new message is safe, assert that it reports the wait until the call has been replayed", func(t *testing.T) {
-		actor := newDurableActor(t, DeferredTool{ID: "call-1", Name: "mcp__protected__deploy", Input: map[string]any{"env": "prod"}})
-		before, err := actor.driver.AwaitingReplay()
-		require.NoError(t, err)
-		request := actor.GivenTurnParkedOn(t).(*runtime.ApprovalRequest)
-		waiting, err := actor.driver.AwaitingReplay()
-		require.NoError(t, err)
-
-		restarted := actor.WhenActorRestarts(t)
-		_, err = restarted.pending.Resume(t.Context(), &runtime.ApprovalDecision{ID: request.ID, Approved: true}, &recordingSink{})
-		require.NoError(t, err)
-		after, err := restarted.driver.AwaitingReplay()
-		require.NoError(t, err)
-
-		require.False(t, before)
-		require.True(t, waiting)
-		require.False(t, after)
-	})
 }
 
 // durableActor is one Actor lifetime: a driver, its bridge and approval broker

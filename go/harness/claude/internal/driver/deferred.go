@@ -346,24 +346,6 @@ func (d *ProcessDriver) completeReplay(tool *DeferredTool) error {
 	return saveDeferred(b.directory, d.config.MaxEventBytes, r)
 }
 
-// AwaitingReplay reports whether a deferred tool call is still in Claude's
-// transcript without its answer: no decision has arrived, or its replay has
-// not reached the hook. A user message sent now would make Claude answer it
-// and drop the call.
-func (d *ProcessDriver) AwaitingReplay() (bool, error) {
-	b := d.config.ApprovalBroker
-	if b == nil {
-		return false, nil
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	r, err := loadDeferred(b.directory, d.config.MaxEventBytes)
-	if err != nil || r == nil {
-		return false, err
-	}
-	return r.Phase == phaseWaiting || r.Phase == phaseResuming, nil
-}
-
 // beginResume commits the response before native replay. Its lock covers only
 // the journal transition; process execution and failure cleanup happen outside it.
 func (p *deferredTurn) beginResume(response runtime.InputResponse) (*deferredRecord, error) {

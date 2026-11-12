@@ -66,11 +66,6 @@ type Config struct {
 	Logger    *slog.Logger
 	// Backlog bounds the in-memory event backlog.
 	Backlog int
-	// ClientGate refuses a client's user message with the returned error. The
-	// conversation takes no new message while a deferred tool call waits for
-	// its answer: Claude would answer the message and drop the call. Nil
-	// admits every message.
-	ClientGate func() error
 }
 
 // Meta is the session metadata sent to clients.
@@ -338,17 +333,6 @@ func (s *Session) TurnActive() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.turn != nil
-}
-
-// SubmitFromClient sends a client's user message unless the client gate
-// refuses it.
-func (s *Session) SubmitFromClient(ctx context.Context, text, uuid string) error {
-	if s.cfg.ClientGate != nil {
-		if err := s.cfg.ClientGate(); err != nil {
-			return err
-		}
-	}
-	return s.Submit(ctx, text, uuid, OriginClient)
 }
 
 // Submit sends a user message into the conversation, starting the bridge.
