@@ -83,8 +83,9 @@ In the actor, the runtime `TaskStore`'s send interceptor hands a steer to the
 native executor instead of taking the execution slot. The runtime accepts it
 into the running turn atomically with that turn's decision to end, so an
 accepted steer always belongs to a task. The running execution publishes the
-message into the task's history before the task's next event; the reply that
-follows starts a new artifact. A repeated steer is not sent to the runtime again.
+message into the task's history before the task's next event. Text the
+runtime produces after it starts the steer's run is a new artifact, so the
+answer to the earlier message and the reply to the steer stay apart. A repeated steer is not sent to the runtime again.
 
 A task that owns a steer ends only after a result has consumed it. A completed
 task consumed every steer it accepted. A task that ends any other way (failed,

@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/kagent-dev/kagent/go/harness/claude/internal/sdkrunner/sdkrunnertest"
 	"github.com/kagent-dev/kagent/go/harness/runtime"
 )
@@ -35,8 +37,8 @@ func TestSDKDriverSteering(t *testing.T) {
 		if err != nil || outcome.Failure != nil || outcome.Pending != nil {
 			t.Fatalf("outcome = %+v err = %v, want completed", outcome, err)
 		}
-		if got := f.sink.text.String(); got != "working. steered: use main" {
-			t.Fatalf("text = %q, want both runs in the turn", got)
+		if got := f.sink.text.String(); got != "working. |steered: use main" {
+			t.Fatalf("text = %q, want both runs in the turn, split where the steer's run starts", got)
 		}
 		if len(f.sink.unconsumed) != 0 {
 			t.Fatalf("unconsumed = %v, want none for a completed turn", f.sink.unconsumed)
@@ -118,6 +120,30 @@ func TestSDKDriverSteering(t *testing.T) {
 		}
 	})
 
+	t.Run("Given a turn that owns a queued steer, when Claude defers a protected call, assert that the turn parks and reports the steer unconsumed", func(t *testing.T) {
+		actor := newDurableActor(t, DeferredTool{ID: "call-1", Name: "mcp__protected__deploy", Input: map[string]any{"env": "prod"}})
+		actor.claude.gate = make(chan struct{})
+		sink := &steerSink{}
+		outcomes := make(chan steerResult, 1)
+		go func() {
+			outcome, err := actor.driver.Run(t.Context(), runtime.Turn{TaskID: steerTaskID, ContextID: "context-1", MessageID: "m-prompt", Prompt: "deploy"}, sink)
+			outcomes <- steerResult{outcome, err}
+		}()
+		require.Eventually(t, func() bool { return actor.claude.userOps() == 1 }, 5*time.Second, 10*time.Millisecond)
+		require.NoError(t, actor.driver.Steer(t.Context(), runtime.Steer{TaskID: steerTaskID, MessageID: "m-steer", Text: "use main"}))
+		require.Eventually(t, func() bool { return actor.claude.userOps() == 2 }, 5*time.Second, 10*time.Millisecond)
+
+		close(actor.claude.gate)
+
+		result := <-outcomes
+		require.NoError(t, result.err)
+		require.NotNil(t, result.outcome.Pending, "the turn parks on the deferred call")
+		require.Equal(t, []string{"m-steer"}, sink.unconsumed)
+		err := actor.driver.Steer(t.Context(), runtime.Steer{TaskID: steerTaskID, MessageID: "m-late", Text: "x"})
+		require.ErrorIs(t, err, runtime.SteerTaskNotRunning)
+		_ = result.outcome.Pending.Cancel(context.Background(), sink)
+	})
+
 	t.Run("Given a turn that owns a queued steer, when it is canceled, assert that it interrupts until the steer is consumed", func(t *testing.T) {
 		f := newSteerFixture(t, func(s *steerScript, b *sdkrunnertest.Bridge, op sdkrunnertest.Op) {
 			if s.prompt == "" {
@@ -170,6 +196,9 @@ type steerSink struct {
 }
 
 func (s *steerSink) SteersUnconsumed(ids []string) { s.unconsumed = append(s.unconsumed, ids...) }
+
+// SteerRunStarted marks the run boundary in the recorded text.
+func (s *steerSink) SteerRunStarted() { s.text.WriteString("|") }
 
 // steerScript scripts the fake bridge. Its handlers run on the bridge's op
 // reader, one op at a time, so they must not block.

@@ -137,7 +137,7 @@ over stdio; it opens no listener.
   own UUID. Claude reads one at its next step, or runs it after the current run
   ends. The turn owns every steer it accepts and ends only at the result that
   consumes the last of them; earlier results report their usage but not the
-  turn's outcome. A steer is refused while the turn waits on a prompt, during a
+  turn's outcome, and the text after one starts a new artifact. A steer is refused while the turn waits on a prompt, during a
   replay, and once the turn has decided to end. Cancellation interrupts each
   run until every owned message is consumed. Steers left unconsumed when the
   turn ends otherwise are reported to the A2A task.

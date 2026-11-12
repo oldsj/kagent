@@ -55,6 +55,49 @@ func TestExecutorSteer(t *testing.T) {
 		}
 	})
 
+	t.Run("Given a steer accepted before the prompt's answer, when the runtime starts the steer's run, assert that the answer and the reply are separate artifacts", func(t *testing.T) {
+		accepted := make(chan runtime.Steer, 1)
+		f := newSteerExecutor(t, func(ctx context.Context, turn runtime.Turn, sink runtime.EventSink) (runtime.Outcome, error) {
+			<-accepted
+			if err := sink.TextDelta(runtime.TextDelta{Text: "answer"}); err != nil {
+				return runtime.Outcome{}, err
+			}
+			sink.(runtime.SteerSink).SteerRunStarted()
+			if err := sink.TextDelta(runtime.TextDelta{Text: "steered reply"}); err != nil {
+				return runtime.Outcome{}, err
+			}
+			return runtime.Outcome{}, nil
+		}, func(_ context.Context, steer runtime.Steer) error {
+			accepted <- steer
+			return nil
+		})
+		f.WhenExecuting(requestContext("task-1", "start"))
+
+		err := f.executor.Steer(t.Context(), "task-1", testContextID, steerMessage("m-steer", "use main"))
+
+		if err != nil {
+			t.Fatalf("Steer() error = %v", err)
+		}
+		artifacts := map[string]string{}
+		var order []string
+		for _, event := range f.AwaitEvents() {
+			update, ok := event.(*a2atype.TaskArtifactUpdateEvent)
+			if !ok {
+				continue
+			}
+			id := string(update.Artifact.ID)
+			if _, seen := artifacts[id]; !seen {
+				order = append(order, id)
+			}
+			for _, part := range update.Artifact.Parts {
+				artifacts[id] += part.Text()
+			}
+		}
+		if len(order) != 2 || artifacts[order[0]] != "answer" || artifacts[order[1]] != "steered reply" {
+			t.Fatalf("artifacts = %v in order %v, want the answer and the steered reply apart", artifacts, order)
+		}
+	})
+
 	t.Run("Given a running task, when its runtime refuses a steer, assert that the refusal reaches the caller and nothing enters history", func(t *testing.T) {
 		release := make(chan struct{})
 		f := newSteerExecutor(t, func(ctx context.Context, _ runtime.Turn, _ runtime.EventSink) (runtime.Outcome, error) {

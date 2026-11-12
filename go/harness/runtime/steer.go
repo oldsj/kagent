@@ -51,4 +51,8 @@ func (r SteerRefusal) Unwrap() error { return ErrSteerRefused }
 // turn has consumed every steer it accepted and never reports any.
 type SteerSink interface {
 	SteersUnconsumed(messageIDs []string)
+	// SteerRunStarted reports that a result ended one run of the turn and the
+	// runtime goes on to a steer the turn owns. Text that follows answers a
+	// later message than the text before it.
+	SteerRunStarted()
 }

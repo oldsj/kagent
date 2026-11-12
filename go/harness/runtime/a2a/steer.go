@@ -110,6 +110,12 @@ func (s *executionSink) flushSteers() error {
 	return nil
 }
 
+// SteerRunStarted closes the current text artifact: the text that follows
+// answers a steer, not the message the text before it answered.
+func (s *executionSink) SteerRunStarted() {
+	s.textArtifactID = ""
+}
+
 // SteersUnconsumed records the steers the turn accepted but did not consume.
 func (s *executionSink) SteersUnconsumed(messageIDs []string) {
 	s.unconsumed = append(s.unconsumed, messageIDs...)

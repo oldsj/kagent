@@ -602,6 +602,9 @@ func (t *sdkTurn) translate(ctx context.Context, raw json.RawMessage, sink runti
 	if isResult && t.consumeResult(uuids) && t.deferred == nil && !t.cleaning {
 		// A steer is still queued behind this result. Its usage is reported;
 		// the turn's outcome is that of the result that consumes the last one.
+		if steers, ok := sink.(runtime.SteerSink); ok {
+			steers.SteerRunStarted()
+		}
 		return runtime.Outcome{}, false, nil
 	}
 	return *outcome, true, nil
@@ -641,6 +644,7 @@ func (t *sdkTurn) interrupt(ctx context.Context) error {
 				}
 				// A queued steer starts its own SDK turn after this result.
 				// Interrupt that one too, so it never runs without its task.
+				logging.FromContext(ctx).DebugContext(ctx, "interrupting the queued steer run of a canceled claude turn", "task", t.turn.TaskID)
 				if err := t.driver.session.Control(ctx, "interrupt", "", ""); err != nil {
 					return t.driver.session.Stop()
 				}
