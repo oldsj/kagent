@@ -139,6 +139,19 @@ func (b *Bootstrapper) RestorePending() (taskID, contextID string, pending runti
 	return restorer.RestorePending()
 }
 
+// Steer hands a message to the running turn of the wrapped runner. A turn is
+// running only after its workspace is ready, so no bootstrap happens here.
+func (b *Bootstrapper) Steer(ctx context.Context, steer runtime.Steer) error {
+	b.mu.Lock()
+	next := b.next
+	b.mu.Unlock()
+	steering, ok := next.(runtime.Steering)
+	if !ok {
+		return runtime.SteerUnsupported
+	}
+	return steering.Steer(ctx, steer)
+}
+
 // ensure returns a public failure message, or "" when the workspace is ready or
 // was never requested.
 func (b *Bootstrapper) ensure(ctx context.Context) string {

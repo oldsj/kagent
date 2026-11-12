@@ -115,13 +115,15 @@ type Session struct {
 	mu   sync.Mutex
 	proc Process
 	// procDone is closed once the reader has settled proc's exit.
-	procDone    chan struct{}
-	state       string
-	meta        Meta
-	overrides   overrides
-	perms       map[string]*Perm
-	permOrder   []string
-	outstanding map[string]struct{}
+	procDone  chan struct{}
+	state     string
+	meta      Meta
+	overrides overrides
+	perms     map[string]*Perm
+	permOrder []string
+	// outstanding maps each unconsumed user message to the A2A message ID it
+	// carries; a client's own message carries none.
+	outstanding map[string]string
 	sdkState    string
 	background  int
 	turn        *Subscription
@@ -158,7 +160,7 @@ func New(cfg Config) (*Session, error) {
 		return nil, fmt.Errorf("prepare sdk runner directory: %w", err)
 	}
 	s := &Session{
-		cfg: cfg, state: StateStopped, perms: map[string]*Perm{}, outstanding: map[string]struct{}{},
+		cfg: cfg, state: StateStopped, perms: map[string]*Perm{}, outstanding: map[string]string{},
 		clients: map[*client]struct{}{},
 	}
 	s.meta.Profile = s.profile()
@@ -351,12 +353,23 @@ func (s *Session) SubmitFromClient(ctx context.Context, text, uuid string) error
 
 // Submit sends a user message into the conversation, starting the bridge.
 func (s *Session) Submit(ctx context.Context, text, uuid string, origin Origin) error {
+	return s.SubmitMessage(ctx, text, uuid, "", origin)
+}
+
+// SubmitMessage sends a user message that carries the A2A message messageID.
+// Clients see messageID as mid on the message's echo and on the turn frame of
+// the result that consumed it, so they can match a ledger entry to its turn.
+func (s *Session) SubmitMessage(ctx context.Context, text, uuid, messageID string, origin Origin) error {
 	if err := s.Start(ctx); err != nil {
 		return err
 	}
 	s.mu.Lock()
-	s.outstanding[uuid] = struct{}{}
-	s.emitLocked("user", map[string]any{"uuid": uuid, "text": text, "origin": origin})
+	s.outstanding[uuid] = messageID
+	fields := map[string]any{"uuid": uuid, "text": text, "origin": origin}
+	if messageID != "" {
+		fields["mid"] = messageID
+	}
+	s.emitLocked("user", fields)
 	s.mu.Unlock()
 	s.updateActivity()
 	if err := s.write(map[string]any{"op": "user", "uuid": uuid, "text": text}); err != nil {
@@ -692,14 +705,18 @@ func (s *Session) handleSDKLocked(m json.RawMessage) {
 	s.emitStreamLocked("sdk", map[string]any{"m": m}, envelope.Type == "stream_event")
 	if envelope.Type == "result" {
 		_, uuids := ResultUUIDs(m)
+		mids := []string{}
 		for _, id := range uuids {
+			if mid := s.outstanding[id]; mid != "" {
+				mids = append(mids, mid)
+			}
 			delete(s.outstanding, id)
 		}
 		state := "idle"
 		if len(s.outstanding) != 0 {
 			state = "running"
 		}
-		s.emitLocked("turn", map[string]any{"state": state, "uuids": uuids})
+		s.emitLocked("turn", map[string]any{"state": state, "uuids": uuids, "mids": mids})
 	}
 	if s.turn != nil {
 		s.turn.push(Item{Kind: ItemSDK, Raw: m})

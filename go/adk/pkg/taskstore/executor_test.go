@@ -28,6 +28,7 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 
 	"github.com/kagent-dev/kagent/go/adk/pkg/controllerclient"
+	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	runtimev1 "github.com/kagent-dev/kagent/go/api/gen/kagent/runtime/v1"
 	"github.com/kagent-dev/kagent/go/pkg/tracing"
 )
@@ -423,4 +424,57 @@ func TestSendAdmissionReportsUnusableSessionBeforeAcceptingInput(t *testing.T) {
 	require.ErrorContains(t, err, "start a new session")
 	require.Nil(t, wrapper.admitted)
 	require.Empty(t, wrapper.pending)
+}
+
+type steeringExecutor struct {
+	a2asrv.AgentExecutor
+	steered []*a2a.Message
+}
+
+func (e *steeringExecutor) Steer(_ context.Context, taskID a2a.TaskID, contextID string, message *a2a.Message) error {
+	if message.TaskID != taskID || message.ContextID != contextID {
+		return errors.New("steer identity does not match its message")
+	}
+	e.steered = append(e.steered, message)
+	return nil
+}
+
+func TestSteerAdmission(t *testing.T) {
+	steer := func() *a2a.SendMessageRequest {
+		message := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("use main"))
+		message.TaskID, message.ContextID = "task-1", "context-1"
+		message.SetMeta(apia2a.SteerMetadataKey, true)
+		return &a2a.SendMessageRequest{Message: message}
+	}
+
+	t.Run("Given a send holding the execution slot, when a steer arrives, assert that the runtime takes it and the slot is untouched", func(t *testing.T) {
+		executor := &steeringExecutor{}
+		wrapper := (&Store{}).WrapExecutor(executor, "", nil)
+		ctx, call := a2asrv.NewCallContext(t.Context(), nil)
+		_, _, err := wrapper.Before(ctx, call, &a2asrv.Request{Payload: &a2a.SendMessageRequest{Message: a2a.NewMessage(a2a.MessageRoleUser)}})
+		require.NoError(t, err)
+		admitted := wrapper.admitted
+
+		_, result, err := wrapper.Before(ctx, call, &a2asrv.Request{Payload: steer()})
+
+		require.NoError(t, err)
+		task, ok := result.(*a2a.Task)
+		require.True(t, ok, "result = %#v", result)
+		require.Equal(t, a2a.TaskID("task-1"), task.ID)
+		require.Equal(t, a2a.TaskStateWorking, task.Status.State)
+		require.Len(t, executor.steered, 1)
+		require.Same(t, admitted, wrapper.admitted)
+	})
+
+	t.Run("Given a runtime that cannot steer, when a steer arrives, assert that it is refused as unsupported", func(t *testing.T) {
+		wrapper := (&Store{}).WrapExecutor(a2asrv.AgentExecutorFunc(nil), "", nil)
+		ctx, call := a2asrv.NewCallContext(t.Context(), nil)
+
+		_, _, err := wrapper.Before(ctx, call, &a2asrv.Request{Payload: steer()})
+
+		refusal, ok := apia2a.SteerRefusal(err)
+		require.True(t, ok, "err = %v", err)
+		require.Equal(t, apia2a.SteerUnsupported, refusal)
+		require.Nil(t, wrapper.admitted)
+	})
 }

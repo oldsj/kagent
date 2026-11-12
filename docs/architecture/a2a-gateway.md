@@ -65,6 +65,42 @@ flowchart LR
     WORKER --> SUBSTRATE[Substrate pause / suspend]
 ```
 
+## Steering a running task
+
+A steer adds a user message to a task while it runs. It is a `SendMessage`
+whose message names the task in `taskId` and carries the metadata
+`"kagent.steer": true`. A steer never creates a task and is never queued: the
+running turn accepts it or the request is refused.
+
+The service authorizes a steer like a continuation of its task, but reserves no
+dispatch, because the task it joins already holds the Session's execution. A
+steer whose message ID the task already holds returns that task. A task that is
+not working is refused without contacting the actor. The gateway forwards the
+rest with `returnImmediately` and returns the running task; the caller
+subscribes to the task for its events.
+
+In the actor, the runtime `TaskStore`'s send interceptor hands a steer to the
+native executor instead of taking the execution slot. The runtime accepts it
+into the running turn atomically with that turn's decision to end, so an
+accepted steer always belongs to a task. The running execution publishes the
+message into the task's history before the task's next event. Text the
+runtime produces after it starts the steer's run is a new artifact, so the
+answer to the earlier message and the reply to the steer stay apart. A repeated steer is not sent to the runtime again.
+
+A task that owns a steer ends only after a result has consumed it. A completed
+task consumed every steer it accepted. A task that ends any other way (failed,
+canceled, waiting on a deferred call, or after its runtime exited) lists the
+message IDs of the steers it did not consume in the task metadata
+`kagent.steer.unconsumed`; cancellation interrupts each queued steer's run
+before it reports.
+
+A refusal is `UNSUPPORTED_OPERATION` with the ErrorInfo reason
+`KAGENT_SEND_NOT_ACCEPTED` and the metadata `steer` set to why:
+`steer_task_not_running`, `steer_input_required` for a task waiting for input,
+or `steer_process_driver` for a runtime that cannot add messages to a running
+turn. Nothing is recorded for a refused steer. Unlike a busy send, a refused
+steer is not retried as is; the caller sends the message as a new turn.
+
 ## Durable ordering
 
 The SDK creates a task through CreateTask and applies versioned UpdateTask saves.

@@ -113,6 +113,38 @@ func (g *Gateway) sendMessage(ctx context.Context, agent types.NamespacedName, r
 	return result, nil
 }
 
+// steer forwards a steer to the runtime running its task. No dispatch is
+// reserved, so no other input can be admitted by it. The runtime's refusal is
+// rebuilt from its reason alone; the actor's message is not passed through.
+func (g *Gateway) steer(ctx context.Context, agent types.NamespacedName, req *a2atype.SendMessageRequest) (a2atype.SendMessageResult, error) {
+	prepared, err := g.interactions.PrepareSteer(ctx, agent, req)
+	if err != nil {
+		return nil, err
+	}
+	if prepared.AcceptedTask != nil {
+		return prepared.AcceptedTask, nil
+	}
+	client, err := g.dial(ctx, prepared.Session)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = client.Destroy() }()
+	forwarded := *req
+	forwarded.Config = &a2atype.SendMessageConfig{ReturnImmediately: true}
+	result, err := client.SendMessage(ctx, &forwarded)
+	if err != nil {
+		if refusal, ok := apia2a.SteerRefusal(err); ok {
+			return nil, apia2a.SteerNotAccepted(refusal)
+		}
+		return nil, err
+	}
+	task, ok := result.(*a2atype.Task)
+	if !ok || task.ID != req.Message.TaskID || task.ContextID != prepared.Session.ContextId {
+		return nil, a2atype.NewError(a2atype.ErrInternalError, "runtime returned an unexpected task")
+	}
+	return task, nil
+}
+
 func (g *Gateway) subscribeToTask(ctx context.Context, agent types.NamespacedName, req *a2atype.SubscribeToTaskRequest) iter.Seq2[a2atype.Event, error] {
 	if req == nil {
 		return errorEvents(a2atype.ErrInvalidParams)

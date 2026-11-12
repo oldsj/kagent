@@ -338,6 +338,9 @@ type fakeClaude struct {
 	// thenPrompt is a tool outside the approval boundary that Claude asks about
 	// once the deferred call has run.
 	thenPrompt string
+	// gate holds the call until it is closed, so a steer can arrive while the
+	// turn runs. Later user messages then only queue, as Claude queues them.
+	gate chan struct{}
 
 	mu      sync.Mutex
 	ops     []sdkrunnertest.Op
@@ -357,10 +360,20 @@ func (c *fakeClaude) handle(b *sdkrunnertest.Bridge, op sdkrunnertest.Op) {
 	c.mu.Unlock()
 	switch op.Op {
 	case "user":
+		if c.gate != nil && c.userOps() > 1 {
+			return
+		}
 		b.SDK(map[string]any{"type": "system", "subtype": "init", "session_id": sdkSessionID})
 		b.SDK(map[string]any{"type": "assistant", "message": map[string]any{"id": "m1", "content": []any{
 			map[string]any{"type": "tool_use", "id": c.tool.ID, "name": c.tool.Name, "input": c.tool.Input},
 		}}})
+		if c.gate != nil {
+			go func() {
+				<-c.gate
+				c.call(b, []string{op.UUID})
+			}()
+			return
+		}
 		c.call(b, []string{op.UUID})
 	case "perm":
 		c.mu.Lock()
@@ -449,6 +462,18 @@ func (c *fakeClaude) permissionAnswer(t *testing.T) sdkrunnertest.Op {
 	var answer sdkrunnertest.Op
 	require.NoError(t, json.Unmarshal(raw, &answer))
 	return answer
+}
+
+func (c *fakeClaude) userOps() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := 0
+	for _, op := range c.ops {
+		if op.Op == "user" {
+			n++
+		}
+	}
+	return n
 }
 
 func (c *fakeClaude) sawOp(name string) bool {
