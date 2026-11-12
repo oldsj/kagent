@@ -187,16 +187,13 @@ func writeBundleFile(path string, r io.Reader, mode os.FileMode) error {
 }
 
 type clientMessage struct {
-	K        string `json:"k"`
-	ID       string `json:"id"`
-	Text     string `json:"text"`
-	UUID     string `json:"uuid"`
-	Model    string `json:"model"`
-	Effort   string `json:"effort"`
-	Mode     string `json:"mode"`
-	Behavior string `json:"behavior"`
-	Always   bool   `json:"always"`
-	Message  string `json:"message"`
+	K      string `json:"k"`
+	ID     string `json:"id"`
+	Text   string `json:"text"`
+	UUID   string `json:"uuid"`
+	Model  string `json:"model"`
+	Effort string `json:"effort"`
+	Mode   string `json:"mode"`
 }
 
 func (srv *Server) websocket(w http.ResponseWriter, r *http.Request) {
@@ -269,17 +266,15 @@ func (srv *Server) websocket(w http.ResponseWriter, r *http.Request) {
 
 func (srv *Server) command(ctx context.Context, msg clientMessage) error {
 	switch msg.K {
-	case "user", "interrupt", "model", "effort":
-		// The A2A task is the record of what was asked of the agent. A client
-		// sends a message or a steer, cancels a task, and sets a turn's model
-		// and effort through the agent's A2A endpoint, so none of them bypass
+	case "user", "interrupt", "model", "effort", "perm":
+		// The A2A task is the record of what was asked of the agent and what
+		// it was allowed to do. A client sends a message or a steer, cancels a
+		// task, sets a turn's model and effort, and answers a permission
+		// prompt through the agent's A2A endpoint, so none of them bypass
 		// that record.
 		return fmt.Errorf("%s is not accepted on the client port; use the agent's A2A endpoint", msg.K)
 	case "mode":
 		return srv.session.Control(ctx, "mode", msg.Mode, msg.ID)
-	case "perm":
-		_, err := srv.session.AnswerPerm(msg.ID, msg.Behavior, msg.Always, msg.Message, OriginClient)
-		return err
 	default:
 		return nil // Unknown kinds are ignored within v1.
 	}

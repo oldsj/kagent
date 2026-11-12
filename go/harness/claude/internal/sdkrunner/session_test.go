@@ -128,7 +128,7 @@ func TestSessionRestartsAfterBridgeExitAndResumesBoundConversation(t *testing.T)
 	for item := next(t, sub); item.Kind != sdkrunner.ItemExited; item = next(t, sub) {
 	}
 	f.session.EndTurn(sub)
-	if err := f.session.Submit(context.Background(), "two", "u2", sdkrunner.OriginClient); err != nil {
+	if err := f.session.Submit(context.Background(), "two", "u2", sdkrunner.OriginA2A); err != nil {
 		t.Fatal(err)
 	}
 	second := f.launcher.Started(wait)
@@ -151,14 +151,11 @@ func TestPermissionFirstAnswerWins(t *testing.T) {
 	if item.Kind != sdkrunner.ItemPerm || item.Perm.ToolName != "Bash" {
 		t.Fatalf("item = %+v, want the permission request", item)
 	}
-	if ok, err := f.session.AnswerPerm("p1", "allow", false, "", sdkrunner.OriginClient); !ok || err != nil {
-		t.Fatalf("client answer = %v %v", ok, err)
+	if ok, err := f.session.AnswerPerm("p1", "allow", false, "", sdkrunner.OriginA2A); !ok || err != nil {
+		t.Fatalf("first answer = %v %v", ok, err)
 	}
 	if ok, _ := f.session.AnswerPerm("p1", "deny", false, "", sdkrunner.OriginA2A); ok {
 		t.Fatal("a second answer must not resolve the request again")
-	}
-	if item := next(t, sub); item.Kind != sdkrunner.ItemPermDone || item.PermID != "p1" {
-		t.Fatalf("item = %+v, want the client's resolution", item)
 	}
 	eventually(t, "perm op", func() bool {
 		for _, op := range f.launcher.Ops() {
@@ -173,7 +170,7 @@ func TestPermissionFirstAnswerWins(t *testing.T) {
 func TestReplayResumesTheConversationOnAFreshBridge(t *testing.T) {
 	t.Run("Given a running bridge, when a replay begins, assert that the turn is registered on a new bridge that resumes the conversation and sees none of the old one's events", func(t *testing.T) {
 		f := newFixture(t, sdkrunnertest.Echo("22222222-2222-2222-2222-222222222222"))
-		if err := f.session.Submit(context.Background(), "one", "u1", sdkrunner.OriginClient); err != nil {
+		if err := f.session.Submit(context.Background(), "one", "u1", sdkrunner.OriginA2A); err != nil {
 			t.Fatal(err)
 		}
 		first := f.launcher.Started(wait)
@@ -474,6 +471,7 @@ func TestClientPortTakesNoInputThatBypassesA2A(t *testing.T) {
 		{op: "interrupt", frame: `{"k":"interrupt","id":"r1"}`},
 		{op: "model", frame: `{"k":"model","id":"r1","model":"opus"}`},
 		{op: "effort", frame: `{"k":"effort","id":"r1","effort":"high"}`},
+		{op: "perm", frame: `{"k":"perm","id":"r1","behavior":"allow"}`},
 	} {
 		t.Run("Given an attached client, when it sends "+scenario.op+", assert that it is refused and never reaches Claude", func(t *testing.T) {
 			f := newFixture(t, sdkrunnertest.Echo("66666666-6666-6666-6666-666666666666"))
