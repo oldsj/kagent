@@ -442,3 +442,71 @@ func jsonNumber(f float64) string {
 	b, _ := json.Marshal(f)
 	return string(b)
 }
+
+func TestClientsSeeTheA2AMessageOfEachUserMessage(t *testing.T) {
+	t.Run("Given an A2A message in the conversation, when a client attaches after its result, assert that its echo and turn name the message", func(t *testing.T) {
+		f := newFixture(t, sdkrunnertest.Echo("55555555-5555-5555-5555-555555555555"))
+		sub, err := f.session.BeginTurn()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.session.SubmitMessage(context.Background(), "steer", "u1", "m-1", sdkrunner.OriginA2A); err != nil {
+			t.Fatal(err)
+		}
+		for item := next(t, sub); ; item = next(t, sub) {
+			if isResult, _ := sdkrunner.ResultUUIDs(item.Raw); isResult {
+				break
+			}
+		}
+		f.session.EndTurn(sub)
+
+		backlog := attachBacklog(t, f.session)
+
+		var user, turn map[string]any
+		for _, event := range backlog {
+			switch event["k"] {
+			case "user":
+				user = event
+			case "turn":
+				turn = event
+			}
+		}
+		if user == nil || user["uuid"] != "u1" || user["mid"] != "m-1" {
+			t.Fatalf("user echo = %v, want uuid u1 with mid m-1", user)
+		}
+		if mids, _ := turn["mids"].([]any); turn == nil || len(mids) != 1 || mids[0] != "m-1" {
+			t.Fatalf("turn = %v, want mids [m-1]", turn)
+		}
+	})
+}
+
+// attachBacklog attaches a client and returns the backlog its hello replays.
+func attachBacklog(t *testing.T, session *sdkrunner.Session) []map[string]any {
+	t.Helper()
+	srv := httptest.NewServer(sdkrunner.NewServer(context.Background(), session))
+	t.Cleanup(srv.Close)
+	token := strings.Repeat("t", 32)
+	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/bootstrap", nil)
+	req.Header.Set("x-runner-token", token)
+	if resp, err := http.DefaultClient.Do(req); err != nil || resp.StatusCode != 200 {
+		t.Fatalf("bootstrap: %v %v", resp, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), wait)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+"/ws?t="+token, &websocket.DialOptions{Subprotocols: []string{sdkrunner.Subprotocol}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.CloseNow()
+	_, data, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hello struct {
+		Backlog []map[string]any `json:"backlog"`
+	}
+	if err := json.Unmarshal(data, &hello); err != nil {
+		t.Fatal(err)
+	}
+	return hello.Backlog
+}

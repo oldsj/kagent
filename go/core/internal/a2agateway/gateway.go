@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"k8s.io/apimachinery/pkg/types"
 
+	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	apiv1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1"
 	sessionsvc "github.com/kagent-dev/kagent/go/core/internal/service/session"
 )
@@ -21,6 +22,7 @@ type interactionService interface {
 	GetTask(context.Context, types.NamespacedName, *a2a.GetTaskRequest) (*a2a.Task, error)
 	ListTasks(context.Context, types.NamespacedName, *a2a.ListTasksRequest) (*a2a.ListTasksResponse, error)
 	PrepareSend(context.Context, types.NamespacedName, *a2a.SendMessageRequest) (*sessionsvc.PreparedSend, error)
+	PrepareSteer(context.Context, types.NamespacedName, *a2a.SendMessageRequest) (*sessionsvc.PreparedSteer, error)
 	PrepareCancelTask(context.Context, types.NamespacedName, *a2a.CancelTaskRequest) (*apiv1.Session, *a2a.Task, error)
 	PrepareTaskSubscription(context.Context, types.NamespacedName, *a2a.SubscribeToTaskRequest) (*apiv1.Session, *a2a.Task, error)
 	RevokeSend(context.Context, types.NamespacedName, *a2a.Message, uuid.UUID) (bool, error)
@@ -87,6 +89,9 @@ func (g *Gateway) SendMessage(ctx context.Context, req *a2a.SendMessageRequest) 
 	if err != nil {
 		return nil, err
 	}
+	if req != nil && apia2a.IsSteer(req.Message) {
+		return g.steer(ctx, agent, req)
+	}
 	return g.sendMessage(ctx, agent, req)
 }
 
@@ -94,6 +99,18 @@ func (g *Gateway) SendStreamingMessage(ctx context.Context, req *a2a.SendMessage
 	agent, err := route(ctx)
 	if err != nil {
 		return func(yield func(a2a.Event, error) bool) { yield(nil, err) }
+	}
+	if req != nil && apia2a.IsSteer(req.Message) {
+		// A steer's response is the running task, not a stream of it; a caller
+		// that wants the task's events subscribes to it.
+		return func(yield func(a2a.Event, error) bool) {
+			result, err := g.steer(ctx, agent, req)
+			if err != nil {
+				yield(nil, err)
+				return
+			}
+			yield(result.(*a2a.Task), nil)
+		}
 	}
 	return g.sendStreamingMessage(ctx, agent, req)
 }

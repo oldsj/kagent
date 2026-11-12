@@ -22,10 +22,12 @@ func (e *CancellationError) Unwrap() error { return e.Err }
 
 // Turn is one invocation of an Actor's root conversation.
 type Turn struct {
-	TaskID         string
-	ContextID      string
-	Origin         TraceOrigin
-	Prompt         string
+	TaskID    string
+	ContextID string
+	Origin    TraceOrigin
+	Prompt    string
+	// MessageID is the A2A message that carried Prompt.
+	MessageID      string
 	ContinuationID string
 	InputResponse  InputResponse
 	// Model and Effort are optional per-turn overrides of the harness's

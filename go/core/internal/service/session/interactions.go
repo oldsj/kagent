@@ -181,6 +181,66 @@ func (s *InteractionService) PrepareSend(ctx context.Context, agent types.Namesp
 	return &PreparedSend{Session: session, DispatchID: id}, nil
 }
 
+// PreparedSteer is a steer the caller may forward to the Session's runtime,
+// or the task that already accepted it.
+type PreparedSteer struct {
+	Session      *apiv1.Session
+	AcceptedTask *a2atype.Task
+}
+
+// PrepareSteer authorizes a steer into the running task its message names.
+// A steer reserves no dispatch: it joins the task that holds the Session's
+// execution, and the runtime accepts or refuses it atomically with that
+// task's end. A repeated steer returns the task that accepted it.
+func (s *InteractionService) PrepareSteer(ctx context.Context, agent types.NamespacedName, req *a2atype.SendMessageRequest) (*PreparedSteer, error) {
+	if req == nil || req.Message == nil || req.Message.ID == "" || req.Message.TaskID == "" {
+		return nil, a2atype.NewError(a2atype.ErrInvalidParams, "a steer names the task it joins")
+	}
+	if req.Config != nil && req.Config.PushConfig != nil {
+		return nil, a2atype.NewError(a2atype.ErrInvalidParams, "a steer cannot register push notifications")
+	}
+	apia2a.SanitizeCallerRequest(req)
+	session, err := s.messageSession(ctx, agent, req.Message)
+	if err != nil {
+		return nil, err
+	}
+	req.Message.ContextID = session.ContextId
+	var historyLength *int
+	if req.Config != nil {
+		historyLength = req.Config.HistoryLength
+	}
+	accepted, err := s.store.GetSessionTaskByMessage(ctx, session.Id, string(req.Message.TaskID), req.Message.ID)
+	if err == nil {
+		return &PreparedSteer{Session: session, AcceptedTask: shapeTask(accepted, historyLength, true)}, nil
+	}
+	if !errors.Is(err, database.ErrNotFound) {
+		return nil, interactionStoreError(ctx, err)
+	}
+	task, err := s.store.GetSessionTask(ctx, session.Id, string(req.Message.TaskID), nil)
+	if err != nil {
+		return nil, interactionStoreError(ctx, err)
+	}
+	if refusal := steerRefusal(task.Status.State); refusal != "" {
+		return nil, apia2a.SteerNotAccepted(refusal)
+	}
+	if session.State != apiv1.RuntimeState_RUNTIME_STATE_READY || session.Operation != apiv1.RuntimeOperation_RUNTIME_OPERATION_NONE {
+		return nil, apia2a.SteerNotAccepted(apia2a.SteerTaskNotRunning)
+	}
+	return &PreparedSteer{Session: session}, nil
+}
+
+// steerRefusal is why a task in state cannot take a steer, or "".
+func steerRefusal(state a2atype.TaskState) string {
+	switch state {
+	case a2atype.TaskStateWorking, a2atype.TaskStateSubmitted:
+		return ""
+	case a2atype.TaskStateInputRequired, a2atype.TaskStateAuthRequired:
+		return apia2a.SteerInputRequired
+	default:
+		return apia2a.SteerTaskNotRunning
+	}
+}
+
 // PrepareCancelTask authorizes cancellation and returns the actor target and
 // committed task. A terminal task needs no actor call.
 func (s *InteractionService) PrepareCancelTask(ctx context.Context, agent types.NamespacedName, req *a2atype.CancelTaskRequest) (*apiv1.Session, *a2atype.Task, error) {
@@ -244,7 +304,7 @@ func (s *InteractionService) reserveDispatch(ctx context.Context, sessionID, ini
 // ErrSendNotAccepted tells callers they may retry this input because no dispatch
 // occurred, or an unused dispatch was revoked before the runtime persisted it.
 var ErrSendNotAccepted = a2atype.NewError(a2atype.ErrUnsupportedOperation, "input was not accepted; retry after the session becomes available").
-	WithErrorInfoMeta(map[string]string{"reason": "KAGENT_SEND_NOT_ACCEPTED", "retryAfterMs": "100"})
+	WithErrorInfoMeta(map[string]string{"reason": apia2a.SendNotAcceptedReason, "retryAfterMs": "100"})
 
 // RevokeSend releases an unused attempt. A true result proves that the input was
 // not accepted, allowing the gateway to distinguish rejection from uncertainty.

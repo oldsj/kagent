@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -124,6 +125,13 @@ func (d *ProcessDriver) sdkSettingsJSON(managed bool) (string, error) {
 type SDKDriver struct {
 	*ProcessDriver
 	session *sdkrunner.Session
+
+	// steerMu orders steer acceptance against the end of the turn that owns
+	// the steers, and guards every turn's steers.
+	steerMu sync.Mutex
+	// steering is the A2A turn that accepts steers, or nil. A replay, a turn
+	// waiting on a permission prompt, and a turn that is ending accept none.
+	steering *sdkTurn
 }
 
 // NewSDKDriver wraps a configured process driver, whose configuration and
@@ -178,12 +186,56 @@ func (d *SDKDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime.Eve
 			return runtime.Outcome{}, fmt.Errorf("set Claude SDK runner %s: %w", control.what, err)
 		}
 	}
-	if err := d.session.Submit(ctx, turn.Prompt, t.uuid, sdkrunner.OriginA2A); err != nil {
+	if err := d.session.SubmitMessage(ctx, turn.Prompt, t.uuid, turn.MessageID, sdkrunner.OriginA2A); err != nil {
 		return runtime.Outcome{}, fmt.Errorf("send prompt to Claude SDK runner: %w", err)
 	}
+	d.openSteering(t)
 	outcome, err := t.consume(ctx, sink)
 	owned = err == nil && livePrompt(outcome)
+	t.settleSteering(owned, sink)
 	return outcome, err
+}
+
+// Steer submits a message into the running A2A turn of steer.TaskID. The
+// turn then owns it: Claude reads it at its next step, and the turn ends only
+// at a result that has consumed it too. Acceptance holds steerMu, which the
+// turn takes to decide its end, so a steer is never accepted by a turn that
+// has already decided to end.
+func (d *SDKDriver) Steer(ctx context.Context, steer runtime.Steer) error {
+	if strings.TrimSpace(steer.Text) == "" || steer.MessageID == "" {
+		return fmt.Errorf("a steer requires text and a message ID")
+	}
+	d.steerMu.Lock()
+	defer d.steerMu.Unlock()
+	t := d.steering
+	if t == nil || t.turn.TaskID != steer.TaskID {
+		return runtime.SteerTaskNotRunning
+	}
+	if t.awaitingInput {
+		return runtime.SteerInputRequired
+	}
+	if steer.MessageID == t.turn.MessageID || slices.ContainsFunc(t.steers, func(s ownedSteer) bool { return s.messageID == steer.MessageID }) {
+		return nil
+	}
+	id := uuid.NewString()
+	if err := d.session.SubmitMessage(ctx, steer.Text, id, steer.MessageID, sdkrunner.OriginA2A); err != nil {
+		return fmt.Errorf("send steer to Claude SDK runner: %w", err)
+	}
+	t.steers = append(t.steers, ownedSteer{uuid: id, messageID: steer.MessageID})
+	return nil
+}
+
+// openSteering lets t accept steers once its prompt is in the conversation.
+func (d *SDKDriver) openSteering(t *sdkTurn) {
+	d.steerMu.Lock()
+	defer d.steerMu.Unlock()
+	d.steering, t.awaitingInput = t, false
+}
+
+// ownedSteer is a steer message a turn accepted and the SDK message carrying it.
+type ownedSteer struct {
+	uuid, messageID string
+	consumed        bool
 }
 
 // livePrompt reports whether the outcome waits on a prompt held by the running
@@ -253,6 +305,14 @@ type sdkTurn struct {
 	deferredSession string
 	// interruptNow is set once a canceled replay's call has been refused.
 	interruptNow bool
+
+	// The fields below are guarded by driver.steerMu.
+	// steers are the messages this turn accepted after its prompt.
+	steers []ownedSteer
+	// promptConsumed is set once a result has consumed the turn's prompt.
+	promptConsumed bool
+	// awaitingInput is set while the turn waits on a permission prompt.
+	awaitingInput bool
 }
 
 // ownsResult reports whether a result ends this turn. A deferred result ends
@@ -265,7 +325,70 @@ func (t *sdkTurn) ownsResult(raw json.RawMessage, uuids []string) bool {
 	if t.seed != nil {
 		return len(uuids) == 0
 	}
-	return slices.Contains(uuids, t.uuid)
+	if slices.Contains(uuids, t.uuid) {
+		return true
+	}
+	t.driver.steerMu.Lock()
+	defer t.driver.steerMu.Unlock()
+	return slices.ContainsFunc(t.steers, func(s ownedSteer) bool { return slices.Contains(uuids, s.uuid) })
+}
+
+// consumeResult records the messages an owned result consumed. It reports
+// whether the turn still owns a message no result has consumed; the turn then
+// continues past this result. When it reports false, the turn stops accepting
+// steers in the same critical section, so none can arrive after the decision.
+func (t *sdkTurn) consumeResult(uuids []string) (unsettled bool) {
+	t.driver.steerMu.Lock()
+	defer t.driver.steerMu.Unlock()
+	if t.seed == nil && !t.promptConsumed {
+		t.promptConsumed = slices.Contains(uuids, t.uuid)
+	}
+	unsettled = t.seed == nil && !t.promptConsumed
+	for i := range t.steers {
+		if slices.Contains(uuids, t.steers[i].uuid) {
+			t.steers[i].consumed = true
+		}
+		unsettled = unsettled || !t.steers[i].consumed
+	}
+	if !unsettled && t.driver.steering == t {
+		t.driver.steering = nil
+	}
+	return unsettled
+}
+
+// closeSteering stops t accepting steers and returns those no result consumed.
+func (t *sdkTurn) closeSteering() []string {
+	t.driver.steerMu.Lock()
+	defer t.driver.steerMu.Unlock()
+	if t.driver.steering == t {
+		t.driver.steering = nil
+	}
+	var unconsumed []string
+	for _, s := range t.steers {
+		if !s.consumed {
+			unconsumed = append(unconsumed, s.messageID)
+		}
+	}
+	return unconsumed
+}
+
+// settleSteering runs as Run or Resume returns. A turn waiting on a live
+// permission prompt keeps its steers queued in the conversation, so it only
+// pauses acceptance. Any other end reports the steers no result consumed: a
+// deferred call, an exit, a cancellation or an exhausted budget leaves them
+// unread, and the caller decides whether to send them again.
+func (t *sdkTurn) settleSteering(waiting bool, sink runtime.EventSink) {
+	if waiting {
+		t.driver.steerMu.Lock()
+		t.awaitingInput = true
+		t.driver.steerMu.Unlock()
+		return
+	}
+	if unconsumed := t.closeSteering(); len(unconsumed) != 0 {
+		if steers, ok := sink.(runtime.SteerSink); ok {
+			steers.SteersUnconsumed(unconsumed)
+		}
+	}
 }
 
 func (t *sdkTurn) consume(ctx context.Context, sink runtime.EventSink) (runtime.Outcome, error) {
@@ -437,7 +560,8 @@ func (t *sdkTurn) next(ctx context.Context) (sdkrunner.Item, error) {
 // translate maps one SDK message. A result ends the turn only if it consumed
 // this turn's prompt; results of client turns pass by.
 func (t *sdkTurn) translate(ctx context.Context, raw json.RawMessage, sink runtime.EventSink, health *healthPublisher) (runtime.Outcome, bool, error) {
-	if isResult, uuids := sdkrunner.ResultUUIDs(raw); isResult && !t.ownsResult(raw, uuids) {
+	isResult, uuids := sdkrunner.ResultUUIDs(raw)
+	if isResult && !t.ownsResult(raw, uuids) {
 		return runtime.Outcome{}, false, nil
 	}
 	var outcome *runtime.Outcome
@@ -472,16 +596,22 @@ func (t *sdkTurn) translate(ctx context.Context, raw json.RawMessage, sink runti
 	if err != nil {
 		return runtime.Outcome{}, true, err
 	}
-	if outcome != nil {
-		return *outcome, true, nil
+	if outcome == nil {
+		return runtime.Outcome{}, false, nil
 	}
-	return runtime.Outcome{}, false, nil
+	if isResult && t.consumeResult(uuids) && t.deferred == nil && !t.cleaning {
+		// A steer is still queued behind this result. Its usage is reported;
+		// the turn's outcome is that of the result that consumes the last one.
+		return runtime.Outcome{}, false, nil
+	}
+	return *outcome, true, nil
 }
 
 // interrupt asks the SDK to stop the turn and waits up to the interrupt grace
 // for its result. A bridge that does not settle is stopped, so the next demand
 // starts a fresh bridge that resumes the conversation.
 func (t *sdkTurn) interrupt(ctx context.Context) error {
+	t.closeSteering()
 	if t.pending != nil {
 		_, _ = t.driver.session.AnswerPerm(t.pending.ID, "deny", false, "The task was canceled.", sdkrunner.OriginA2A)
 		t.pending = nil
@@ -506,7 +636,14 @@ func (t *sdkTurn) interrupt(ctx context.Context) error {
 		}
 		if item.Kind == sdkrunner.ItemSDK {
 			if isResult, uuids := sdkrunner.ResultUUIDs(item.Raw); isResult && t.ownsResult(item.Raw, uuids) {
-				return nil
+				if sdkrunner.ResultDeferred(item.Raw) || !t.consumeResult(uuids) {
+					return nil
+				}
+				// A queued steer starts its own SDK turn after this result.
+				// Interrupt that one too, so it never runs without its task.
+				if err := t.driver.session.Control(ctx, "interrupt", "", ""); err != nil {
+					return t.driver.session.Stop()
+				}
 			}
 		}
 	}
@@ -551,14 +688,22 @@ func (p *sdkPendingTurn) Resume(ctx context.Context, response runtime.InputRespo
 	}
 	t.pending = nil
 	t.budget.resume()
+	t.driver.openSteering(t)
 	outcome, err = t.consume(ctx, sink)
 	owned = err == nil && livePrompt(outcome)
+	t.settleSteering(owned, sink)
 	return outcome, err
 }
 
-func (p *sdkPendingTurn) Cancel(ctx context.Context, _ runtime.ModelCallSink) error {
+func (p *sdkPendingTurn) Cancel(ctx context.Context, sink runtime.ModelCallSink) error {
 	defer p.turn.driver.session.EndTurn(p.turn.sub)
-	return p.turn.interrupt(ctx)
+	err := p.turn.interrupt(ctx)
+	if unconsumed := p.turn.closeSteering(); len(unconsumed) != 0 {
+		if steers, ok := sink.(runtime.SteerSink); ok {
+			steers.SteersUnconsumed(unconsumed)
+		}
+	}
+	return err
 }
 
 var _ runtime.PendingTurn = (*sdkPendingTurn)(nil)

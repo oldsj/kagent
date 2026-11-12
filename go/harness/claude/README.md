@@ -133,6 +133,17 @@ over stdio; it opens no listener.
 - **A2A turns** are user messages with a fresh UUID. A turn ends at the SDK
   `result` whose `user_message_uuids` names that UUID; results of other
   messages pass by.
+- **Steers** join the running A2A turn as further user messages, each with its
+  own UUID. Claude reads one at its next step, or runs it after the current run
+  ends. The turn owns every steer it accepts and ends only at the result that
+  consumes the last of them; earlier results report their usage but not the
+  turn's outcome. A steer is refused while the turn waits on a prompt, during a
+  replay, and once the turn has decided to end. Cancellation interrupts each
+  run until every owned message is consumed. Steers left unconsumed when the
+  turn ends otherwise are reported to the A2A task.
+- **Message IDs on the client port.** A user message from A2A, prompt or steer,
+  carries its A2A message ID as `mid` on its `user` echo, and each `turn` frame
+  lists the `mids` of the messages its result consumed.
 - **Approvals in an A2A turn are durable.** The bridge loads the same
   `PreToolUse` hooks as the process driver. While an A2A turn is active, a
   protected MCP call or `AskUserQuestion` is deferred: the turn ends with a

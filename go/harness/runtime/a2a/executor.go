@@ -90,6 +90,11 @@ type activeTask struct {
 	done            chan struct{}
 	cancelRequested bool
 	cancelErr       error // published to Cancel by closing done
+	// sink publishes the steers this task accepts into its history.
+	sink *executionSink
+	// unconsumed lists accepted steers no result consumed; published to Cancel
+	// by closing done.
+	unconsumed []string
 }
 
 // parkedTask owns the PendingTurn while its A2A task is waiting for input.
@@ -140,6 +145,13 @@ type executionSink struct {
 	healthMu      sync.Mutex
 	health        []*a2atype.TaskArtifactUpdateEvent
 	healthDropped int
+
+	// steerMu is held while a steer is offered to the runner, so a steer it
+	// accepts is buffered before the turn can end and flush the buffer.
+	steerMu sync.Mutex
+	steers  []*a2atype.Message
+	// unconsumed is reported by the runtime from the execution goroutine.
+	unconsumed []string
 }
 
 // healthBufferSize bounds health observations awaiting the execution goroutine.
@@ -274,6 +286,7 @@ func (e *Executor) Execute(ctx context.Context, reqCtx *a2asrv.ExecutorContext) 
 			taskRef: taskRef{taskID: reqCtx.TaskID, contextID: reqCtx.ContextID},
 			cancel:  cancel,
 			done:    make(chan struct{}),
+			sink:    sink,
 		}
 		continued, err := e.activate(active, resuming)
 		if err != nil {
@@ -315,6 +328,7 @@ func (e *Executor) Execute(ctx context.Context, reqCtx *a2asrv.ExecutorContext) 
 		finish := func() bool {
 			finishOnce.Do(func() {
 				cancel()
+				active.unconsumed = sink.unconsumed
 				finishedCanceled = e.deactivate(active)
 				if finishedCanceled {
 					releaseCanceled()
@@ -327,6 +341,7 @@ func (e *Executor) Execute(ctx context.Context, reqCtx *a2asrv.ExecutorContext) 
 			parked := false
 			finishOnce.Do(func() {
 				cancel()
+				active.unconsumed = sink.unconsumed
 				parked = e.park(active, pending, origin)
 				if !parked {
 					active.cancelErr = pending.Cancel(context.Background(), sink)
@@ -345,7 +360,7 @@ func (e *Executor) Execute(ctx context.Context, reqCtx *a2asrv.ExecutorContext) 
 			return
 		}
 		turn.ContinuationID = continuationID
-		turn.TaskID, turn.ContextID = string(reqCtx.TaskID), reqCtx.ContextID
+		turn.TaskID, turn.ContextID, turn.MessageID = string(reqCtx.TaskID), reqCtx.ContextID, reqCtx.Message.ID
 		turn.Origin = runtime.NewTraceOrigin(origin)
 		var outcome runtime.Outcome
 		var runErr error
@@ -383,7 +398,9 @@ func (e *Executor) Execute(ctx context.Context, reqCtx *a2asrv.ExecutorContext) 
 			// execution's own deadline: no cancel request will publish for it.
 			// Cancel yields the canceled event from its own request, so complete
 			// the invocation here rather than waiting for an event that this
-			// execution never produces.
+			// execution never produces. Accepted steers still enter the history
+			// before the canceled event lists the unconsumed ones.
+			_ = sink.flushSteers()
 			if !finish() {
 				result.Disposition = tracing.DispositionInterrupted
 			}
@@ -408,7 +425,7 @@ func (e *Executor) Execute(ctx context.Context, reqCtx *a2asrv.ExecutorContext) 
 			}
 			message := taskMessage(reqCtx, failureMessage)
 			apia2a.SetTimelinePosition(message, sink.nextTimelinePosition())
-			yield(a2atype.NewStatusUpdateEvent(reqCtx, a2atype.TaskStateFailed, message), nil)
+			yield(sink.withUnconsumed(a2atype.NewStatusUpdateEvent(reqCtx, a2atype.TaskStateFailed, message)), nil)
 			return
 		}
 		if outcome.Failure != nil && outcome.Pending != nil {
@@ -443,7 +460,7 @@ func (e *Executor) Execute(ctx context.Context, reqCtx *a2asrv.ExecutorContext) 
 			result = tracing.Result{TaskState: string(a2atype.TaskStateInputRequired)}
 			endInvocation()
 			apia2a.SetTimelinePosition(message, sink.nextTimelinePosition())
-			yield(a2atype.NewStatusUpdateEvent(reqCtx, a2atype.TaskStateInputRequired, message), nil)
+			yield(sink.withUnconsumed(a2atype.NewStatusUpdateEvent(reqCtx, a2atype.TaskStateInputRequired, message)), nil)
 			return
 		}
 		if finish() {
@@ -466,7 +483,7 @@ func (e *Executor) Execute(ctx context.Context, reqCtx *a2asrv.ExecutorContext) 
 		a2alog.Warn(ctx, "Harness runtime turn failed", "failure", failure)
 		message := taskMessage(reqCtx, failure)
 		apia2a.SetTimelinePosition(message, sink.nextTimelinePosition())
-		yield(a2atype.NewStatusUpdateEvent(reqCtx, a2atype.TaskStateFailed, message), nil)
+		yield(sink.withUnconsumed(a2atype.NewStatusUpdateEvent(reqCtx, a2atype.TaskStateFailed, message)), nil)
 	}
 }
 
@@ -601,9 +618,13 @@ func (s *executionSink) Health(event runtime.HealthEvent) error {
 	return nil
 }
 
-// flushHealth publishes buffered health artifacts. Only the execution
-// goroutine calls it, before its own events and before any status update.
+// flushHealth publishes buffered steers and health artifacts. Only the
+// execution goroutine calls it, before its own events and before any status
+// update.
 func (s *executionSink) flushHealth(ctx context.Context) error {
+	if err := s.flushSteers(); err != nil {
+		return err
+	}
 	s.healthMu.Lock()
 	pending, dropped := s.health, s.healthDropped
 	s.health, s.healthDropped = nil, 0
@@ -756,7 +777,7 @@ func (e *Executor) Cancel(ctx context.Context, reqCtx *a2asrv.ExecutorContext) i
 			e.mu.Unlock()
 			select {
 			case <-done:
-				yieldCancellation(ctx, reqCtx, state.cancelErr, yield)
+				yieldCancellation(ctx, reqCtx, state.cancelErr, state.unconsumed, yield)
 			case <-ctx.Done():
 				yield(nil, ctx.Err())
 			}
@@ -783,7 +804,7 @@ func (e *Executor) Cancel(ctx context.Context, reqCtx *a2asrv.ExecutorContext) i
 			}
 			close(canceling.done)
 			e.mu.Unlock()
-			yieldCancellation(ctx, reqCtx, err, yield)
+			yieldCancellation(ctx, reqCtx, err, sink.unconsumed, yield)
 			return
 		case *cancelingTask:
 			if !state.matches(ref) {
@@ -795,7 +816,7 @@ func (e *Executor) Cancel(ctx context.Context, reqCtx *a2asrv.ExecutorContext) i
 			e.mu.Unlock()
 			select {
 			case <-done:
-				yieldCancellation(ctx, reqCtx, state.err, yield)
+				yieldCancellation(ctx, reqCtx, state.err, nil, yield)
 			case <-ctx.Done():
 				yield(nil, ctx.Err())
 			}
@@ -810,7 +831,7 @@ func (e *Executor) Cancel(ctx context.Context, reqCtx *a2asrv.ExecutorContext) i
 	}
 }
 
-func yieldCancellation(ctx context.Context, reqCtx *a2asrv.ExecutorContext, knownErr error, yield func(a2atype.Event, error) bool) {
+func yieldCancellation(ctx context.Context, reqCtx *a2asrv.ExecutorContext, knownErr error, unconsumed []string, yield func(a2atype.Event, error) bool) {
 	if err := ctx.Err(); err != nil {
 		yield(nil, err)
 		return
@@ -819,7 +840,7 @@ func yieldCancellation(ctx context.Context, reqCtx *a2asrv.ExecutorContext, know
 		yield(nil, knownErr)
 		return
 	}
-	yield(a2atype.NewStatusUpdateEvent(reqCtx, a2atype.TaskStateCanceled, nil), nil)
+	yield(withUnconsumed(a2atype.NewStatusUpdateEvent(reqCtx, a2atype.TaskStateCanceled, nil), unconsumed), nil)
 }
 
 func (r taskRef) matches(other taskRef) bool {

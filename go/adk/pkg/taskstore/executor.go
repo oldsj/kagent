@@ -49,6 +49,12 @@ func (e *settledExecutor) Before(ctx context.Context, call *a2asrv.CallContext, 
 		if send.Message == nil {
 			return ctx, nil, a2a.ErrInvalidParams
 		}
+		if apia2a.IsSteer(send.Message) {
+			// A steer joins the running task instead of taking the execution
+			// slot, so it is answered here and never reaches Execute.
+			result, err := e.steer(ctx, send.Message)
+			return ctx, result, err
+		}
 		if reservation, ok := e.AgentExecutor.(interface{ ReservedTaskID() (a2a.TaskID, error) }); ok {
 			id, err := reservation.ReservedTaskID()
 			if err != nil {
@@ -73,6 +79,25 @@ func (e *settledExecutor) Before(ctx context.Context, call *a2asrv.CallContext, 
 		context.AfterFunc(ctx, func() { e.release(state) })
 	}
 	return context.WithValue(ctx, executionKey{}, state), nil, nil
+}
+
+// steer hands a steer to the native executor. The runtime's TaskStore
+// records nothing for it here: the running execution publishes the message
+// into its task's history. The response is the running task.
+func (e *settledExecutor) steer(ctx context.Context, message *a2a.Message) (a2a.SendMessageResult, error) {
+	steering, ok := e.AgentExecutor.(interface {
+		Steer(context.Context, a2a.TaskID, string, *a2a.Message) error
+	})
+	if !ok {
+		return nil, apia2a.SteerNotAccepted(apia2a.SteerUnsupported)
+	}
+	if message.TaskID == "" || message.ContextID == "" {
+		return nil, a2a.NewError(a2a.ErrInvalidParams, "a steer names its task and context")
+	}
+	if err := steering.Steer(ctx, message.TaskID, message.ContextID, message); err != nil {
+		return nil, err
+	}
+	return &a2a.Task{ID: message.TaskID, ContextID: message.ContextID, Status: a2a.TaskStatus{State: a2a.TaskStateWorking}}, nil
 }
 
 func (e *settledExecutor) release(state *execution) {
