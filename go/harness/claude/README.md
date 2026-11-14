@@ -108,6 +108,13 @@ over surviving processes; the Actor must then be replaced. Kernels or syscall
 filters without pidfd support reject execution. Outside Linux the driver
 signals the leader's process group only, which is for development.
 
+The Session's workspace service is the one exception (see the "Workspace
+service" section of `docs/architecture/runtime-and-lifecycle.md`). Its
+supervisor is a child subreaper, so the service's orphans never reach the
+harness. The census, signals and cleanup above leave out each live supervisor's
+subtree, which they identify by PID and start time and read under the service's
+lock.
+
 **Health artifacts.** When the sink accepts them, each process emits
 `kagent.dev/orchestration-health/v1` artifacts: turn start and finish, tool
 start and finish with a coarse class, action and workspace-relative path, and

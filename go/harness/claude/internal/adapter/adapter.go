@@ -18,6 +18,7 @@ import (
 	"github.com/kagent-dev/kagent/go/harness/claude/config"
 	"github.com/kagent-dev/kagent/go/harness/claude/internal/driver"
 	"github.com/kagent-dev/kagent/go/harness/internal/utils"
+	"github.com/kagent-dev/kagent/go/harness/runtime/service"
 	otel "github.com/kagent-dev/kagent/go/pkg/telemetry"
 	"github.com/kagent-dev/kagent/go/pkg/tracing"
 )
@@ -55,6 +56,9 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 		if err := checkRestoredSetup(input); err != nil {
 			return nil, err
 		}
+	}
+	if cfg.Git != nil {
+		cfg.AppendSystemPrompt += "\n" + service.Guidance(filepath.Join(input.DurableDir, "workspace-service"))
 	}
 	agentsJSON, err := cfg.AgentsJSON()
 	if err != nil {

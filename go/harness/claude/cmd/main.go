@@ -22,6 +22,7 @@ import (
 	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	"github.com/kagent-dev/kagent/go/harness/claude/config"
 	"github.com/kagent-dev/kagent/go/harness/claude/executor"
+	"github.com/kagent-dev/kagent/go/harness/runtime/service"
 	"github.com/kagent-dev/kagent/go/harness/runtime/workspace"
 	"github.com/kagent-dev/kagent/go/pkg/logging"
 	"github.com/kagent-dev/kagent/go/pkg/telemetry"
@@ -33,6 +34,11 @@ const (
 )
 
 func main() {
+	// The workspace service supervisor is this binary re-executed; it runs
+	// nothing else of the harness.
+	if len(os.Args) > 1 && os.Args[1] == service.SupervisorArg {
+		os.Exit(service.Supervise(os.Args[2:]))
+	}
 	check := flag.Bool("check", false, "validate configuration and Claude version, then exit")
 	flag.Parse()
 	logger, err := logging.New(os.Stderr, "info")

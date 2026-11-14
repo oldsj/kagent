@@ -29,6 +29,9 @@ type Request struct {
 	// branches keep a merge-base with the default branch. A positive value is
 	// shallow. It is never mapped to apiworkspace.DefaultDepth here.
 	Depth int
+	// ServiceCommand is the declared workspace service's argv; empty declares
+	// none. See ServeService.
+	ServiceCommand []string
 }
 
 // Source reads the Session's workspace request from the control plane. A nil

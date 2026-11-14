@@ -351,7 +351,7 @@ func TestPreparationWireRoundTrip(t *testing.T) {
 	want := Preparation{
 		SessionID: "s", ContextID: "c", CreateRequestID: "cr", ActionID: "a", RequestDigest: "rd", ExecutionID: "e",
 		ChallengeID: "ch", Sequence: 7, GenerationID: "g", Atespace: "at", ActorName: "an", ActorUID: "au",
-		PreparedRevision: "pr", Workspace: Request{Repo: "https://github.com/o/r", Ref: strings.Repeat("a", 40), Branch: "b", Depth: 3},
+		PreparedRevision: "pr", Workspace: Request{Repo: "https://github.com/o/r", Ref: strings.Repeat("a", 40), Branch: "b", Depth: 3, ServiceCommand: []string{"scripts/dev/workspace.sh", "run"}},
 		DevelopmentImage: "d", Platform: "p", PolicyIdentity: "pi", PayloadImage: "pay", Provider: "claude", Schema: 2,
 		CLIVersion: "1.2.3", Profile: "child", SetupDigest: "sd", ConfigDigest: "cd", MCPDigest: "md",
 	}

@@ -3,6 +3,7 @@ package workspace
 import (
 	"context"
 	"errors"
+	"slices"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -66,7 +67,7 @@ func requestFromWire(wire *apiv1.Workspace, err error) (*Request, error) {
 	if err != nil || wire == nil {
 		return nil, err
 	}
-	return &Request{Repo: wire.GetRepo(), Ref: wire.GetRef(), Branch: wire.GetBranch(), Depth: int(wire.GetDepth())}, nil
+	return &Request{Repo: wire.GetRepo(), Ref: wire.GetRef(), Branch: wire.GetBranch(), Depth: int(wire.GetDepth()), ServiceCommand: slices.Clone(wire.GetServiceCommand())}, nil
 }
 
 // PreparationStore is the control-plane client that assigns and completes a
@@ -137,6 +138,7 @@ func PreparationToWire(p Preparation) *runtimev1.WorkspacePreparation {
 		PreparedRevision: p.PreparedRevision,
 		Workspace: &apiv1.Workspace{
 			Repo: p.Workspace.Repo, Ref: p.Workspace.Ref, Branch: p.Workspace.Branch, Depth: int32(p.Workspace.Depth), //nolint:gosec // Depth came from an int32 and is bounded by MaxDepth.
+			ServiceCommand: slices.Clone(p.Workspace.ServiceCommand),
 		},
 		DevelopmentImage: p.DevelopmentImage, Platform: p.Platform, PolicyIdentity: p.PolicyIdentity,
 		PayloadImage: p.PayloadImage, Provider: p.Provider, Schema: p.Schema,

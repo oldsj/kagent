@@ -17,6 +17,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/kagent-dev/kagent/go/harness/runtime"
+	"github.com/kagent-dev/kagent/go/harness/runtime/service"
 )
 
 // An Actor has one native turn, including while parked for approval. Keep that
@@ -75,14 +76,16 @@ func admitProcessTree() (_ *processTree, err error) {
 	if err := reapOrphanedZombies(); err != nil {
 		return nil, err
 	}
-	processes, err := readProcesses()
-	if err != nil {
-		return nil, err
-	}
 	// A census cannot exclude future orphans of an existing child tree: once
 	// adopted, their ancestry is lost. The dedicated Actor must have no other
 	// descendants before launch and start no unrelated trees during this turn.
-	if len(descendants(processes, os.Getpid())) != 0 {
+	// The workspace service is the one exception: its supervisor is a child
+	// subreaper, so its orphans never reach the harness.
+	claimed, err := claimedDescendants()
+	if err != nil {
+		return nil, err
+	}
+	if len(claimed) != 0 {
 		return nil, fmt.Errorf("Claude process supervision requires no pre-existing descendant trees")
 	}
 	return &processTree{}, nil
@@ -139,11 +142,11 @@ func (p *processTree) signal(signal unix.Signal) error {
 			failures = append(failures, err)
 		}
 	}
-	processes, err := readProcesses()
+	claimed, err := claimedDescendants()
 	if err != nil {
 		return errors.Join(append(failures, err)...)
 	}
-	for _, process := range descendants(processes, os.Getpid()) {
+	for _, process := range claimed {
 		if p.leader != nil && process.pid == p.leader.pid {
 			continue // Already signaled through the retained launch handle.
 		}
@@ -164,11 +167,10 @@ func (p *processTree) killAndReap() error {
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		processes, err := readProcesses()
+		remaining, err := claimedDescendants()
 		if err != nil {
 			return err
 		}
-		remaining := descendants(processes, os.Getpid())
 		if len(remaining) == 0 {
 			return nil
 		}
@@ -371,10 +373,43 @@ func parseProcessIdentity(pid int, stat string) (processIdentity, error) {
 	return processIdentity{pid: pid, parent: parent, started: started}, nil
 }
 
+// claimedDescendants returns the harness's descendants that belong to the
+// Claude tree: every one except each running workspace service supervisor
+// and its subtree. The scan runs inside the service census, so a service
+// starting meanwhile is never claimed.
+func claimedDescendants() ([]processIdentity, error) {
+	var claimed []processIdentity
+	err := service.Census(func(supervisors []service.Identity) error {
+		processes, err := readProcesses()
+		if err != nil {
+			return err
+		}
+		self := os.Getpid()
+		excluded := map[int]bool{}
+		for _, supervisor := range supervisors {
+			if process, ok := processes[supervisor.PID]; ok && process.parent == self && process.started == supervisor.Started {
+				excluded[supervisor.PID] = true
+			}
+		}
+		claimed = descendantsExcept(processes, self, excluded)
+		return nil
+	})
+	return claimed, err
+}
+
 func descendants(processes map[int]processIdentity, root int) []processIdentity {
+	return descendantsExcept(processes, root, nil)
+}
+
+// descendantsExcept returns root's descendants, leaving out each excluded
+// process and its subtree.
+func descendantsExcept(processes map[int]processIdentity, root int, excluded map[int]bool) []processIdentity {
 	var result []processIdentity
 	parents := []int{root}
 	visited := map[int]bool{root: true}
+	for pid := range excluded {
+		visited[pid] = true
+	}
 	for len(parents) > 0 {
 		parent := parents[0]
 		parents = parents[1:]

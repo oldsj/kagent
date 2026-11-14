@@ -96,6 +96,7 @@ func New(ctx context.Context, cfg Config) (a2asrv.AgentExecutor, error) {
 		// The installer configures each assigned profile itself.
 		input.SetupProfile = ""
 		bootstrap.ServePreparations(ctx, &adapter.SetupInstaller{Input: input, Store: store})
+		bootstrap.ServeService(ctx, workspace.ServiceConfig{Dir: cfg.DataDir + "/workspace-service", Environment: cfg.Environment})
 		turns = bootstrap
 	}
 	executor, err := runtimea2a.New(turns, store, parsed.RuntimeTelemetry, config.EffortLevels...)
