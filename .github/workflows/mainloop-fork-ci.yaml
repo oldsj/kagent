@@ -12,6 +12,12 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request cancels its older run; base-branch pushes each run to the end,
+# since the image workflow and merges read them.
+concurrency:
+  group: fork-ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   fixture-check:
     name: Go build and fixtures
@@ -22,8 +28,6 @@ jobs:
         shell: bash
         working-directory: go
     env:
-      GOFLAGS: -p=2
-      GOMAXPROCS: "2"
       # For a pull request this is GitHub's merge candidate (the head merged into
       # the current base), the same tree the workflow file itself comes from.
       # Testing the bare head would run this file's steps against a tree that

@@ -120,6 +120,23 @@ Common commands:
 | Create a Kind cluster | `make create-kind-cluster` |
 | Install into Kind | `make kagent-cli-install` |
 
+### In a Mainloop workspace (the oldsj/kagent fork)
+
+A Mainloop task workspace is a small microVM, so the fork's CI runs the heavy checks on
+GitHub-hosted runners:
+
+1. **Quick loop in the workspace:** `go build ./...` from `go/`, `go vet` and `go test` for the
+   packages you changed (`-race` only when the change touches concurrency), and generation if you
+   changed an API or protobuf. Do not run `make -C go test`, E2E, Kind or image builds there.
+2. **Push once**, when the quick loop passes. Fork pull requests target `mainloop-substrate-1-0`;
+   `.github/workflows/mainloop-fork-ci.yaml` runs on them, and a newer push cancels the older run.
+3. **Wait without holding the turn:** call Mainloop's `watch_checks` on the pull request and end
+   your turn; one message brings the result and the failed checks' output.
+4. **Escalate** after three failed CI rounds on the same check: report `outcome=blocked`.
+
+Upstream's `ci.yaml` runs only for `main` and `release/**`, and its `blacksmith-*` jobs get no
+runner on the fork, so a fork pull request against `main` stays pending.
+
 ## 8. Contribution Requirements
 
 Follow [CONTRIBUTING.md](CONTRIBUTING.md). In particular:
