@@ -128,6 +128,31 @@ func TestParseJSONLBuiltInToolLifecycle(t *testing.T) {
 	}
 }
 
+// A user message whose content is a plain string (as Claude Code emits for text it replays) carries no
+// tool results and must not fail the turn.
+func TestParseJSONLAcceptsStringUserContent(t *testing.T) {
+	input := strings.Join([]string{
+		`{"type":"system","subtype":"init","session_id":"11111111-1111-4111-8111-111111111111"}`,
+		`{"type":"user","message":{"role":"user","content":"ping"}}`,
+		`{"type":"assistant","message":{"id":"msg","content":[{"type":"text","text":"pong"}]}}`,
+		`{"type":"result","subtype":"success","is_error":false,"result":"pong"}`,
+	}, "\n") + "\n"
+	var last Event
+	if err := parseJSONL(t.Context(), strings.NewReader(input), 4096, map[string]modelUsage{}, nil, func(event Event) error {
+		last = event
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if last.Kind != EventCompleted {
+		t.Fatalf("last event = %#v", last)
+	}
+	bad := `{"type":"user","message":{"content":42}}` + "\n"
+	if err := parseJSONL(t.Context(), strings.NewReader(bad), 4096, map[string]modelUsage{}, nil, func(Event) error { return nil }); err == nil {
+		t.Fatal("numeric content must still be rejected")
+	}
+}
+
 // A task-notification result ends a follow-up iteration of the root
 // conversation, so it supersedes the earlier result instead of being dropped.
 func TestParseJSONLIncludesTaskNotificationTurnResult(t *testing.T) {

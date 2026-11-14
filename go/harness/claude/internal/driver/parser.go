@@ -849,17 +849,29 @@ func (p *parser) parseAssistant(raw json.RawMessage, parent, requestID string, l
 
 func (p *parser) parseUser(ctx context.Context, raw, toolUseResult json.RawMessage, lineTime time.Time, emit func(Event) error) error {
 	var message struct {
-		Content []struct {
-			Type      string          `json:"type"`
-			ToolUseID string          `json:"tool_use_id"`
-			Content   json.RawMessage `json:"content"`
-			IsError   bool            `json:"is_error"`
-		} `json:"content"`
+		Content json.RawMessage `json:"content"`
 	}
 	if err := json.Unmarshal(raw, &message); err != nil {
 		return fmt.Errorf("decode Claude user message: %w", err)
 	}
-	for _, content := range message.Content {
+	// Content is a string for plain user text (the API allows both forms; Claude Code emits it, for
+	// example, for a prompt it replays). Plain text carries no tool results.
+	if c := bytes.TrimSpace(message.Content); len(c) == 0 || c[0] != '[' {
+		if len(c) != 0 && c[0] != '"' && string(c) != "null" {
+			return fmt.Errorf("decode Claude user message: content is neither a string nor a list")
+		}
+		return nil
+	}
+	var blocks []struct {
+		Type      string          `json:"type"`
+		ToolUseID string          `json:"tool_use_id"`
+		Content   json.RawMessage `json:"content"`
+		IsError   bool            `json:"is_error"`
+	}
+	if err := json.Unmarshal(message.Content, &blocks); err != nil {
+		return fmt.Errorf("decode Claude user message: %w", err)
+	}
+	for _, content := range blocks {
 		if content.Type != "tool_result" {
 			continue
 		}
