@@ -311,7 +311,8 @@ remain readable. The claim records when its worker's attempt ends (the attempt's
 deadline, the runtime operation timeout). Until then it also blocks a forced delete.
 Afterwards the worker issues no more runtime work for it, so a forced delete may
 supersede the claim; otherwise a suspend whose outcome stayed unknown would fence
-the Session forever. Deletion calls `DeleteActor` with the recorded UID. Once deletion completes, a late
+the Session forever. A claim without an expiry, taken by an older binary after a
+rollback, never expires. Deletion calls `DeleteActor` with the recorded UID. Once deletion completes, a late
 outcome from the old worker finds the Session deleted and records nothing. The recorded
 actor UID is checked before lifecycle calls; a same-name replacement cannot be
 adopted implicitly.

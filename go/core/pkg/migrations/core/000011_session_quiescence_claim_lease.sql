@@ -7,8 +7,10 @@ ALTER TABLE session_task_event ADD COLUMN quiescence_executor_expires_at TIMESTA
 -- full default interval (DefaultRuntimeOperationTimeout).
 UPDATE session_task_event SET quiescence_executor_expires_at = NOW() + INTERVAL '10 minutes'
 WHERE quiescence_executor_id IS NOT NULL;
+-- One-directional, so an older binary that claims without an expiry still
+-- works on this schema after a rollback. Its claims never expire, as before.
 ALTER TABLE session_task_event ADD CONSTRAINT session_task_event_quiescence_lease
-    CHECK ((quiescence_executor_id IS NULL) = (quiescence_executor_expires_at IS NULL));
+    CHECK (quiescence_executor_expires_at IS NULL OR quiescence_executor_id IS NOT NULL);
 
 -- +goose Down
 ALTER TABLE session_task_event DROP CONSTRAINT session_task_event_quiescence_lease;

@@ -198,6 +198,17 @@ func TestForceDeletionOfAnIdleSuspensionClaim(t *testing.T) {
 		require.ErrorIs(t, stale, ErrNotFound)
 	})
 
+	t.Run("Given an idle suspension claimed by an older binary without an expiry, when a forced delete arrives, assert that it is refused", func(t *testing.T) {
+		client, session := givenClaimedIdleSuspension(t, t.Context())
+		require.NoError(t, execSQL(t.Context(), client.db, `
+			UPDATE session_task_event SET quiescence_executor_expires_at = NULL WHERE sequence = $1
+		`, session.claim.Version))
+
+		_, err := client.BeginSessionOperation(t.Context(), session.Id, apiv1.RuntimeOperation_RUNTIME_OPERATION_DELETE, true)
+
+		require.ErrorIs(t, err, ErrConflict)
+	})
+
 	t.Run("Given an idle suspension claim whose attempt has ended, when a delete arrives without force, assert that it is still refused", func(t *testing.T) {
 		attempt, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 		defer cancel()
