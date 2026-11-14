@@ -157,8 +157,10 @@ func TestIdleLifecycleDoesNotOwnTaskPublication(t *testing.T) {
 			require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, string(task.ID), version, 0))
 
 			entered, release := make(chan struct{}), make(chan struct{})
+			// A failed suspension reads the Actor again to check for a crash.
+			enter := sync.OnceFunc(func() { close(entered) })
 			actors := &retryTestActors{lifecycleTestActors: base, beforeRead: func(ctx context.Context) {
-				close(entered)
+				enter()
 				select {
 				case <-release:
 				case <-ctx.Done():

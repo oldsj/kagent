@@ -332,17 +332,26 @@ stale observation. The recorded UID changes only through a lifecycle operation,
 which also replaces the generation.
 
 An issued idle suspension does not exclude recovery. It cannot finish against the
-crashed Actor, and its worker keeps the claim when suspension fails. Admission
-retires the claim in its transaction, so a late finish records nothing.
+crashed Actor. Admission retires the claim in its transaction, so a late finish
+records nothing.
+
+A failed idle suspension is an unknown outcome only while the Actor may still be
+running. When suspension of a task or activity boundary fails, the worker
+observes the Actor as RevertSession does. If Substrate confirms the crash, the
+worker admits recovery and executes the revert once, so a Session whose worker
+went away resumes from its last durable snapshot without a caller. Otherwise the
+worker keeps the claim. Without this, a crashed Actor's claim would keep the
+Session READY but refuse all input forever.
 
 Execution reverts the same Actor to its last durable snapshot without replaying
 input. A runtime without a durable snapshot returns to its initial state.
 An interrupted revert continues from REVERTING; a lost response can be reconciled
-from SUSPENDED. Nothing retries a recovery in the background. An admitted
-recovery survives API restarts as a durable REVERT operation, and the client
-continues it by retrying RevertSession, as with Create and Delete. While it is
-pending, `GetSession` reports FAILED/REVERT with failure reason `RuntimeCrashed`,
-and interactions are refused because a lifecycle operation is in progress.
+from SUSPENDED. Apart from the idle worker's single attempt, nothing retries a
+recovery in the background. An admitted recovery survives API restarts as a
+durable REVERT operation, and the client continues it by retrying
+RevertSession, as with Create and Delete. While it is pending, `GetSession`
+reports FAILED/REVERT with failure reason `RuntimeCrashed`, and sends are
+refused with ErrorInfo reason `KAGENT_SESSION_CRASHED`.
 
 Delete supersedes an admitted recovery even after an attempt issued the revert.
 Other issued lifecycle work blocks Delete because it may still create something

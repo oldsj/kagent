@@ -572,3 +572,85 @@ func TestDeleteSupersedesCrashRecovery(t *testing.T) {
 		})
 	}
 }
+
+// suspendRefusingActors refuses every suspension, as Substrate does for an
+// Actor that is not running.
+type suspendRefusingActors struct {
+	*recoveryTestActors
+	refusal error
+}
+
+func (a *suspendRefusingActors) SuspendActor(context.Context, string, string) (*ateapipb.Actor, error) {
+	return nil, a.refusal
+}
+
+func TestIdleBoundaryOfCrashedActorAdmitsRecovery(t *testing.T) {
+	refusal := status.Error(codes.FailedPrecondition, "MarkSuspending prerequisite not met (got: ACTOR_STATE_CRASHED, want ACTOR_STATE_RUNNING)")
+
+	t.Run("Given an idle boundary claimed for a crashed Actor, when Substrate refuses its suspension, assert that the Session is reverted and accepts input again", func(t *testing.T) {
+		store, base, session, work := crashedIdleBoundaryFixture(t)
+		actors := &suspendRefusingActors{recoveryTestActors: &recoveryTestActors{lifecycleTestActors: base, revert: base.RevertActor}, refusal: refusal}
+		workflow := NewActorWorkflow(store, actors, make(chan struct{}, 1), time.Minute)
+
+		workflow.quiesceIdleSession(t.Context(), work)
+
+		recovered, err := store.GetSessionByID(t.Context(), session.Id)
+		require.NoError(t, err)
+		require.Equal(t, apiv1.RuntimeState_RUNTIME_STATE_READY, recovered.State)
+		require.Equal(t, apiv1.RuntimeOperation_RUNTIME_OPERATION_NONE, recovered.Operation)
+		actor, err := base.GetActor(t.Context(), "team-a", substrate.ActorName(session.Id))
+		require.NoError(t, err)
+		require.Equal(t, ateapipb.ActorState_ACTOR_STATE_SUSPENDED, actor.Status.State)
+		require.NoError(t, store.ReserveSessionDispatch(t.Context(), session.Id, uuid.New(), uuid.NewString()))
+	})
+
+	t.Run("Given an idle boundary claimed for a crashed Actor, when its revert fails, assert that the Session reads crashed and refuses input until RevertSession completes it", func(t *testing.T) {
+		store, base, session, work := crashedIdleBoundaryFixture(t)
+		failing := &recoveryTestActors{lifecycleTestActors: base, revert: func(context.Context, string, string) (*ateapipb.Actor, error) {
+			return nil, status.Error(codes.Unavailable, "worker unavailable")
+		}}
+		workflow := NewActorWorkflow(store, &suspendRefusingActors{recoveryTestActors: failing, refusal: refusal}, make(chan struct{}, 1), time.Minute)
+
+		workflow.quiesceIdleSession(t.Context(), work)
+
+		crashed, err := store.GetSessionByID(t.Context(), session.Id)
+		require.NoError(t, err)
+		require.Equal(t, apiv1.RuntimeState_RUNTIME_STATE_FAILED, crashed.State)
+		require.Equal(t, database.SessionRuntimeCrashed, crashed.Failure.Reason)
+		require.True(t, database.CrashRecoveryAdmitted(crashed))
+		require.ErrorIs(t, store.ReserveSessionDispatch(t.Context(), session.Id, uuid.New(), uuid.NewString()), database.ErrConflict)
+		retried := NewActorWorkflow(store, &recoveryTestActors{lifecycleTestActors: base, revert: base.RevertActor}, make(chan struct{}, 1), time.Minute)
+		recovered, err := retried.Revert(t.Context(), crashed)
+		require.NoError(t, err)
+		require.Equal(t, apiv1.RuntimeState_RUNTIME_STATE_READY, recovered.State)
+	})
+
+	t.Run("Given an idle boundary claimed for a running Actor, when its suspension fails, assert that the claim keeps input out because the outcome is unknown", func(t *testing.T) {
+		store, base, session, work := crashedIdleBoundaryFixture(t)
+		base.actors[actorKey("team-a", substrate.ActorName(session.Id))].Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
+		actors := &suspendRefusingActors{recoveryTestActors: &recoveryTestActors{lifecycleTestActors: base, revert: base.RevertActor}, refusal: status.Error(codes.Unavailable, "response unavailable")}
+		workflow := NewActorWorkflow(store, actors, make(chan struct{}, 1), time.Minute)
+
+		workflow.quiesceIdleSession(t.Context(), work)
+
+		ready, err := store.GetSessionByID(t.Context(), session.Id)
+		require.NoError(t, err)
+		require.Equal(t, apiv1.RuntimeState_RUNTIME_STATE_READY, ready.State)
+		require.ErrorIs(t, store.ReserveSessionDispatch(t.Context(), session.Id, uuid.New(), uuid.NewString()), database.ErrDispatchBusy)
+	})
+}
+
+// crashedIdleBoundaryFixture settles the crashed turn's task and claims its
+// idle boundary, as the quiescence worker does before it suspends the Actor.
+func crashedIdleBoundaryFixture(t *testing.T) (*lifecycleTestStore, *lifecycleTestActors, *apiv1.Session, *database.SessionQuiescence) {
+	t.Helper()
+	store, actors, session, task, version := crashedTurnFixture(t)
+	task.Status.State = a2a.TaskStateCompleted
+	hash := sha256.Sum256([]byte("completed"))
+	version, err := store.UpdateSessionTask(t.Context(), session.Id, version, hash[:], task, task, "")
+	require.NoError(t, err)
+	require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, string(task.ID), version, 0))
+	work, err := store.ClaimSessionQuiescence(t.Context())
+	require.NoError(t, err)
+	return store, actors, session, work
+}
