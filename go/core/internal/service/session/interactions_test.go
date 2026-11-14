@@ -354,3 +354,22 @@ func TestScheduledMessageIDPrefixCannotStartAConversation(t *testing.T) {
 	require.ErrorIs(t, err, a2atype.ErrInvalidParams)
 	require.Nil(t, store.createInput)
 }
+
+func TestPrepareSendRefusesCrashedSession(t *testing.T) {
+	t.Run("Given a Session whose crash recovery is admitted, when a caller sends input, assert that the refusal names the crash", func(t *testing.T) {
+		id := uuid.NewString()
+		agent := types.NamespacedName{Namespace: "team-a", Name: "assistant"}
+		stored := &apiv1.Session{Id: id, ContextId: id, State: apiv1.RuntimeState_RUNTIME_STATE_FAILED,
+			Operation: apiv1.RuntimeOperation_RUNTIME_OPERATION_REVERT,
+			Agent:     &apiv1.AgentProvenance{Ref: &apiv1.ResourceReference{Namespace: agent.Namespace, Name: agent.Name}}}
+		tasks := &interactionTestStore{}
+		service := NewInteractionService(tasks, nil, NewService(&serviceTestStore{getResult: stored}, serviceTestAuthorizer{}, nil), false)
+		message := a2atype.NewMessage(a2atype.MessageRoleUser, a2atype.NewTextPart("hello"))
+		message.ContextID = id
+
+		_, err := service.PrepareSend(serviceTestContext("alice"), agent, &a2atype.SendMessageRequest{Message: message})
+
+		require.ErrorIs(t, err, ErrSessionCrashed)
+		require.Empty(t, tasks.reservedIDs, "no dispatch is reserved for a crashed Session")
+	})
+}

@@ -306,6 +306,12 @@ func (s *InteractionService) reserveDispatch(ctx context.Context, sessionID, ini
 var ErrSendNotAccepted = a2atype.NewError(a2atype.ErrUnsupportedOperation, "input was not accepted; retry after the session becomes available").
 	WithErrorInfoMeta(map[string]string{"reason": apia2a.SendNotAcceptedReason, "retryAfterMs": "100"})
 
+// ErrSessionCrashed refuses input to a Session whose runtime Actor crashed.
+// Recovery reverts it to its last snapshot; RevertSession continues a recovery
+// that has not finished.
+var ErrSessionCrashed = a2atype.NewError(a2atype.ErrUnsupportedOperation, "Session runtime crashed; RevertSession restores its last snapshot").
+	WithErrorInfoMeta(map[string]string{"reason": apia2a.SessionCrashedReason})
+
 // RevokeSend releases an unused attempt. A true result proves that the input was
 // not accepted, allowing the gateway to distinguish rejection from uncertainty.
 func (s *InteractionService) RevokeSend(ctx context.Context, agent types.NamespacedName, message *a2atype.Message, id uuid.UUID) (bool, error) {
@@ -497,6 +503,9 @@ func (s *InteractionService) resolveSend(ctx context.Context, agent types.Namesp
 		return nil, a2atype.NewError(a2atype.ErrInvalidRequest, "message context does not match task")
 	}
 	req.Message.ContextID = session.ContextId
+	if database.CrashRecoveryAdmitted(session) {
+		return nil, ErrSessionCrashed
+	}
 	if session.State != apiv1.RuntimeState_RUNTIME_STATE_READY || session.Operation != apiv1.RuntimeOperation_RUNTIME_OPERATION_NONE {
 		return nil, a2atype.NewError(a2atype.ErrUnsupportedOperation, "Session cannot accept work during a lifecycle operation")
 	}
