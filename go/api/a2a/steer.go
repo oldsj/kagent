@@ -23,6 +23,9 @@ const (
 	// SendNotAcceptedReason is the ErrorInfo reason of input that was not
 	// accepted and left no record.
 	SendNotAcceptedReason = "KAGENT_SEND_NOT_ACCEPTED"
+	// SessionCrashedReason is the ErrorInfo reason of input refused because
+	// the Session's runtime crashed and has not been reverted yet.
+	SessionCrashedReason = "KAGENT_SESSION_CRASHED"
 
 	// SteerTaskNotRunning refuses a steer into a task with no running turn.
 	SteerTaskNotRunning = "steer_task_not_running"

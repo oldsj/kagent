@@ -130,6 +130,7 @@ func TestSDKDriverSteering(t *testing.T) {
 			outcomes <- steerResult{outcome, err}
 		}()
 		require.Eventually(t, func() bool { return actor.claude.userOps() == 1 }, 5*time.Second, 10*time.Millisecond)
+		awaitSteerable(t, actor.driver)
 		require.NoError(t, actor.driver.Steer(t.Context(), runtime.Steer{TaskID: steerTaskID, MessageID: "m-steer", Text: "use main"}))
 		require.Eventually(t, func() bool { return actor.claude.userOps() == 2 }, 5*time.Second, 10*time.Millisecond)
 
@@ -141,7 +142,10 @@ func TestSDKDriverSteering(t *testing.T) {
 		require.Equal(t, []string{"m-steer"}, sink.unconsumed)
 		err := actor.driver.Steer(t.Context(), runtime.Steer{TaskID: steerTaskID, MessageID: "m-late", Text: "x"})
 		require.ErrorIs(t, err, runtime.SteerTaskNotRunning)
-		_ = result.outcome.Pending.Cancel(context.Background(), sink)
+		// The cleanup replay resumes a transcript that holds the call without
+		// a result, so Claude runs its hook again and takes the stop decision.
+		actor.claude.dangling = true
+		require.NoError(t, result.outcome.Pending.Cancel(t.Context(), sink))
 	})
 
 	t.Run("Given a turn that owns a queued steer, when it is canceled, assert that it interrupts until the steer is consumed", func(t *testing.T) {
@@ -262,7 +266,8 @@ func newSteerFixture(t *testing.T, onUser func(*steerScript, *sdkrunnertest.Brid
 	return &steerFixture{t: t, driver: driver, script: script, sink: &steerSink{}, ctx: ctx, cancel: cancel, outcomes: make(chan steerResult, 1)}
 }
 
-// WhenTurnRuns starts the A2A turn and waits until the bridge has its prompt.
+// WhenTurnRuns starts the A2A turn and waits until the bridge has its prompt
+// and the turn accepts steers.
 func (f *steerFixture) WhenTurnRuns() {
 	f.t.Helper()
 	go func() {
@@ -270,6 +275,19 @@ func (f *steerFixture) WhenTurnRuns() {
 		f.outcomes <- steerResult{outcome, err}
 	}()
 	f.awaitSubmitted()
+	awaitSteerable(f.t, f.driver)
+}
+
+// awaitSteerable waits until d's running turn accepts steers. Claude can see a
+// turn's prompt before SubmitMessage returns to Run, which opens steering only
+// after that.
+func awaitSteerable(t *testing.T, d *SDKDriver) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		d.steerMu.Lock()
+		defer d.steerMu.Unlock()
+		return d.steering != nil
+	}, 5*time.Second, time.Millisecond, "the turn never accepted steers")
 }
 
 // WhenSteered steers the turn; a new message is awaited at the bridge.

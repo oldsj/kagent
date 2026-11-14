@@ -91,6 +91,9 @@ func (w *ActorWorkflow) quiesceIdleSession(ctx context.Context, work *database.S
 	snapshot, err := w.Quiesce(runtimeCtx, work.Session)
 	cancel()
 	if err != nil {
+		if w.recoverCrashedRuntime(ctx, work.Session) {
+			return
+		}
 		// No timeout-based takeover: the Substrate request may still complete.
 		// Keep admission closed until its outcome can be safely reconciled.
 		logging.FromContext(ctx).ErrorContext(ctx, "runtime boundary outcome unknown", "session_id", work.Session.Id, "version", work.Version, "error", err)
@@ -131,6 +134,9 @@ func (w *ActorWorkflow) quiesceInactiveSession(ctx context.Context, work *databa
 		return
 	}
 	if err != nil {
+		if w.recoverCrashedRuntime(ctx, work.Session) {
+			return
+		}
 		// No timeout-based takeover: the Substrate request may still complete.
 		// The claim keeps admission closed until recovery or deletion retires it.
 		logging.FromContext(ctx).ErrorContext(ctx, "runtime activity boundary outcome unknown", "session_id", work.Session.Id, "error", err)
@@ -184,6 +190,28 @@ func (w *ActorWorkflow) deferInactiveSession(ctx context.Context, work *database
 		case <-time.After(delay):
 		}
 	}
+}
+
+// recoverCrashedRuntime settles a failed suspension whose Actor crashed. A
+// crashed Actor never suspends, so its claim would otherwise keep admission
+// closed forever while the Session still reads READY. Admitting crash recovery
+// retires the claim and fails the Session with SessionRuntimeCrashed; the revert
+// then restores the last durable snapshot. A revert that fails here stays
+// admitted, and RevertSession continues it. It reports whether Substrate
+// confirmed the crash; any other failure keeps the outcome unknown.
+func (w *ActorWorkflow) recoverCrashedRuntime(ctx context.Context, session *apiv1.Session) bool {
+	observeCtx, cancel := context.WithTimeout(ctx, w.operationTimeout)
+	observed, err := w.observeCrash(observeCtx, session)
+	cancel()
+	if err != nil || !observed.crashed() {
+		return false
+	}
+	logger := logging.FromContext(ctx)
+	logger.WarnContext(ctx, "runtime Actor crashed at an idle boundary; reverting", "session_id", session.Id)
+	if _, err := w.Revert(ctx, session); err != nil {
+		logger.ErrorContext(ctx, "revert crashed runtime", "session_id", session.Id, "error", err)
+	}
+	return true
 }
 
 func (w *ActorWorkflow) suspendInactiveRuntime(ctx context.Context, session *apiv1.Session) error {
