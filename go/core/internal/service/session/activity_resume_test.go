@@ -1,6 +1,8 @@
 package session
 
 import (
+	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -36,4 +38,45 @@ func TestActivityBoundaryOfResumingActor(t *testing.T) {
 		workflow.quiesceInactiveSession(t.Context(), retried)
 		require.Equal(t, ateapipb.ActorState_ACTOR_STATE_SUSPENDED, actor.Status.State)
 	})
+}
+
+func TestDeferredActivityBoundaryWakesWorkers(t *testing.T) {
+	t.Run("Given workers that recover only hourly, when an idle report finds the woken Actor still resuming, assert that the Actor is suspended once the deferral comes due", func(t *testing.T) {
+		store, session := lifecycleFixture(t)
+		base := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
+		session, err := NewActorWorkflow(store, base, make(chan struct{}, 1), time.Hour).Create(t.Context(), session)
+		require.NoError(t, err)
+		key := actorKey("team-a", substrate.ActorName(session.Id))
+		base.mu.Lock()
+		base.actors[key].Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
+		base.mu.Unlock()
+		actors := &resumingOnceActors{lifecycleTestActors: base}
+		wake := make(chan struct{}, 1)
+		startQuiescenceWorker(t, NewActorWorkflow(store, actors, wake, time.Hour))
+
+		require.NoError(t, store.RecordRuntimeActivity(t.Context(), session.Id, false, 0, 0))
+		wake <- struct{}{}
+
+		require.Eventually(t, func() bool {
+			base.mu.Lock()
+			defer base.mu.Unlock()
+			return base.actors[key].Status.State == ateapipb.ActorState_ACTOR_STATE_SUSPENDED
+		}, 5*time.Second, 20*time.Millisecond, "the deferred boundary is retried without waiting for recovery")
+		require.True(t, actors.resumed.Load(), "the first claim saw the Actor resuming")
+	})
+}
+
+// resumingOnceActors reports the Actor as resuming the first time it is read,
+// as an idle report that arrives before the resume finishes sees it.
+type resumingOnceActors struct {
+	*lifecycleTestActors
+	resumed atomic.Bool
+}
+
+func (a *resumingOnceActors) GetActor(ctx context.Context, atespace, name string) (*ateapipb.Actor, error) {
+	actor, err := a.lifecycleTestActors.GetActor(ctx, atespace, name)
+	if err == nil && !a.resumed.Swap(true) {
+		actor.Status.State = ateapipb.ActorState_ACTOR_STATE_RESUMING
+	}
+	return actor, err
 }

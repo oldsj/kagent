@@ -165,7 +165,16 @@ func (w *ActorWorkflow) deferInactiveSession(ctx context.Context, work *database
 		deferCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		err := w.store.DeferSessionActivityQuiescence(deferCtx, work, resumingRetry)
 		cancel()
-		if err == nil || errors.Is(err, database.ErrNotFound) {
+		if errors.Is(err, database.ErrNotFound) {
+			return
+		}
+		if err == nil {
+			logging.FromContext(ctx).InfoContext(ctx, "runtime Actor still resuming; retrying its activity boundary", "session_id", work.Session.Id, "retry", resumingRetry)
+			// Idle workers wait the recovery interval for boundaries that are
+			// not due yet, so wake one when this one comes due. The timer starts
+			// after the deferral committed, so it never fires before the
+			// boundary's database deadline.
+			time.AfterFunc(resumingRetry, w.wakeQuiescence)
 			return
 		}
 		logging.FromContext(ctx).ErrorContext(ctx, "defer runtime activity boundary", "session_id", work.Session.Id, "error", err)
