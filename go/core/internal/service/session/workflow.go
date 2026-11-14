@@ -22,6 +22,7 @@ type workflowStore interface {
 	FinishSessionQuiescence(context.Context, *database.SessionQuiescence, *database.SessionTaskSnapshot) error
 	ClaimSessionActivityQuiescence(context.Context) (*database.SessionActivityQuiescence, error)
 	FinishSessionActivityQuiescence(context.Context, *database.SessionActivityQuiescence) error
+	DeferSessionActivityQuiescence(context.Context, *database.SessionActivityQuiescence, time.Duration) error
 	GetSessionForRuntime(context.Context, string, string) (*apiv1.Session, error)
 	GetSessionCheckpointSnapshot(context.Context, string, string) (*database.SessionTaskSnapshot, string, error)
 	GetRuntimeRevision(context.Context, string) (*database.RuntimeRevision, error)

@@ -125,6 +125,11 @@ func (w *ActorWorkflow) quiesceInactiveSession(ctx context.Context, work *databa
 	runtimeCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	err := w.suspendInactiveRuntime(runtimeCtx, work.Session)
 	cancel()
+	if errors.Is(err, errActorResuming) {
+		// Nothing was issued, so the claim can be released safely.
+		w.deferInactiveSession(ctx, work)
+		return
+	}
 	if err != nil {
 		// No timeout-based takeover: the Substrate request may still complete.
 		// The claim keeps admission closed until recovery or deletion retires it.
@@ -147,6 +152,31 @@ func (w *ActorWorkflow) quiesceInactiveSession(ctx context.Context, work *databa
 	}
 }
 
+// resumingRetry is how soon an activity boundary is claimed again after it
+// found its Actor still resuming. A resume normally takes well under a second.
+const resumingRetry = time.Second
+
+// errActorResuming reports an Actor that is not running yet. No runtime
+// call was issued, so its boundary is retried rather than settled.
+var errActorResuming = errors.New("runtime Actor is still resuming")
+
+func (w *ActorWorkflow) deferInactiveSession(ctx context.Context, work *database.SessionActivityQuiescence) {
+	for delay := 100 * time.Millisecond; ; delay = min(2*delay, 5*time.Second) {
+		deferCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		err := w.store.DeferSessionActivityQuiescence(deferCtx, work, resumingRetry)
+		cancel()
+		if err == nil || errors.Is(err, database.ErrNotFound) {
+			return
+		}
+		logging.FromContext(ctx).ErrorContext(ctx, "defer runtime activity boundary", "session_id", work.Session.Id, "error", err)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(delay):
+		}
+	}
+}
+
 func (w *ActorWorkflow) suspendInactiveRuntime(ctx context.Context, session *apiv1.Session) error {
 	revision, err := w.store.GetRuntimeRevision(ctx, session.GetPreparedRevision())
 	if err != nil {
@@ -159,7 +189,11 @@ func (w *ActorWorkflow) suspendInactiveRuntime(ctx context.Context, session *api
 	if err := w.verifyActor(ctx, session, revision, actor); err != nil {
 		return err
 	}
-	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+	switch actor.GetStatus().GetState() {
+	case ateapipb.ActorState_ACTOR_STATE_RUNNING:
+	case ateapipb.ActorState_ACTOR_STATE_RESUMING:
+		return errActorResuming
+	default:
 		return nil
 	}
 	_, err = w.Quiesce(ctx, session)
