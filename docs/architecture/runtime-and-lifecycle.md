@@ -642,7 +642,9 @@ The agent sees the service in `/data/workspace-service`:
   `state` stays `running` while any process of the service lives, even after the
   command's own process has exited.
 - `log` holds the service's stdout and stderr. When it would pass 8 MiB it is
-  rotated to `log.1`, so the output uses at most 16 MiB of `/data`.
+  rotated to `log.1`, so the output uses at most 16 MiB of `/data`. Each start
+  writes a `== workspace service started` line naming the time and command, and
+  each file that rotation starts repeats it, so heavy output never rotates it away.
 
 The harness adds a short note to the agent's instructions whenever the Harness has
 Git, so the agent knows to check the status file before it starts a server of its

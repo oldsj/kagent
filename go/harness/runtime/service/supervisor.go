@@ -66,7 +66,11 @@ func supervise(dir string, command []string) error {
 	}
 	signals := make(chan os.Signal, 2)
 	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
-	_, _ = fmt.Fprintf(log, "== workspace service started %s: %q\n", time.Now().UTC().Format(time.RFC3339), command)
+	header := fmt.Sprintf("== workspace service started %s: %q\n", time.Now().UTC().Format(time.RFC3339), command)
+	_, _ = io.WriteString(log, header)
+	// Every later file starts with the header too, so heavy output never
+	// rotates the record of this start out of both files.
+	log.header = header
 	wd, err := os.Getwd()
 	if err != nil {
 		return err
@@ -147,6 +151,8 @@ type rotatingLog struct {
 	max  int64
 	file *os.File
 	size int64
+	// header, when set, opens each file that rotation starts.
+	header string
 }
 
 func openRotatingLog(dir string, max int64) (*rotatingLog, error) {
@@ -192,7 +198,15 @@ func (l *rotatingLog) rotate() error {
 	if err := os.Rename(filepath.Join(l.dir, LogFile), filepath.Join(l.dir, RotatedLogFile)); err != nil {
 		return err
 	}
-	return l.open()
+	if err := l.open(); err != nil {
+		return err
+	}
+	if l.header == "" {
+		return nil
+	}
+	n, err := io.WriteString(l.file, l.header)
+	l.size += int64(n)
+	return err
 }
 
 func (l *rotatingLog) Close() error { return l.file.Close() }

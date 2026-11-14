@@ -84,6 +84,33 @@ func TestWorkspaceService(t *testing.T) {
 }
 
 func TestRotatingLog(t *testing.T) {
+	t.Run("Given a service's start header, when output rotates the log past both files, assert that the newest file still opens with the header", func(t *testing.T) {
+		dir := t.TempDir()
+		log, err := openRotatingLog(dir, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		log.header = "== started\n"
+		if _, err := log.Write([]byte(log.header)); err != nil {
+			t.Fatal(err)
+		}
+
+		for range 20 {
+			if _, err := log.Write([]byte("0123456789abcdef\n")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := log.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		for _, name := range []string{LogFile, RotatedLogFile} {
+			if got := readFile(t, filepath.Join(dir, name)); !strings.HasPrefix(got, "== started\n") {
+				t.Fatalf("%s = %q, want it to open with the start header", name, got)
+			}
+		}
+	})
+
 	t.Run("Given a log at its cap, when more output arrives, assert that the log rotates once and keeps two files", func(t *testing.T) {
 		dir := t.TempDir()
 		log, err := openRotatingLog(dir, 10)
