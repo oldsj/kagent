@@ -126,7 +126,8 @@ outstanding dispatch, or unfinished native cleanup, without entering `DELETING`.
 `INPUT_REQUIRED` and `AUTH_REQUIRED` tasks are waiting; their state alone does not
 block deletion. Set `force: true` (CLI: `kagent session delete ID --force`) to
 bypass these activity checks. Authorization and checks for conflicting checkpoint
-or lifecycle work still apply.
+or lifecycle work still apply. An idle suspension claim blocks a forced delete only
+while its worker's attempt can still be running (see below).
 
 Both modes call Substrate `DeleteActor` directly with a UID precondition, without
 suspension or a final snapshot. An Actor in `RESUMING` does not need to resume first.
@@ -304,8 +305,15 @@ Other background workers and connection-pool idle settings still affect whether
 PostgreSQL can become idle.
 
 Unclaimed idle work survives API restarts. A claim for possibly issued runtime work
-never expires: losing the worker does not prove that the suspend stopped. Uncertain
-claims still block new work, but completed results remain readable. The recorded
+is never reassigned to another worker: losing the worker does not prove that the
+suspend stopped. Uncertain claims still block new work, but completed results
+remain readable. The claim records when its worker's attempt ends (the attempt's
+deadline, the runtime operation timeout). Until then it also blocks a forced delete.
+Afterwards the worker issues no more runtime work for it, so a forced delete may
+supersede the claim; otherwise a suspend whose outcome stayed unknown would fence
+the Session forever. A claim without an expiry, taken by an older binary after a
+rollback, never expires. Deletion calls `DeleteActor` with the recorded UID. Once deletion completes, a late
+outcome from the old worker finds the Session deleted and records nothing. The recorded
 actor UID is checked before lifecycle calls; a same-name replacement cannot be
 adopted implicitly.
 

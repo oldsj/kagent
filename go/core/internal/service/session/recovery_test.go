@@ -592,7 +592,7 @@ func TestIdleBoundaryOfCrashedActorAdmitsRecovery(t *testing.T) {
 		actors := &suspendRefusingActors{recoveryTestActors: &recoveryTestActors{lifecycleTestActors: base, revert: base.RevertActor}, refusal: refusal}
 		workflow := NewActorWorkflow(store, actors, make(chan struct{}, 1), time.Minute)
 
-		workflow.quiesceIdleSession(t.Context(), work)
+		workflow.quiesceIdleSession(t.Context(), t.Context(), work)
 
 		recovered, err := store.GetSessionByID(t.Context(), session.Id)
 		require.NoError(t, err)
@@ -611,7 +611,7 @@ func TestIdleBoundaryOfCrashedActorAdmitsRecovery(t *testing.T) {
 		}}
 		workflow := NewActorWorkflow(store, &suspendRefusingActors{recoveryTestActors: failing, refusal: refusal}, make(chan struct{}, 1), time.Minute)
 
-		workflow.quiesceIdleSession(t.Context(), work)
+		workflow.quiesceIdleSession(t.Context(), t.Context(), work)
 
 		crashed, err := store.GetSessionByID(t.Context(), session.Id)
 		require.NoError(t, err)
@@ -631,7 +631,7 @@ func TestIdleBoundaryOfCrashedActorAdmitsRecovery(t *testing.T) {
 		actors := &suspendRefusingActors{recoveryTestActors: &recoveryTestActors{lifecycleTestActors: base, revert: base.RevertActor}, refusal: status.Error(codes.Unavailable, "response unavailable")}
 		workflow := NewActorWorkflow(store, actors, make(chan struct{}, 1), time.Minute)
 
-		workflow.quiesceIdleSession(t.Context(), work)
+		workflow.quiesceIdleSession(t.Context(), t.Context(), work)
 
 		ready, err := store.GetSessionByID(t.Context(), session.Id)
 		require.NoError(t, err)

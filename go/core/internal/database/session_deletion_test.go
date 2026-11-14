@@ -1,8 +1,10 @@
 package database
 
 import (
+	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/google/uuid"
@@ -165,17 +167,79 @@ func TestForceDeletionRevokesDispatch(t *testing.T) {
 	finishAdmittedDeletion(t, client, operation)
 }
 
-func TestForceDeletionRetainsIdleLifecycleOwnership(t *testing.T) {
+func TestForceDeletionOfAnIdleSuspensionClaim(t *testing.T) {
+	t.Run("Given an idle suspension a worker is still attempting, when a forced delete arrives, assert that it is refused and the session stays ready", func(t *testing.T) {
+		client, session := givenClaimedIdleSuspension(t, t.Context())
+
+		_, err := client.BeginSessionOperation(t.Context(), session.Id, apiv1.RuntimeOperation_RUNTIME_OPERATION_DELETE, true)
+
+		require.ErrorIs(t, err, ErrConflict)
+		current, err := client.GetSessionByID(t.Context(), session.Id)
+		require.NoError(t, err)
+		require.Equal(t, apiv1.RuntimeState_RUNTIME_STATE_READY, current.State)
+	})
+
+	t.Run("Given an idle suspension claim whose attempt has ended, when a forced delete is retried, assert that it is admitted and the stale claim cannot finish", func(t *testing.T) {
+		attempt, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+		defer cancel()
+		client, session := givenClaimedIdleSuspension(t, attempt)
+		_, err := client.BeginSessionOperation(t.Context(), session.Id, apiv1.RuntimeOperation_RUNTIME_OPERATION_DELETE, true)
+		require.ErrorIs(t, err, ErrConflict, "the claim holds while its attempt runs")
+		<-attempt.Done()
+
+		var operation *SessionOperation
+		require.Eventually(t, func() bool {
+			operation, err = client.BeginSessionOperation(t.Context(), session.Id, apiv1.RuntimeOperation_RUNTIME_OPERATION_DELETE, true)
+			return err == nil
+		}, 5*time.Second, 25*time.Millisecond, "last error: %v", err)
+
+		finishAdmittedDeletion(t, client, operation)
+		stale := client.FinishSessionQuiescence(t.Context(), session.claim, &SessionTaskSnapshot{Atespace: "team-a", URI: "late", Fidelity: "SNAPSHOT_FIDELITY_VOLUMES"})
+		require.ErrorIs(t, stale, ErrNotFound)
+	})
+
+	t.Run("Given an idle suspension claimed by an older binary without an expiry, when a forced delete arrives, assert that it is refused", func(t *testing.T) {
+		client, session := givenClaimedIdleSuspension(t, t.Context())
+		require.NoError(t, execSQL(t.Context(), client.db, `
+			UPDATE session_task_event SET quiescence_executor_expires_at = NULL WHERE sequence = $1
+		`, session.claim.Version))
+
+		_, err := client.BeginSessionOperation(t.Context(), session.Id, apiv1.RuntimeOperation_RUNTIME_OPERATION_DELETE, true)
+
+		require.ErrorIs(t, err, ErrConflict)
+	})
+
+	t.Run("Given an idle suspension claim whose attempt has ended, when a delete arrives without force, assert that it is still refused", func(t *testing.T) {
+		attempt, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+		defer cancel()
+		client, session := givenClaimedIdleSuspension(t, attempt)
+		<-attempt.Done()
+		time.Sleep(100 * time.Millisecond)
+
+		_, err := client.BeginSessionOperation(t.Context(), session.Id, apiv1.RuntimeOperation_RUNTIME_OPERATION_DELETE, false)
+
+		require.Error(t, err)
+		current, err := client.GetSessionByID(t.Context(), session.Id)
+		require.NoError(t, err)
+		require.Equal(t, apiv1.RuntimeState_RUNTIME_STATE_READY, current.State)
+	})
+}
+
+type claimedSession struct {
+	*apiv1.Session
+	claim *SessionQuiescence
+}
+
+// givenClaimedIdleSuspension settles a completed turn and claims its idle
+// suspension under attempt, as the quiescence worker does.
+func givenClaimedIdleSuspension(t *testing.T, attempt context.Context) (*Client, claimedSession) {
+	t.Helper()
 	client, session, task, version := deletionTaskFixture(t, a2a.TaskStateCompleted)
 	require.NoError(t, client.SettleSessionTask(t.Context(), session.Id, string(task.ID), version, 0))
-	work, err := client.ClaimSessionQuiescence(t.Context())
+	work, err := client.ClaimSessionQuiescence(attempt)
 	require.NoError(t, err)
 	require.Equal(t, session.Id, work.Session.Id)
-	_, err = client.BeginSessionOperation(t.Context(), session.Id, apiv1.RuntimeOperation_RUNTIME_OPERATION_DELETE, true)
-	require.ErrorIs(t, err, ErrConflict)
-	current, err := client.GetSessionByID(t.Context(), session.Id)
-	require.NoError(t, err)
-	require.Equal(t, apiv1.RuntimeState_RUNTIME_STATE_READY, current.State)
+	return client, claimedSession{Session: session, claim: work}
 }
 
 func TestDeletionSerializesWithMessageAdmission(t *testing.T) {

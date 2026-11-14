@@ -43,14 +43,19 @@ func (w *ActorWorkflow) Start(ctx context.Context) error {
 			timer := time.NewTimer(w.recoveryInterval)
 			defer timer.Stop()
 			for ctx.Err() == nil {
-				work, err := w.store.ClaimSessionQuiescence(ctx)
+				// The claim lasts as long as this attempt, so take it inside the
+				// attempt's deadline and issue the runtime work under the same one.
+				attempt, cancelAttempt := context.WithTimeout(ctx, w.operationTimeout)
+				work, err := w.store.ClaimSessionQuiescence(attempt)
 				if err == nil {
 					// Hand off a hint before runtime I/O so a single settlement
 					// burst can enlist all workers, even if this actor is slow.
 					w.wakeQuiescence()
-					w.quiesceIdleSession(ctx, work)
+					w.quiesceIdleSession(ctx, attempt, work)
+					cancelAttempt()
 					continue
 				}
+				cancelAttempt()
 				if errors.Is(err, database.ErrNotFound) {
 					activity, activityErr := w.store.ClaimSessionActivityQuiescence(ctx)
 					if activityErr == nil {
@@ -86,16 +91,17 @@ func (w *ActorWorkflow) Start(ctx context.Context) error {
 	return nil
 }
 
-func (w *ActorWorkflow) quiesceIdleSession(ctx context.Context, work *database.SessionQuiescence) {
-	runtimeCtx, cancel := context.WithTimeout(ctx, w.operationTimeout)
-	snapshot, err := w.Quiesce(runtimeCtx, work.Session)
-	cancel()
+// quiesceIdleSession suspends a claimed session within attempt, the deadline
+// its claim was taken under. Outcome recording and crash recovery run after it.
+func (w *ActorWorkflow) quiesceIdleSession(ctx, attempt context.Context, work *database.SessionQuiescence) {
+	snapshot, err := w.Quiesce(attempt, work.Session)
 	if err != nil {
 		if w.recoverCrashedRuntime(ctx, work.Session) {
 			return
 		}
-		// No timeout-based takeover: the Substrate request may still complete.
-		// Keep admission closed until its outcome can be safely reconciled.
+		// No takeover by another worker: the Substrate request may still
+		// complete. Keep admission closed until its outcome can be safely
+		// reconciled; once the claim expires, a forced delete may supersede it.
 		logging.FromContext(ctx).ErrorContext(ctx, "runtime boundary outcome unknown", "session_id", work.Session.Id, "version", work.Version, "error", err)
 		return
 	}
