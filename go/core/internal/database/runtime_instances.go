@@ -135,16 +135,21 @@ func beginRuntimeOperation(ctx context.Context, tx pgx.Tx, row runtimeInstanceRo
 // an abandoned attempt after the bound without a sweeper.
 const DefaultRuntimeOperationTimeout = 10 * time.Minute
 
+// attemptLifetime is how long an execution claim taken with ctx lasts. The claim
+// lasts as long as the attempt: a shorter claim could let other work start while
+// this executor is still inside a Substrate call.
+func attemptLifetime(ctx context.Context) time.Duration {
+	if deadline, ok := ctx.Deadline(); ok {
+		return time.Until(deadline)
+	}
+	return DefaultRuntimeOperationTimeout
+}
+
 func (c *Client) claimRuntimeOperation(ctx context.Context, id, kind string, operationID, executorID uuid.UUID) (bool, error) {
 	if operationID == uuid.Nil || executorID == uuid.Nil {
 		return false, ErrFailedPrecondition
 	}
-	lifetime := DefaultRuntimeOperationTimeout
-	if deadline, ok := ctx.Deadline(); ok {
-		// The claim lasts as long as the attempt: a shorter claim could let a
-		// second executor start while this one is still inside a Substrate call.
-		lifetime = time.Until(deadline)
-	}
+	lifetime := attemptLifetime(ctx)
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}

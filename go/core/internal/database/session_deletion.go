@@ -58,7 +58,9 @@ func beginSessionDeletion(ctx context.Context, tx pgx.Tx, row sessionRow, reason
 }
 
 // admitForcedSessionDeletion checks work that force must not interrupt:
-// checkpoint snapshot copying and idle suspension already claimed by a worker.
+// checkpoint snapshot copying and idle suspension a worker is still attempting.
+// An expired idle claim no longer blocks: its attempt has ended, and an outcome
+// it left unknown would otherwise fence the session forever.
 // It skips turn, dispatch, and runtime-cleanup checks. These are kagent work
 // records, not the Substrate actor state; RESUMING alone does not block deletion.
 // The caller holds the session lock. runtimeOperationNeeded checks other
@@ -67,7 +69,7 @@ func admitForcedSessionDeletion(ctx context.Context, tx pgx.Tx, row sessionRow) 
 	busy, err := queryOne(ctx, tx, `
 		SELECT EXISTS (SELECT 1 FROM session_checkpoint WHERE source_session_id = $1 AND state = 'CREATING')
 		    OR EXISTS (SELECT 1 FROM session_task_event WHERE history_id = $2
-		        AND quiescence_pending AND quiescence_executor_id IS NOT NULL)
+		        AND quiescence_pending AND quiescence_executor_expires_at > clock_timestamp())
 	`, pgx.RowTo[bool], row.ID, row.HistoryID)
 	if err != nil {
 		return err

@@ -52,7 +52,10 @@ func (c *Client) HasPendingSessionQuiescence(ctx context.Context) (bool, error) 
 // checkpoints, and explicit lifecycle operations until it finishes. Missing work,
 // including boundaries before their durable quiescence deadline, returns ErrNotFound.
 // Reported runtime activity holds the claim until its idle deadline, so a turn
-// that settles while a client is attached does not suspend the runtime. Uncertain issued work is never reassigned after a timeout.
+// that settles while a client is attached does not suspend the runtime. Uncertain
+// issued work is never reassigned after a timeout. The claim lasts as long as the
+// attempt (ctx's deadline, or DefaultRuntimeOperationTimeout): afterwards only a
+// forced delete may supersede it, since the worker has stopped issuing runtime work.
 func (c *Client) ClaimSessionQuiescence(ctx context.Context) (*SessionQuiescence, error) {
 	var result *SessionQuiescence
 	err := c.withTx(ctx, func(tx pgx.Tx) error {
@@ -98,10 +101,12 @@ func (c *Client) ClaimSessionQuiescence(ctx context.Context) (*SessionQuiescence
 			return err
 		}
 		result = &SessionQuiescence{Session: value, TaskID: row.TaskID, State: task.Status.State, Version: row.Sequence, ExecutorID: uuid.New()}
+		lifetime := attemptLifetime(ctx)
 		// Recheck after locking: the candidate query's snapshot may predate a
 		// new turn that committed just before we acquired the session lock.
 		tag, err := tx.Exec(ctx, `
-			UPDATE session_task_event SET quiescence_executor_id = $2
+			UPDATE session_task_event SET quiescence_executor_id = $2,
+			    quiescence_executor_expires_at = clock_timestamp() + $4 * interval '1 millisecond'
 			WHERE sequence = $1 AND published AND quiescence_pending
 			  AND quiescence_executor_id IS NULL
 			  AND (quiescence_due_at IS NULL OR quiescence_due_at <= statement_timestamp())
@@ -109,7 +114,7 @@ func (c *Client) ClaimSessionQuiescence(ctx context.Context) (*SessionQuiescence
 			      AND (idle_due_at > clock_timestamp() OR executor_id IS NOT NULL))
 			  AND NOT EXISTS (SELECT 1 FROM session WHERE id = $3 AND dispatch_expires_at > clock_timestamp())
 			  AND NOT EXISTS (SELECT 1 FROM session_checkpoint WHERE source_session_id = $3 AND state = 'CREATING')
-		`, result.Version, result.ExecutorID, session.ID)
+		`, result.Version, result.ExecutorID, session.ID, lifetime.Milliseconds()+1)
 		if err != nil {
 			return err
 		}

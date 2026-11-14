@@ -82,7 +82,9 @@ file transfers can be interrupted.
 `DeleteSession` without `force` returns an error while the session has active
 turns, without entering `DELETING`. Use `force: true` (CLI:
 `kagent session delete ID --force`) to delete despite active turns. Authorization
-and checks for conflicting checkpoint or lifecycle work still apply. Once deletion
+and checks for conflicting checkpoint or lifecycle work still apply; an idle
+suspension stops blocking a forced delete once its attempt's deadline has passed
+(the runtime operation timeout, 10 minutes by default). Once deletion
 is admitted, client retries do not require `force` again, including after a
 preparation failure or controller restart. Both modes call `DeleteActor` directly;
 suspension is not required.
