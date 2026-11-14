@@ -26,7 +26,7 @@ from buf.validate import validate_pb2 as buf_dot_validate_dot_validate__pb2
 from google.protobuf import struct_pb2 as google_dot_protobuf_dot_struct__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1akagent/api/v1/common.proto\x12\rkagent.api.v1\x1a\x1b\x62uf/validate/validate.proto\x1a\x1cgoogle/protobuf/struct.proto\"v\n\x10StructuredObject\x12\x1f\n\x0b\x61pi_version\x18\x01 \x01(\tR\napiVersion\x12\x12\n\x04kind\x18\x02 \x01(\tR\x04kind\x12-\n\x05value\x18\x03 \x01(\x0b\x32\x17.google.protobuf.StructR\x05value\"\xda\x01\n\tWorkspace\x12!\n\x04repo\x18\x01 \x01(\tB\r\xbaH\nr\x08\x10\x01\x18\x80\x10\x88\x01\x01R\x04repo\x12@\n\x03ref\x18\x02 \x01(\tB.\xbaH+r)\x18\xff\x01\x32$^(?:$|[A-Za-z0-9_][A-Za-z0-9._/-]*)$R\x03ref\x12\x46\n\x06\x62ranch\x18\x03 \x01(\tB.\xbaH+r)\x18\xff\x01\x32$^(?:$|[A-Za-z0-9_][A-Za-z0-9._/-]*)$R\x06\x62ranch\x12 \n\x05\x64\x65pth\x18\x04 \x01(\x05\x42\n\xbaH\x07\x1a\x05\x18\xe8\x07(\x00R\x05\x64\x65pthB=Z;github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1;apiv1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1akagent/api/v1/common.proto\x12\rkagent.api.v1\x1a\x1b\x62uf/validate/validate.proto\x1a\x1cgoogle/protobuf/struct.proto\"v\n\x10StructuredObject\x12\x1f\n\x0b\x61pi_version\x18\x01 \x01(\tR\napiVersion\x12\x12\n\x04kind\x18\x02 \x01(\tR\x04kind\x12-\n\x05value\x18\x03 \x01(\x0b\x32\x17.google.protobuf.StructR\x05value\"\x96\x02\n\tWorkspace\x12!\n\x04repo\x18\x01 \x01(\tB\r\xbaH\nr\x08\x10\x01\x18\x80\x10\x88\x01\x01R\x04repo\x12@\n\x03ref\x18\x02 \x01(\tB.\xbaH+r)\x18\xff\x01\x32$^(?:$|[A-Za-z0-9_][A-Za-z0-9._/-]*)$R\x03ref\x12\x46\n\x06\x62ranch\x18\x03 \x01(\tB.\xbaH+r)\x18\xff\x01\x32$^(?:$|[A-Za-z0-9_][A-Za-z0-9._/-]*)$R\x06\x62ranch\x12 \n\x05\x64\x65pth\x18\x04 \x01(\x05\x42\n\xbaH\x07\x1a\x05\x18\xe8\x07(\x00R\x05\x64\x65pth\x12:\n\x0fservice_command\x18\x05 \x03(\tB\x11\xbaH\x0e\x92\x01\x0b\x10@\"\x07r\x05\x10\x01\x18\x80 R\x0eserviceCommandB=Z;github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1;apiv1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -42,8 +42,10 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_WORKSPACE'].fields_by_name['branch']._serialized_options = b'\272H+r)\030\377\0012$^(?:$|[A-Za-z0-9_][A-Za-z0-9._/-]*)$'
   _globals['_WORKSPACE'].fields_by_name['depth']._loaded_options = None
   _globals['_WORKSPACE'].fields_by_name['depth']._serialized_options = b'\272H\007\032\005\030\350\007(\000'
+  _globals['_WORKSPACE'].fields_by_name['service_command']._loaded_options = None
+  _globals['_WORKSPACE'].fields_by_name['service_command']._serialized_options = b'\272H\016\222\001\013\020@\"\007r\005\020\001\030\200 '
   _globals['_STRUCTUREDOBJECT']._serialized_start=104
   _globals['_STRUCTUREDOBJECT']._serialized_end=222
   _globals['_WORKSPACE']._serialized_start=225
-  _globals['_WORKSPACE']._serialized_end=443
+  _globals['_WORKSPACE']._serialized_end=503
 # @@protoc_insertion_point(module_scope)

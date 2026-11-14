@@ -149,6 +149,7 @@ func New(ctx context.Context, cfg Config) (a2asrv.AgentExecutor, io.Closer, erro
 			}
 		}
 		bootstrap.ServePreparations(ctx, installer)
+		bootstrap.ServeService(ctx, workspace.ServiceConfig{Dir: cfg.DataDir + "/workspace-service", Environment: cfg.Environment})
 		turns, runnerCloser = bootstrap, installer
 	}
 	closer := closers{runnerCloser}

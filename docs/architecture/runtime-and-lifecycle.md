@@ -602,6 +602,54 @@ names the cause (ref not found, authentication, unreachable host, timeout, inval
 name), and the next turn retries. The bootstrapper also enforces the Harness origins, so
 a Session row that bypassed create-time validation still cannot reach another host.
 
+## Workspace service
+
+`workspace.service_command` optionally declares a workspace service: an argv for a
+long-running process, such as a development server, that runs in the checkout. It is
+stored with the Session's workspace and returned by `TaskStoreService.GetWorkspace`.
+It is fixed at creation and is part of the workspace in preparation requests and
+assignments.
+
+A resume restarts the runtime process: `/data` is kept, and every process is gone. So
+the Codex and Claude runtimes start the service once per process, without waiting for
+a turn, and a Session woken only by traffic to the service gets it back:
+
+1. The process waits until it serves a Session. It may resume from a golden memory
+   snapshot taken before it had a Session identity, so it never reads the workspace
+   at startup.
+2. It reads the workspace once. A Session without a command gets no status file, and
+   one left by an earlier start is removed.
+3. It waits for the checkout and any preparation exactly as a turn does
+   (`Bootstrapper.Ready`), retrying with capped backoff.
+4. It starts the command in `/data/workspace` with the environment the agent's tools
+   get. The first element is resolved through `PATH`. The service is not restarted
+   when it exits.
+
+The harness stays the only process owner. It runs the service under a supervisor,
+which is the harness binary re-executed in a hidden supervisor mode. The supervisor
+makes itself a child subreaper, so every process of the service stays in its
+subtree, even one that daemonizes with `setsid` or a double fork. It also reaps those
+processes. The Claude process driver claims every other descendant of the harness;
+it takes its census under the service's lock and excludes the subtree of each live
+supervisor, identified by PID and kernel start time. On SIGTERM the supervisor sends
+SIGTERM to the whole service, then SIGKILL after 10 seconds. The supervisor exits
+once no process of the service is left.
+
+The agent sees the service in `/data/workspace-service`:
+
+- `status.json` holds `command`, `state` (`starting`, `running`, `exited` or
+  `failed`), the supervisor's `pid`, the start and exit times, and the exit code.
+  `state` stays `running` while any process of the service lives, even after the
+  command's own process has exited.
+- `log` holds the service's stdout and stderr. When it would pass 8 MiB it is
+  rotated to `log.1`, so the output uses at most 16 MiB of `/data`.
+
+The harness adds a short note to the agent's instructions whenever the Harness has
+Git, so the agent knows to check the status file before it starts a server of its
+own. Until a restart action exists, an agent restarts the service by sending SIGTERM
+to the `pid`, waiting for `exited`, and running the command itself. That copy lasts
+only until the runtime next stops; the next start brings back the declared service.
+
 ## Workspace preparation
 
 Some Sessions need setup on their current runtime before they can accept turns.

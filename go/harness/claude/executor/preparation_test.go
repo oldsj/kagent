@@ -15,6 +15,7 @@ import (
 	"github.com/kagent-dev/kagent/go/harness/claude/config"
 	"github.com/kagent-dev/kagent/go/harness/claude/internal/adapter"
 	"github.com/kagent-dev/kagent/go/harness/runtime/continuation"
+	"github.com/kagent-dev/kagent/go/harness/runtime/service"
 	"github.com/kagent-dev/kagent/go/harness/runtime/workspace"
 )
 
@@ -62,7 +63,7 @@ func TestPreparationSetupHasNoNativeHistory(t *testing.T) {
 			require.NoError(t, err)
 			prompt, err := os.ReadFile(filepath.Join(ephemeral, "system-prompt.txt"))
 			require.NoError(t, err)
-			require.Equal(t, cfg.AppendSystemPrompt+"\n"+standing, string(prompt))
+			require.Equal(t, cfg.AppendSystemPrompt+"\n"+standing+"\n"+service.Guidance(filepath.Join(data, "workspace-service")), string(prompt))
 			_, started, err := store.Load()
 			require.NoError(t, err)
 			require.False(t, started)
@@ -171,7 +172,7 @@ func TestPreparationRuntimeRecoveryPreservesApprovalAndHistory(t *testing.T) {
 					require.NoError(t, err)
 					prompt, err := os.ReadFile(filepath.Join(input.EphemeralDir, "system-prompt.txt"))
 					require.NoError(t, err)
-					require.Equal(t, cfg.AppendSystemPrompt+"\n"+standing, string(prompt), "restart restores the installed standing context")
+					require.Equal(t, cfg.AppendSystemPrompt+"\n"+standing+"\n"+service.Guidance(filepath.Join(input.DurableDir, "workspace-service")), string(prompt), "restart restores the installed standing context")
 					_, _, err = observer.Setup(t.Context(), assignment, true)
 					require.NoError(t, err)
 					actualSetup, err := os.ReadFile(setupPath)

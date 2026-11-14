@@ -31,6 +31,18 @@ func TestParseProcessIdentity(t *testing.T) {
 }
 
 func TestDescendants(t *testing.T) {
+	t.Run("Given an excluded child of the harness, when descendants are listed, assert that its subtree is left out", func(t *testing.T) {
+		processes := map[int]processIdentity{
+			2: {pid: 2, parent: 1, started: 2},
+			3: {pid: 3, parent: 2, started: 3},
+			4: {pid: 4, parent: 1, started: 4},
+		}
+		got := descendantsExcept(processes, 1, map[int]bool{2: true})
+		if len(got) != 1 || got[0].pid != 4 {
+			t.Fatalf("descendants = %v, want only 4", got)
+		}
+	})
+
 	processes := map[int]processIdentity{
 		1: {pid: 1, parent: 0, started: 1},
 		2: {pid: 2, parent: 1, started: 2},

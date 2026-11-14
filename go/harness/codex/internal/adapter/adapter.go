@@ -18,6 +18,7 @@ import (
 	"github.com/kagent-dev/kagent/go/harness/codex/config"
 	"github.com/kagent-dev/kagent/go/harness/codex/internal/driver"
 	"github.com/kagent-dev/kagent/go/harness/internal/utils"
+	"github.com/kagent-dev/kagent/go/harness/runtime/service"
 	sharedtelemetry "github.com/kagent-dev/kagent/go/pkg/telemetry"
 	"github.com/kagent-dev/kagent/go/pkg/tracing"
 )
@@ -48,6 +49,9 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 			return nil, err
 		}
 		cfg.DeveloperInstruction += "\n" + standing
+	}
+	if cfg.Git != nil {
+		cfg.DeveloperInstruction += "\n" + service.Guidance(filepath.Join(input.DurableDir, "workspace-service"))
 	}
 	if !filepath.IsAbs(input.Workspace) || !filepath.IsAbs(input.DurableDir) {
 		return nil, fmt.Errorf("workspace and durable directories must be absolute paths")
