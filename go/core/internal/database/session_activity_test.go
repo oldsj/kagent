@@ -61,6 +61,35 @@ func TestRuntimeActivityQuiescence(t *testing.T) {
 		require.NoError(t, err, "a report after the claim proves the runtime ran again")
 	})
 
+	t.Run("Given a claimed activity boundary, when the worker defers it, assert that it is claimable again only after the retry", func(t *testing.T) {
+		client, sessionID := givenReadySession(t)
+		require.NoError(t, client.RecordRuntimeActivity(t.Context(), sessionID, false, 0, 0))
+		work, err := client.ClaimSessionActivityQuiescence(t.Context())
+		require.NoError(t, err)
+
+		require.NoError(t, client.DeferSessionActivityQuiescence(t.Context(), work, time.Hour))
+
+		_, err = client.ClaimSessionActivityQuiescence(t.Context())
+		require.ErrorIs(t, err, ErrNotFound, "a deferred boundary waits for its retry")
+		require.ErrorIs(t, client.FinishSessionActivityQuiescence(t.Context(), work), ErrNotFound, "deferral released the claim")
+		givenActivityDue(t, client, sessionID)
+		_, err = client.ClaimSessionActivityQuiescence(t.Context())
+		require.NoError(t, err, "the deferred boundary stays pending")
+	})
+
+	t.Run("Given a claimed activity boundary, when the runtime reports active before the worker defers it, assert that the lease still holds suspension", func(t *testing.T) {
+		client, sessionID := givenReadySession(t)
+		require.NoError(t, client.RecordRuntimeActivity(t.Context(), sessionID, false, 0, 0))
+		work, err := client.ClaimSessionActivityQuiescence(t.Context())
+		require.NoError(t, err)
+		require.NoError(t, client.RecordRuntimeActivity(t.Context(), sessionID, true, time.Hour, 0))
+
+		require.NoError(t, client.DeferSessionActivityQuiescence(t.Context(), work, 0))
+
+		_, err = client.ClaimSessionActivityQuiescence(t.Context())
+		require.ErrorIs(t, err, ErrNotFound, "deferral never brings a later idle deadline forward")
+	})
+
 	t.Run("Given a claimed activity boundary, when a new turn is dispatched, assert that execution is fenced until finish", func(t *testing.T) {
 		client, sessionID := givenReadySession(t)
 		require.NoError(t, client.RecordRuntimeActivity(t.Context(), sessionID, false, 0, 0))

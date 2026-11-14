@@ -14,9 +14,12 @@ import (
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 
+	"github.com/kagent-dev/kagent/go/adk/pkg/activity"
 	"github.com/kagent-dev/kagent/go/adk/pkg/app"
 	"github.com/kagent-dev/kagent/go/adk/pkg/bootstrap"
 	"github.com/kagent-dev/kagent/go/adk/pkg/controllerclient"
+	"github.com/kagent-dev/kagent/go/adk/pkg/taskstore"
+	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	"github.com/kagent-dev/kagent/go/harness/codex/config"
 	"github.com/kagent-dev/kagent/go/harness/codex/executor"
 	"github.com/kagent-dev/kagent/go/harness/runtime/service"
@@ -104,6 +107,15 @@ func run(ctx context.Context, check bool, getenv func(string) string, environmen
 			return err
 		}
 		defer controller.Close()
+		// Codex has no activity outside its A2A turns, which task boundaries
+		// already cover. A wake that starts no turn, such as preview traffic,
+		// must still report idle so the runtime is suspended again: once when a
+		// cold start serves the Session, and after every memory restore.
+		store := taskstore.New(controller, apia2a.RuntimeIdentityPath)
+		reporter := activity.NewReporter(store, logging.FromContext(ctx))
+		go reporter.Run(ctx)
+		go reporter.IdleWhenServing(ctx, store.ServesSession, time.Second)
+		go reporter.ReportAfterRestores(ctx, apia2a.RuntimeIdentityPath, time.Second)
 	}
 	exec, err := executor.New(ctx, executor.Config{ConfigJSON: configJSON, DataDir: dataDir, Environment: environment, Workspace: source, Conversation: workspace.ConversationOf(source)})
 	if err != nil {

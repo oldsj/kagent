@@ -142,6 +142,35 @@ func (c *Client) FinishSessionActivityQuiescence(ctx context.Context, work *Sess
 	})
 }
 
+// DeferSessionActivityQuiescence releases a claimed activity boundary without
+// settling it, for an Actor that is not running yet. A wake reports idle as
+// soon as the restored runtime knows its Session, which can be before
+// Substrate marks the Actor RUNNING; settling then would leave the woken Actor
+// running with nothing left to suspend it. The boundary stays pending and
+// becomes due again after retry, unless a later report moved it further out.
+func (c *Client) DeferSessionActivityQuiescence(ctx context.Context, work *SessionActivityQuiescence, retry time.Duration) error {
+	if work == nil || work.Session == nil || work.ExecutorID == uuid.Nil {
+		return fmt.Errorf("claimed activity boundary is required")
+	}
+	return c.withTx(ctx, func(tx pgx.Tx) error {
+		if _, err := lockSession(ctx, tx, work.Session.GetId()); err != nil {
+			return notFoundOr(err)
+		}
+		tag, err := tx.Exec(ctx, `
+			UPDATE session_activity SET pending = TRUE, executor_id = NULL, claimed_seq = NULL,
+			    idle_due_at = GREATEST(idle_due_at, clock_timestamp() + $3::bigint * INTERVAL '1 microsecond')
+			WHERE session_id = $1 AND executor_id = $2
+		`, work.Session.GetId(), work.ExecutorID, max(retry, 0).Microseconds())
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() != 1 {
+			return ErrNotFound
+		}
+		return nil
+	})
+}
+
 // retireSessionActivity drops activity boundaries and claims for a runtime
 // that no longer needs idle suspension. The caller holds the Session lock.
 func retireSessionActivity(ctx context.Context, tx pgx.Tx, session sessionRow) error {

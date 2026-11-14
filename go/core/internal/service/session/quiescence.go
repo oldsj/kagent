@@ -128,6 +128,11 @@ func (w *ActorWorkflow) quiesceInactiveSession(ctx context.Context, work *databa
 	runtimeCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	err := w.suspendInactiveRuntime(runtimeCtx, work.Session)
 	cancel()
+	if errors.Is(err, errActorResuming) {
+		// Nothing was issued, so the claim can be released safely.
+		w.deferInactiveSession(ctx, work)
+		return
+	}
 	if err != nil {
 		if w.recoverCrashedRuntime(ctx, work.Session) {
 			return
@@ -145,6 +150,40 @@ func (w *ActorWorkflow) quiesceInactiveSession(ctx context.Context, work *databa
 			return
 		}
 		logging.FromContext(ctx).ErrorContext(ctx, "record runtime activity outcome", "session_id", work.Session.Id, "error", err)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(delay):
+		}
+	}
+}
+
+// resumingRetry is how soon an activity boundary is claimed again after it
+// found its Actor still resuming. A resume normally takes well under a second.
+const resumingRetry = time.Second
+
+// errActorResuming reports an Actor that is not running yet. No runtime
+// call was issued, so its boundary is retried rather than settled.
+var errActorResuming = errors.New("runtime Actor is still resuming")
+
+func (w *ActorWorkflow) deferInactiveSession(ctx context.Context, work *database.SessionActivityQuiescence) {
+	for delay := 100 * time.Millisecond; ; delay = min(2*delay, 5*time.Second) {
+		deferCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		err := w.store.DeferSessionActivityQuiescence(deferCtx, work, resumingRetry)
+		cancel()
+		if errors.Is(err, database.ErrNotFound) {
+			return
+		}
+		if err == nil {
+			logging.FromContext(ctx).InfoContext(ctx, "runtime Actor still resuming; retrying its activity boundary", "session_id", work.Session.Id, "retry", resumingRetry)
+			// Idle workers wait the recovery interval for boundaries that are
+			// not due yet, so wake one when this one comes due. The timer starts
+			// after the deferral committed, so it never fires before the
+			// boundary's database deadline.
+			time.AfterFunc(resumingRetry, w.wakeQuiescence)
+			return
+		}
+		logging.FromContext(ctx).ErrorContext(ctx, "defer runtime activity boundary", "session_id", work.Session.Id, "error", err)
 		select {
 		case <-ctx.Done():
 			return
@@ -187,7 +226,11 @@ func (w *ActorWorkflow) suspendInactiveRuntime(ctx context.Context, session *api
 	if err := w.verifyActor(ctx, session, revision, actor); err != nil {
 		return err
 	}
-	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+	switch actor.GetStatus().GetState() {
+	case ateapipb.ActorState_ACTOR_STATE_RUNNING:
+	case ateapipb.ActorState_ACTOR_STATE_RESUMING:
+		return errActorResuming
+	default:
 		return nil
 	}
 	_, err = w.Quiesce(ctx, session)

@@ -118,6 +118,8 @@ func run(ctx context.Context, check bool, getenv func(string) string, environmen
 			go reporter.Run(ctx)
 			// A wake that starts no turn must still become eligible for suspension.
 			go reporter.IdleWhenServing(ctx, store.ServesSession, time.Second)
+			// A memory restore continues this process, so report again after each.
+			go reporter.ReportAfterRestores(ctx, apia2a.RuntimeIdentityPath, time.Second)
 			execCfg.Activity = reporter
 		}
 	}

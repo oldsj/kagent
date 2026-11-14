@@ -268,7 +268,11 @@ ends, the runtime becomes eligible `quiescenceDelay` later. A due task boundary 
 claimed first, because its claim records the task snapshot. Otherwise a separate
 activity claim, fenced like a task claim by dispatch, unpublished or pending task
 events, active tasks and checkpoint creation, suspends the Actor if it is still
-running and records no snapshot. The Session stays READY either way. A report
+running and records no snapshot. The Session stays READY either way. An Actor
+that is still RESUMING is not settled: a wake reports idle as soon as the restored
+runtime knows its Session, which can be before Substrate marks the Actor RUNNING.
+The worker releases the claim without a runtime call and leaves the boundary
+pending, due again a second later unless a newer report moved it further out. A report
 after the claim leaves the activity boundary pending, so the next claim
 re-evaluates it. Activity claims never expire, and crash recovery and deletion
 retire them together with task boundaries.
@@ -279,7 +283,16 @@ lease blocks expiration.
 The Claude harness reports its SDK runner's busy/idle transitions through
 `go/adk/pkg/activity`. The reporter sends nothing until the first transition,
 retries transient failures with backoff, and stops after repeated
-`PERMISSION_DENIED` until the next transition.
+`PERMISSION_DENIED` until the next transition. The Codex harness has no activity
+outside its A2A turns, which task boundaries cover; it reports idle only. Both
+harnesses report idle once a woken runtime serves its Session without a turn,
+such as a wake by preview traffic.
+
+A MEMORY restore continues the suspended process: no startup code runs again
+and the monotonic clock does not advance across the pause. Substrate projects
+the runtime identity file anew at each restore, so both harnesses watch its file
+identity and re-send their current activity, or idle, when it changes. Without
+that, a runtime woken from a `Full` snapshot would never be suspended again.
 
 An empty claim is followed by a check for unclaimed work on ready sessions. If
 dispatch, checkpoint creation, a lifecycle operation, or a row lock blocks that
