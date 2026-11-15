@@ -352,6 +352,16 @@ func (s *Store) CompleteWorkspacePreparation(ctx context.Context, request *runti
 	})
 }
 
+// GetDotfiles returns how to fetch this runtime's Session's agent dotfiles
+// bundle, or nil when the Session was created without one.
+func (s *Store) GetDotfiles(ctx context.Context) (*runtimev1.DotfilesDelivery, error) {
+	response, err := s.GetWorkspacePreparation(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return response.GetDotfiles(), nil
+}
+
 // SessionID returns the Session this runtime serves, from its local identity.
 func (s *Store) SessionID() (string, error) { return s.sessionID() }
 

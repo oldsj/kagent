@@ -22,6 +22,7 @@ import (
 	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	"github.com/kagent-dev/kagent/go/harness/codex/config"
 	"github.com/kagent-dev/kagent/go/harness/codex/executor"
+	"github.com/kagent-dev/kagent/go/harness/runtime/dotfiles"
 	"github.com/kagent-dev/kagent/go/harness/runtime/service"
 	"github.com/kagent-dev/kagent/go/harness/runtime/workspace"
 	"github.com/kagent-dev/kagent/go/pkg/logging"
@@ -117,7 +118,7 @@ func run(ctx context.Context, check bool, getenv func(string) string, environmen
 		go reporter.IdleWhenServing(ctx, store.ServesSession, time.Second)
 		go reporter.ReportAfterRestores(ctx, apia2a.RuntimeIdentityPath, time.Second)
 	}
-	exec, err := executor.New(ctx, executor.Config{ConfigJSON: configJSON, DataDir: dataDir, Environment: environment, Workspace: source, Conversation: workspace.ConversationOf(source)})
+	exec, err := executor.New(ctx, executor.Config{ConfigJSON: configJSON, DataDir: dataDir, Environment: environment, Workspace: source, Conversation: workspace.ConversationOf(source), Dotfiles: dotfiles.Of(source)})
 	if err != nil {
 		return err
 	}

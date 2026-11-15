@@ -17,6 +17,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	utilvalidation "k8s.io/apimachinery/pkg/util/validation"
 
+	"github.com/kagent-dev/kagent/go/api/dotfiles"
 	apiv1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1"
 	"github.com/kagent-dev/kagent/go/api/workspace"
 	"github.com/kagent-dev/kagent/go/core/internal/database"
@@ -127,6 +128,15 @@ func (s *Service) Create(ctx context.Context, agent *apiv1.ResourceReference, re
 // A selection runs the Agent's harness from the operator's runtime payload in
 // the selected image; nil keeps the Agent's own revision.
 func (s *Service) CreateWithEnvironment(ctx context.Context, agent *apiv1.ResourceReference, requestID, name string, requested *apiv1.Workspace, environment *apiv1.DevelopmentEnvironment, credentials ...*apiv1.SessionCredential) (*apiv1.Session, error) {
+	return s.create(ctx, agent, requestID, name, requested, environment, nil, credentials)
+}
+
+// CreateFrom creates the Session a CreateSessionRequest describes, dotfiles included.
+func (s *Service) CreateFrom(ctx context.Context, r *apiv1.CreateSessionRequest) (*apiv1.Session, error) {
+	return s.create(ctx, r.GetAgent(), r.GetRequestId(), r.GetName(), r.GetWorkspace(), r.GetDevelopmentEnvironment(), r.GetDotfiles(), r.GetCredentials())
+}
+
+func (s *Service) create(ctx context.Context, agent *apiv1.ResourceReference, requestID, name string, requested *apiv1.Workspace, environment *apiv1.DevelopmentEnvironment, dotfiles *apiv1.Dotfiles, credentials []*apiv1.SessionCredential) (*apiv1.Session, error) {
 	if err := validateCreate(agent, requestID); err != nil {
 		return nil, err
 	}
@@ -134,6 +144,9 @@ func (s *Service) CreateWithEnvironment(ctx context.Context, agent *apiv1.Resour
 		return nil, serviceerrors.NewInvalidArgument("Session credential references are invalid", err)
 	}
 	if err := validateWorkspace(requested); err != nil {
+		return nil, err
+	}
+	if err := validateDotfiles(dotfiles, credentials); err != nil {
 		return nil, err
 	}
 	if s.createPolicy != nil {
@@ -161,7 +174,7 @@ func (s *Service) CreateWithEnvironment(ctx context.Context, agent *apiv1.Resour
 	}
 	request := &apiv1.Session{
 		Id: id.String(), Creator: creator, Name: name, Agent: &apiv1.AgentProvenance{Ref: agent},
-		Workspace: requested, Credentials: credentials,
+		Workspace: requested, Credentials: credentials, Dotfiles: dotfiles,
 	}
 	if environment != nil {
 		if request.PreparedRevision, request.RuntimeComposition, err = s.prepareEnvironment(ctx, agent, creator, requestID, environment); err != nil {
@@ -538,6 +551,21 @@ func validateWorkspace(requested *apiv1.Workspace) error {
 	}
 	if _, err := workspace.RepoHost(requested.GetRepo()); err != nil {
 		return serviceerrors.NewInvalidArgument("workspace repo is invalid: "+err.Error(), err)
+	}
+	return nil
+}
+
+// validateDotfiles requires a requested bundle to be well formed and its url's
+// origin to carry one of the Session's credentials, which authorizes the download.
+func validateDotfiles(requested *apiv1.Dotfiles, credentials []*apiv1.SessionCredential) error {
+	if requested == nil {
+		return nil
+	}
+	if err := protovalidate.Validate(requested); err != nil {
+		return serviceerrors.NewInvalidArgument("dotfiles are invalid", err)
+	}
+	if _, err := dotfiles.Credential(requested, credentials); err != nil {
+		return serviceerrors.NewInvalidArgument("dotfiles url is invalid: "+err.Error(), err)
 	}
 	return nil
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/kagent-dev/kagent/go/harness/codex/internal/adapter"
 	runtimea2a "github.com/kagent-dev/kagent/go/harness/runtime/a2a"
 	"github.com/kagent-dev/kagent/go/harness/runtime/continuation"
+	"github.com/kagent-dev/kagent/go/harness/runtime/dotfiles"
 	"github.com/kagent-dev/kagent/go/harness/runtime/workspace"
 )
 
@@ -34,6 +35,8 @@ type Config struct {
 	// which only a configuration check and an embedder without a control plane
 	// should do.
 	Conversation continuation.FreshSource
+	// Dotfiles reads the Session's agent dotfiles delivery. Nil lays out none.
+	Dotfiles dotfiles.Source
 }
 
 // New validates the configuration and Codex installation, then returns the executor.
@@ -98,6 +101,11 @@ func New(ctx context.Context, cfg Config) (a2asrv.AgentExecutor, error) {
 		bootstrap.ServePreparations(ctx, &adapter.SetupInstaller{Input: input, Store: store})
 		bootstrap.ServeService(ctx, workspace.ServiceConfig{Dir: cfg.DataDir + "/workspace-service", Environment: cfg.Environment})
 		turns = bootstrap
+	}
+	// Setup re-materializes Codex's skills root, removing dotfiles skills; the
+	// layer notices before the next turn and lays them out again.
+	if cfg.Dotfiles != nil {
+		turns = dotfiles.New(turns, cfg.Dotfiles, dotfiles.Codex(cfg.DataDir+"/codex"), stateDir+"/dotfiles")
 	}
 	executor, err := runtimea2a.New(turns, store, parsed.RuntimeTelemetry, config.EffortLevels...)
 	if err != nil {

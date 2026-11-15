@@ -74,7 +74,7 @@ jobs:
       - name: Build everything
         run: go build ./...
       - name: Test runtime and policy fixtures
-        run: go test -count=1 ./adk/pkg/taskstore ./api/workspace ./core/internal/egress ./core/internal/substrate ./core/internal/service/taskstore
+        run: go test -count=1 ./adk/pkg/taskstore ./api/workspace ./api/dotfiles ./core/internal/egress ./core/internal/substrate ./core/internal/service/taskstore
       # TestSandboxTemplateCatalog and TestEgressPolicyCatalog in grpcserver
       # start envtest, which needs these binaries.
       - name: Install envtest binaries
@@ -95,7 +95,7 @@ jobs:
       - name: Test fake native consumers
         run: >-
           go test -count=1 -skip '^TestPinnedCodexAcceptsGeneratedConfiguration$'
-          ./harness/claude/... ./harness/codex/... ./harness/runtime/...
+          ./harness/claude/... ./harness/codex/... ./harness/runtime/... ./harness/internal/utils
 
   helm-unit-tests:
     name: Helm chart unit tests

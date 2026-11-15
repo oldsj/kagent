@@ -27,6 +27,19 @@ func ConversationOf(source Source) continuation.FreshSource {
 	return fresh
 }
 
+type dotfilesStore interface {
+	GetDotfiles(context.Context) (*runtimev1.DotfilesDelivery, error)
+}
+
+// Dotfiles returns the Session's agent dotfiles delivery, or nil when it has none.
+func (s controllerSource) Dotfiles(ctx context.Context) (*runtimev1.DotfilesDelivery, error) {
+	store, ok := s.store.(dotfilesStore)
+	if !ok {
+		return nil, nil
+	}
+	return store.GetDotfiles(ctx)
+}
+
 type conversationStore interface {
 	SessionID() (string, error)
 	FreshConversation(context.Context) (bool, error)

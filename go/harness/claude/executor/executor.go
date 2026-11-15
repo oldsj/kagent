@@ -19,6 +19,7 @@ import (
 	"github.com/kagent-dev/kagent/go/harness/claude/internal/sdkrunner"
 	runtimea2a "github.com/kagent-dev/kagent/go/harness/runtime/a2a"
 	"github.com/kagent-dev/kagent/go/harness/runtime/continuation"
+	"github.com/kagent-dev/kagent/go/harness/runtime/dotfiles"
 	"github.com/kagent-dev/kagent/go/harness/runtime/workspace"
 )
 
@@ -43,6 +44,8 @@ type Config struct {
 	// which only a configuration check and an embedder without a control plane
 	// should do.
 	Conversation continuation.FreshSource
+	// Dotfiles reads the Session's agent dotfiles delivery. Nil lays out none.
+	Dotfiles dotfiles.Source
 }
 
 // New validates the configuration and Claude installation, then returns the
@@ -151,6 +154,24 @@ func New(ctx context.Context, cfg Config) (a2asrv.AgentExecutor, io.Closer, erro
 		bootstrap.ServePreparations(ctx, installer)
 		bootstrap.ServeService(ctx, workspace.ServiceConfig{Dir: cfg.DataDir + "/workspace-service", Environment: cfg.Environment})
 		turns, runnerCloser = bootstrap, installer
+	}
+	// Dotfiles wrap the checkout, so the files are in place before the turn and
+	// before a client attaching to the SDK runner starts native work.
+	if cfg.Dotfiles != nil {
+		layer := dotfiles.New(turns, cfg.Dotfiles, dotfiles.Claude(cfg.DataDir+"/claude"), stateDir+"/dotfiles")
+		if sdk != nil {
+			admit := sdk.prepare
+			sdk.prepare = func(ctx context.Context) error {
+				if admit != nil {
+					if err := admit(ctx); err != nil {
+						return err
+					}
+				}
+				layer.Ready(ctx)
+				return nil
+			}
+		}
+		turns = layer
 	}
 	closer := closers{runnerCloser}
 	if sdk != nil {

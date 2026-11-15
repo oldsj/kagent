@@ -632,6 +632,51 @@ names the cause (ref not found, authentication, unreachable host, timeout, inval
 name), and the next turn retries. The bootstrapper also enforces the Harness origins, so
 a Session row that bypassed create-time validation still cannot reach another host.
 
+## Agent dotfiles
+
+`CreateSessionRequest.dotfiles` (`url`, `digest`, and `repository`, `commit`, `path`
+for provenance) names a bundle of owner-level agent files to lay out in the CLI's
+user configuration directory: `AGENTS.md`, `CLAUDE.md`, `skills/<name>/...`,
+`agents/<name>.md` and `commands/<name>.md`. The bundle is an uncompressed tar of
+regular files. Create rejects a `url` that is not plain HTTP(S) without user info,
+query or fragment, or whose origin carries none of the Session's credentials: that
+credential authorizes the download, so no new grant or egress origin is needed. The
+dotfiles are part of the request identity, so retrying a request ID with another
+bundle conflicts. Checkpoint forks get none of their own (see below).
+
+`TaskStoreService.GetWorkspace` returns `dotfiles { url, digest, header }`, where
+`header` is the matching credential's header name. Before a turn, the Codex and
+Claude adapters' dotfiles layer GETs the url with that header set to a placeholder,
+which the gateway replaces; redirects are not followed. It verifies the digest and
+the limits (32 MiB bundle, 4000 files, 2 MiB per file, 16 MiB in all), refuses any
+entry that is not a regular file at one of the paths above, and executes nothing.
+The verified bundle and a manifest of what was written are kept in
+`/data/.kagent/dotfiles`.
+
+| Bundle path         | Claude (`/data/claude`)                                   | Codex (`/data/codex`) |
+| ------------------- | --------------------------------------------------------- | --------------------- |
+| `AGENTS.md`         | `AGENTS.md`, and `CLAUDE.md` with `@AGENTS.md` if absent  | `AGENTS.md`           |
+| `CLAUDE.md`         | `CLAUDE.md`                                               | not mapped            |
+| `skills/<name>/...` | `skills/<name>/...`                                       | `skills/<name>/...`   |
+| `agents/<name>.md`  | `agents/<name>.md`                                        | not mapped            |
+| `commands/<name>.md`| `commands/<name>.md`                                      | not mapped            |
+
+Files are 0444, or 0555 when the tar marks them executable, and directories inside
+an entry 0555; the configuration directory and the shared `skills`, `agents` and
+`commands` directories stay writable. The agent runs as the same user, so the
+permissions are not the guarantee: each runtime process removes the manifest's
+entries and lays the bundle out again before its first turn, so edits never persist,
+and again before any turn that finds an entry missing (Codex setup re-materializes
+its skills root). A Codex skill the compiler selected wins a name clash. A symlink
+in place of a shared directory is replaced, never written through.
+
+Dotfiles are context, not a precondition. A failed read, download or verification
+is logged, the turn runs without dotfiles, and the next turn tries again. A
+checkpoint fork has no delivery of its own: its restored data holds the source's
+verified bundle and manifest, so it lays out the source's files again. The Claude
+SDK runner's user profile reads its own home, not `/data/claude`, so it does not
+see dotfiles.
+
 ## Workspace service
 
 `workspace.service_command` optionally declares a workspace service: an argv for a

@@ -413,6 +413,8 @@ to that exact origin and header. Header names are case-insensitive. Duplicate
 origin/header bindings and collisions with revision credentials are rejected.
 References persist in `Session.credentials`; retrying a request ID with changed
 references conflicts. Checkpoint forks inherit no Session credentials.
+A Session's agent dotfiles bundle is downloaded with the Session credential bound
+to its url's origin; see [Agent dotfiles](runtime-and-lifecycle.md#agent-dotfiles).
 
 The controller applies them where it applies every Actor's egress policy: the
 policy for a Session's Actor is the revision's effective access (pinned inputs
