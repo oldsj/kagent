@@ -170,6 +170,9 @@ func New(ctx context.Context, cfg Config) (a2asrv.AgentExecutor, io.Closer, erro
 				layer.Ready(ctx)
 				return nil
 			}
+			// The bridge outlives turns and reads its configuration only at
+			// start, so new dotfiles restart it; the conversation resumes.
+			layer.OnChange(sdk.session.StopIfIdle)
 		}
 		turns = layer
 	}

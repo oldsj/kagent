@@ -34,30 +34,35 @@ func (a serviceTestAuthorizer) Check(context.Context, auth.Principal, auth.Verb,
 }
 
 type serviceTestStore struct {
-	createInput    *apiv1.Session
-	requestID      string
-	createErr      error
-	sessions       []*apiv1.Session
-	listQuery      database.SessionQuery
-	listCalls      int
-	share          *apiv1.SessionShare
-	tokenHash      []byte
-	shares         []*apiv1.SessionShare
-	shareAfterID   string
-	shareSessionID string
-	deletedShareID string
-	shareLimit     int
-	renamed        *apiv1.Session
-	renameName     string
-	renameUserID   string
-	renameErr      error
-	getCreator     string
-	getID          string
-	unscoped       bool
-	getErr         error
-	getResult      *apiv1.Session
-	shareUserID    string
-	shareErr       error
+	// dotfilesSession is the Session UpdateSessionDotfiles checks and updates;
+	// dotfilesErr fails it first.
+	dotfilesSession *apiv1.Session
+	dotfilesErr     error
+	dotfilesUserID  string
+	createInput     *apiv1.Session
+	requestID       string
+	createErr       error
+	sessions        []*apiv1.Session
+	listQuery       database.SessionQuery
+	listCalls       int
+	share           *apiv1.SessionShare
+	tokenHash       []byte
+	shares          []*apiv1.SessionShare
+	shareAfterID    string
+	shareSessionID  string
+	deletedShareID  string
+	shareLimit      int
+	renamed         *apiv1.Session
+	renameName      string
+	renameUserID    string
+	renameErr       error
+	getCreator      string
+	getID           string
+	unscoped        bool
+	getErr          error
+	getResult       *apiv1.Session
+	shareUserID     string
+	shareErr        error
 }
 
 func (s *serviceTestStore) CreateSession(_ context.Context, session *apiv1.Session, requestID string) (*apiv1.Session, bool, error) {
@@ -97,6 +102,18 @@ func (s *serviceTestStore) ListSessions(_ context.Context, query database.Sessio
 		}
 	}
 	return result, nil
+}
+
+func (s *serviceTestStore) UpdateSessionDotfiles(_ context.Context, _, userID, _ string, dotfiles *apiv1.Dotfiles, check func(*apiv1.Session) error) (*apiv1.Session, error) {
+	if s.dotfilesErr != nil {
+		return nil, s.dotfilesErr
+	}
+	if err := check(s.dotfilesSession); err != nil {
+		return nil, err
+	}
+	s.dotfilesUserID = userID
+	s.dotfilesSession.Dotfiles = dotfiles
+	return s.dotfilesSession, nil
 }
 
 func (s *serviceTestStore) UpdateSessionName(_ context.Context, id, userID, name string) (*apiv1.Session, error) {

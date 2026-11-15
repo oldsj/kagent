@@ -301,6 +301,27 @@ func (s *Session) stopAndWaitLocked(ctx context.Context) error {
 	}
 }
 
+// StopIfIdle stops the bridge, as StopAndWait does, unless it is doing work: a
+// turn, a client's message, background tasks, or a question waiting for an
+// answer. Attached clients do not count; the next demand starts the bridge
+// again, resuming the conversation. It reports whether the bridge is stopped,
+// which it is when none was running.
+func (s *Session) StopIfIdle(ctx context.Context) (bool, error) {
+	s.startMu.Lock()
+	defer s.startMu.Unlock()
+	s.mu.Lock()
+	working := s.turn != nil || len(s.outstanding) > 0 || s.sdkState == "running" || s.background > 0 ||
+		len(s.perms) > 0 || s.sdkState == "requires_action"
+	s.mu.Unlock()
+	if working {
+		return false, nil
+	}
+	if err := s.stopAndWaitLocked(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // BeginReplay registers the A2A turn on a fresh bridge that resumes the bound
 // conversation without a new user message. Claude replays a deferred tool call
 // when its conversation is resumed, so the turn must be registered before that

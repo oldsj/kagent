@@ -59,6 +59,14 @@ func (s *sessionServer) UpdateSessionName(ctx context.Context, request *apiv1.Up
 	return &apiv1.UpdateSessionNameResponse{Session: session}, nil
 }
 
+func (s *sessionServer) UpdateSessionDotfiles(ctx context.Context, request *apiv1.UpdateSessionDotfilesRequest) (*apiv1.UpdateSessionDotfilesResponse, error) {
+	session, err := s.service.UpdateDotfiles(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	return &apiv1.UpdateSessionDotfilesResponse{Session: session}, nil
+}
+
 func (s *sessionServer) RevertSession(ctx context.Context, request *apiv1.RevertSessionRequest) (*apiv1.RevertSessionResponse, error) {
 	session, err := s.service.Revert(ctx, request.GetSessionId())
 	if err != nil {
