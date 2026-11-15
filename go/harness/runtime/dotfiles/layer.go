@@ -46,12 +46,17 @@ type Runner interface {
 
 // Layer lays the Session's dotfiles out before the turns of next. Dotfiles are
 // context, not a precondition: a failure is logged, the turn runs without
-// them, and the next turn tries again.
+// them (or with the ones already laid out), and the next turn tries again.
 //
 // Each process lays the files out again from the pinned bundle the first time
 // it runs a turn, so edits made in an earlier run never persist, and again
 // whenever an entry has gone missing. A fork has no delivery of its own; it
 // lays out its source's bundle, which its restored data holds.
+//
+// Every turn reads the delivery again, so an updated Session
+// (UpdateSessionDotfiles) is laid out from its next turn on, never mid-turn.
+// A CLI process that outlives turns reads its configuration only at start; the
+// restart hook ([Layer.OnChange]) restarts it, and stays pending until it can.
 type Layer struct {
 	next     Runner
 	source   Source
@@ -60,11 +65,12 @@ type Layer struct {
 	client   *http.Client
 
 	mu      sync.Mutex
-	none    bool
 	files   []File
 	digest  string
 	entries []string
 	laid    bool
+	restart func(context.Context) (bool, error)
+	pending bool
 }
 
 // New wraps next. stateDir holds the verified bundle and the manifest of the
@@ -77,18 +83,51 @@ func New(next Runner, source Source, target Target, stateDir string) *Layer {
 	}}
 }
 
+// OnChange sets the hook that restarts a CLI process which outlives turns
+// after the layer replaced its files. It reports whether it restarted (or
+// nothing was running); until it has, it is called again before each turn.
+// [Layer.Ready], called as that process starts, settles it.
+func (l *Layer) OnChange(restart func(context.Context) (bool, error)) {
+	l.mu.Lock()
+	l.restart = restart
+	l.mu.Unlock()
+}
+
 // Run lays out the dotfiles if needed, then runs the turn.
 func (l *Layer) Run(ctx context.Context, turn runtime.Turn, sink runtime.EventSink) (runtime.Outcome, error) {
-	l.Ready(ctx)
+	changed, err := l.ensure(ctx)
+	if err != nil {
+		logging.FromContext(ctx).WarnContext(ctx, "agent dotfiles were not laid out; the turn runs without new ones", "error", err)
+	}
+	l.mu.Lock()
+	l.pending = l.pending || changed
+	restart := l.restart
+	pending := l.pending && restart != nil
+	l.mu.Unlock()
+	if pending {
+		done, err := restart(ctx)
+		if err != nil {
+			logging.FromContext(ctx).WarnContext(ctx, "the agent was not restarted for its new dotfiles; it will be before a later turn", "error", err)
+		}
+		if done && err == nil {
+			l.mu.Lock()
+			l.pending = false
+			l.mu.Unlock()
+		}
+	}
 	return l.next.Run(ctx, turn, sink)
 }
 
 // Ready lays out the dotfiles for a runtime that starts native work outside a
-// turn. It never fails.
+// turn, as its CLI process starts. It never fails.
 func (l *Layer) Ready(ctx context.Context) {
-	if err := l.ensure(ctx); err != nil {
-		logging.FromContext(ctx).WarnContext(ctx, "agent dotfiles were not laid out; the turn runs without them", "error", err)
+	if _, err := l.ensure(ctx); err != nil {
+		logging.FromContext(ctx).WarnContext(ctx, "agent dotfiles were not laid out; the agent starts without new ones", "error", err)
 	}
+	// The process now starting reads what is laid out.
+	l.mu.Lock()
+	l.pending = false
+	l.mu.Unlock()
 }
 
 // RestorePending returns the wrapped runner's pending turn, as the executor
@@ -112,24 +151,48 @@ func (l *Layer) Steer(ctx context.Context, steer runtime.Steer) error {
 	return steering.Steer(ctx, steer)
 }
 
-func (l *Layer) ensure(ctx context.Context) error {
+// ensure lays out the Session's current bundle. It reports whether it laid out
+// another bundle than the one this process had, so a running agent has not
+// read it; a hook with no agent running has nothing to restart. When the delivery cannot be read
+// or the new bundle cannot be loaded, the files already laid out stay.
+func (l *Layer) ensure(ctx context.Context) (bool, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.none || (l.laid && intact(l.target.Dir, l.entries)) {
-		return nil
+	ctx, cancel := context.WithTimeout(ctx, Timeout)
+	defer cancel()
+	delivery, err := l.source.Dotfiles(ctx)
+	if err != nil {
+		return false, errors.Join(fmt.Errorf("read the dotfiles delivery: %w", err), l.keep())
 	}
-	if l.files == nil {
-		ctx, cancel := context.WithTimeout(ctx, Timeout)
-		defer cancel()
-		digest, files, err := l.load(ctx)
-		if err != nil {
-			return err
+	digest := delivery.GetDigest()
+	if delivery == nil {
+		// A fork keeps the bundle of its source, which its data holds.
+		digest = l.digest
+		if digest == "" {
+			digest = readManifest(l.stateDir).Digest
 		}
-		if files == nil {
-			l.none = true
-			return nil
-		}
-		l.digest, l.files = digest, files
+	}
+	if digest == "" {
+		return false, nil
+	}
+	if digest == l.digest && l.files != nil {
+		return false, l.keep()
+	}
+	files, err := l.load(ctx, delivery, digest)
+	if err != nil {
+		return false, errors.Join(err, l.keep())
+	}
+	if files == nil {
+		return false, nil
+	}
+	l.digest, l.files, l.laid = digest, files, false
+	return true, l.keep()
+}
+
+// keep lays the current bundle out again unless it is intact.
+func (l *Layer) keep() error {
+	if l.files == nil || (l.laid && intact(l.target.Dir, l.entries)) {
+		return nil
 	}
 	entries, err := lay(l.target, l.stateDir, l.digest, l.files)
 	if err != nil {
@@ -139,45 +202,34 @@ func (l *Layer) ensure(ctx context.Context) error {
 	return nil
 }
 
-// load returns the pinned bundle's files: from the verified copy on disk when
-// its digest matches, else downloaded. Without a delivery, the bundle of the
-// last layout is the pin, if one was laid out.
-func (l *Layer) load(ctx context.Context) (string, []File, error) {
-	delivery, err := l.source.Dotfiles(ctx)
-	if err != nil {
-		return "", nil, fmt.Errorf("read the dotfiles delivery: %w", err)
-	}
-	digest := delivery.GetDigest()
-	if delivery == nil {
-		digest = readManifest(l.stateDir).Digest
-	}
-	if digest == "" {
-		return "", nil, nil
-	}
+// load returns the files of the bundle with digest: from the verified copy on
+// disk when it is that bundle, else downloaded through delivery. Without a
+// delivery only the copy on disk can serve.
+func (l *Layer) load(ctx context.Context, delivery *runtimev1.DotfilesDelivery, digest string) ([]File, error) {
 	cache := filepath.Join(l.stateDir, "bundle.tar")
 	if cached, err := os.ReadFile(cache); err == nil {
 		if files, err := Unpack(cached, digest); err == nil {
-			return digest, files, nil
+			return files, nil
 		}
 	}
 	if delivery == nil {
-		return "", nil, nil
+		return nil, nil
 	}
 	bundle, err := l.fetch(ctx, delivery)
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
 	files, err := Unpack(bundle, digest)
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
 	if err := utils.EnsurePrivateDir(l.stateDir); err != nil {
-		return "", nil, err
+		return nil, err
 	}
 	if err := utils.ReplacePrivateFile(cache, bundle); err != nil {
-		return "", nil, err
+		return nil, err
 	}
-	return digest, files, nil
+	return files, nil
 }
 
 func (l *Layer) fetch(ctx context.Context, d *runtimev1.DotfilesDelivery) ([]byte, error) {

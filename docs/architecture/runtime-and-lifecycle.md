@@ -640,9 +640,10 @@ user configuration directory: `AGENTS.md`, `CLAUDE.md`, `skills/<name>/...`,
 `agents/<name>.md` and `commands/<name>.md`. The bundle is an uncompressed tar of
 regular files. Create rejects a `url` that is not plain HTTP(S) without user info,
 query or fragment, or whose origin carries none of the Session's credentials: that
-credential authorizes the download, so no new grant or egress origin is needed. The
-dotfiles are part of the request identity, so retrying a request ID with another
-bundle conflicts. Checkpoint forks get none of their own (see below).
+credential authorizes the download, so no new grant or egress origin is needed.
+Dotfiles can be updated (below), so like the name they are not part of the request
+identity: a retry returns the Session with the dotfiles it holds. Checkpoint forks
+get none of their own (see below).
 
 `TaskStoreService.GetWorkspace` returns `dotfiles { url, digest, header }`, where
 `header` is the matching credential's header name. Before a turn, the Codex and
@@ -671,11 +672,30 @@ its skills root). A Codex skill the compiler selected wins a name clash. A symli
 in place of a shared directory is replaced, never written through.
 
 Dotfiles are context, not a precondition. A failed read, download or verification
-is logged, the turn runs without dotfiles, and the next turn tries again. A
+is logged, the turn runs without new dotfiles (keeping any already laid out), and
+the next turn tries again.
+
+`SessionService.UpdateSessionDotfiles` replaces a Session's dotfiles. It is a
+compare-and-swap on the digest: it applies when the Session is at
+`previous_digest` (empty for none), returns the Session unchanged when it already
+holds exactly the requested dotfiles, and is `FAILED_PRECONDITION` otherwise, so a
+retry is safe and a stale one cannot undo a newer update. The url is validated as on
+create, against the Session's stored credentials; a fork, which has none, is
+refused. It authorizes as an update.
+
+The layer reads the delivery at the start of every turn, so an update is laid out at
+the next turn, never mid-turn: the manifest's old entries are removed and the new
+bundle written. A CLI process that outlives turns reads its configuration only at
+start, so the layer then restarts it. The Claude SDK runner's bridge is stopped
+between turns unless it is working (a turn, a client's message, background tasks,
+or a question awaiting an answer; an attached client does not count); the turn
+starts it again, which lays out the files and resumes the conversation. While it is
+working the restart is retried before each turn, and any start of the bridge settles
+it. Codex and the Claude process driver start their CLI per turn and need no restart. A
 checkpoint fork has no delivery of its own: its restored data holds the source's
 verified bundle and manifest, so it lays out the source's files again. The Claude
 SDK runner's user profile reads its own home, not `/data/claude`, so it does not
-see dotfiles.
+see dotfiles; the managed profile does.
 
 ## Workspace service
 

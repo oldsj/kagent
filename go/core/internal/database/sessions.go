@@ -50,12 +50,11 @@ func marshalSession(session *apiv1.Session) ([]byte, error) {
 }
 
 // sameSessionRequest reports whether two creation requests target the same Agent,
-// workspace, and credential references. Names and other mutable fields do not
-// affect retry identity.
+// workspace, and credential references. Names, dotfiles and other mutable
+// fields do not affect retry identity: a retry returns the Session as it is.
 func sameSessionRequest(session, request *apiv1.Session) bool {
 	return proto.Equal(session.GetAgent().GetRef(), request.GetAgent().GetRef()) && proto.Equal(session.GetWorkspace(), request.GetWorkspace()) &&
 		proto.Equal(session.GetDevelopmentEnvironment(), request.GetDevelopmentEnvironment()) &&
-		proto.Equal(session.GetDotfiles(), request.GetDotfiles()) &&
 		proto.Equal(&apiv1.Session{Credentials: session.GetCredentials()}, &apiv1.Session{Credentials: request.GetCredentials()})
 }
 
@@ -303,6 +302,58 @@ func (c *Client) UpdateSessionName(ctx context.Context, id, userID, name string)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("rename Session %s: %w", id, err)
+	}
+	return result, nil
+}
+
+// UpdateSessionDotfiles replaces an owned Session's dotfiles when its current
+// digest is previousDigest. A Session that already holds exactly dotfiles is
+// returned unchanged; one at another digest is ErrConflict. check validates the
+// new dotfiles against the locked Session (its credentials) and its error is
+// returned as is. Missing sessions and sessions owned by another user return
+// ErrNotFound.
+func (c *Client) UpdateSessionDotfiles(ctx context.Context, id, userID, previousDigest string, dotfiles *apiv1.Dotfiles, check func(*apiv1.Session) error) (*apiv1.Session, error) {
+	var result *apiv1.Session
+	err := c.withTx(ctx, func(tx pgx.Tx) error {
+		row, err := lockSession(ctx, tx, id)
+		if err != nil {
+			return notFoundOr(err)
+		}
+		if row.UserID != userID || row.State == apiv1.RuntimeState_RUNTIME_STATE_DELETED.String() {
+			return ErrNotFound
+		}
+		session, err := toSession(row)
+		if err != nil {
+			return err
+		}
+		if proto.Equal(session.GetDotfiles(), dotfiles) {
+			result = session
+			return nil
+		}
+		if session.GetDotfiles().GetDigest() != previousDigest {
+			return fmt.Errorf("the Session's dotfiles are at %q, not %q: %w", session.GetDotfiles().GetDigest(), previousDigest, ErrConflict)
+		}
+		if err := check(session); err != nil {
+			return err
+		}
+		session.Dotfiles = dotfiles
+		session.UpdatedAt = timestamppb.Now()
+		data, err := marshalSession(session)
+		if err != nil {
+			return err
+		}
+		tag, err := tx.Exec(ctx, `UPDATE session SET data = $1 WHERE id = $2`, data, row.ID)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() != 1 {
+			return ErrNotFound
+		}
+		result = session
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("update the dotfiles of Session %s: %w", id, err)
 	}
 	return result, nil
 }

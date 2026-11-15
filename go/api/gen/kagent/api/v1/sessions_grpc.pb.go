@@ -24,6 +24,7 @@ const (
 	SessionService_PrepareSessionWorkspace_FullMethodName = "/kagent.api.v1.SessionService/PrepareSessionWorkspace"
 	SessionService_ListSessions_FullMethodName            = "/kagent.api.v1.SessionService/ListSessions"
 	SessionService_UpdateSessionName_FullMethodName       = "/kagent.api.v1.SessionService/UpdateSessionName"
+	SessionService_UpdateSessionDotfiles_FullMethodName   = "/kagent.api.v1.SessionService/UpdateSessionDotfiles"
 	SessionService_RevertSession_FullMethodName           = "/kagent.api.v1.SessionService/RevertSession"
 	SessionService_DeleteSession_FullMethodName           = "/kagent.api.v1.SessionService/DeleteSession"
 	SessionService_CreateSessionShare_FullMethodName      = "/kagent.api.v1.SessionService/CreateSessionShare"
@@ -51,6 +52,14 @@ type SessionServiceClient interface {
 	PrepareSessionWorkspace(ctx context.Context, in *PrepareSessionWorkspaceRequest, opts ...grpc.CallOption) (*PrepareSessionWorkspaceResponse, error)
 	ListSessions(ctx context.Context, in *ListSessionsRequest, opts ...grpc.CallOption) (*ListSessionsResponse, error)
 	UpdateSessionName(ctx context.Context, in *UpdateSessionNameRequest, opts ...grpc.CallOption) (*UpdateSessionNameResponse, error)
+	// UpdateSessionDotfiles replaces the agent dotfiles a Session lays out. The
+	// runtime picks the new bundle up at the start of its next turn, never
+	// mid-turn, and restarts a long-lived CLI process so it reads them, resuming
+	// the conversation. A Session whose digest is not previous_digest fails with
+	// FAILED_PRECONDITION, unless it already holds exactly these dotfiles, which
+	// succeeds without a change; so a retry is safe and a stale one cannot undo
+	// a newer update.
+	UpdateSessionDotfiles(ctx context.Context, in *UpdateSessionDotfilesRequest, opts ...grpc.CallOption) (*UpdateSessionDotfilesResponse, error)
 	// Restores a crashed runtime to its last snapshot without replaying its turn.
 	RevertSession(ctx context.Context, in *RevertSessionRequest, opts ...grpc.CallOption) (*RevertSessionResponse, error)
 	DeleteSession(ctx context.Context, in *DeleteSessionRequest, opts ...grpc.CallOption) (*DeleteSessionResponse, error)
@@ -111,6 +120,16 @@ func (c *sessionServiceClient) UpdateSessionName(ctx context.Context, in *Update
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(UpdateSessionNameResponse)
 	err := c.cc.Invoke(ctx, SessionService_UpdateSessionName_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *sessionServiceClient) UpdateSessionDotfiles(ctx context.Context, in *UpdateSessionDotfilesRequest, opts ...grpc.CallOption) (*UpdateSessionDotfilesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpdateSessionDotfilesResponse)
+	err := c.cc.Invoke(ctx, SessionService_UpdateSessionDotfiles_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -187,6 +206,14 @@ type SessionServiceServer interface {
 	PrepareSessionWorkspace(context.Context, *PrepareSessionWorkspaceRequest) (*PrepareSessionWorkspaceResponse, error)
 	ListSessions(context.Context, *ListSessionsRequest) (*ListSessionsResponse, error)
 	UpdateSessionName(context.Context, *UpdateSessionNameRequest) (*UpdateSessionNameResponse, error)
+	// UpdateSessionDotfiles replaces the agent dotfiles a Session lays out. The
+	// runtime picks the new bundle up at the start of its next turn, never
+	// mid-turn, and restarts a long-lived CLI process so it reads them, resuming
+	// the conversation. A Session whose digest is not previous_digest fails with
+	// FAILED_PRECONDITION, unless it already holds exactly these dotfiles, which
+	// succeeds without a change; so a retry is safe and a stale one cannot undo
+	// a newer update.
+	UpdateSessionDotfiles(context.Context, *UpdateSessionDotfilesRequest) (*UpdateSessionDotfilesResponse, error)
 	// Restores a crashed runtime to its last snapshot without replaying its turn.
 	RevertSession(context.Context, *RevertSessionRequest) (*RevertSessionResponse, error)
 	DeleteSession(context.Context, *DeleteSessionRequest) (*DeleteSessionResponse, error)
@@ -217,6 +244,9 @@ func (UnimplementedSessionServiceServer) ListSessions(context.Context, *ListSess
 }
 func (UnimplementedSessionServiceServer) UpdateSessionName(context.Context, *UpdateSessionNameRequest) (*UpdateSessionNameResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpdateSessionName not implemented")
+}
+func (UnimplementedSessionServiceServer) UpdateSessionDotfiles(context.Context, *UpdateSessionDotfilesRequest) (*UpdateSessionDotfilesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateSessionDotfiles not implemented")
 }
 func (UnimplementedSessionServiceServer) RevertSession(context.Context, *RevertSessionRequest) (*RevertSessionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RevertSession not implemented")
@@ -344,6 +374,24 @@ func _SessionService_UpdateSessionName_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SessionService_UpdateSessionDotfiles_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateSessionDotfilesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SessionServiceServer).UpdateSessionDotfiles(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SessionService_UpdateSessionDotfiles_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SessionServiceServer).UpdateSessionDotfiles(ctx, req.(*UpdateSessionDotfilesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _SessionService_RevertSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RevertSessionRequest)
 	if err := dec(in); err != nil {
@@ -460,6 +508,10 @@ var SessionService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpdateSessionName",
 			Handler:    _SessionService_UpdateSessionName_Handler,
+		},
+		{
+			MethodName: "UpdateSessionDotfiles",
+			Handler:    _SessionService_UpdateSessionDotfiles_Handler,
 		},
 		{
 			MethodName: "RevertSession",

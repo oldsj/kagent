@@ -37,6 +37,7 @@ type store interface {
 	GetSessionByID(context.Context, string) (*apiv1.Session, error)
 	ListSessions(context.Context, database.SessionQuery) ([]*apiv1.Session, error)
 	UpdateSessionName(context.Context, string, string, string) (*apiv1.Session, error)
+	UpdateSessionDotfiles(context.Context, string, string, string, *apiv1.Dotfiles, func(*apiv1.Session) error) (*apiv1.Session, error)
 	CreateSessionShare(context.Context, *apiv1.SessionShare, []byte, string) (*apiv1.SessionShare, error)
 	ListSessionShares(context.Context, string, string, string, int) ([]*apiv1.SessionShare, error)
 	DeleteSessionShare(context.Context, string, string) error
@@ -286,6 +287,38 @@ func (s *Service) Rename(ctx context.Context, id, name string) (*apiv1.Session, 
 	}
 	if err != nil {
 		return nil, serviceerrors.NewInternal("Failed to rename Session", err)
+	}
+	return session, nil
+}
+
+// UpdateDotfiles replaces the dotfiles the Session's runtime lays out from its
+// next turn, when the Session is at previousDigest (see the RPC). It authorizes
+// as an update.
+func (s *Service) UpdateDotfiles(ctx context.Context, r *apiv1.UpdateSessionDotfilesRequest) (*apiv1.Session, error) {
+	id, err := validateIdentity(r.GetSessionId())
+	if err != nil {
+		return nil, err
+	}
+	if err := protovalidate.Validate(r); err != nil {
+		return nil, serviceerrors.NewInvalidArgument("dotfiles update is invalid", err)
+	}
+	creator, err := s.authorize(ctx, auth.VerbUpdate, id)
+	if err != nil {
+		return nil, err
+	}
+	session, err := s.store.UpdateSessionDotfiles(ctx, id, creator, r.GetPreviousDigest(), r.GetDotfiles(), func(session *apiv1.Session) error {
+		return validateDotfiles(r.GetDotfiles(), session.GetCredentials())
+	})
+	var invalid *serviceerrors.Error
+	switch {
+	case errors.As(err, &invalid):
+		return nil, invalid
+	case errors.Is(err, database.ErrNotFound):
+		return nil, serviceerrors.NewNotFound("Session not found", err)
+	case errors.Is(err, database.ErrConflict):
+		return nil, serviceerrors.NewFailedPrecondition("the Session's dotfiles are not at previous_digest", err)
+	case err != nil:
+		return nil, serviceerrors.NewInternal("Failed to update the Session's dotfiles", err)
 	}
 	return session, nil
 }
