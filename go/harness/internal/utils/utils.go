@@ -58,6 +58,34 @@ func (b *BoundedBuffer) Diagnostic() string {
 	return SafeDiagnostic(string(b.data))
 }
 
+// RemoveTree removes path and everything under it, first making its
+// directories writable, so a tree laid out read-only can still be removed. It
+// never follows a symlink: a symlink is removed itself.
+func RemoveTree(path string) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		err := filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				return os.Chmod(p, 0o700)
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return os.RemoveAll(path)
+}
+
 // EnsurePrivateDir creates path when necessary, rejects symlinks and
 // non-directories, and enforces owner-only permissions.
 func EnsurePrivateDir(path string) error {

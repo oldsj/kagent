@@ -12,7 +12,7 @@ import type { JsonObject, Message } from "@bufbuild/protobuf";
  * Describes the file kagent/api/v1/common.proto.
  */
 export const file_kagent_api_v1_common: GenFile = /*@__PURE__*/
-  fileDesc("ChprYWdlbnQvYXBpL3YxL2NvbW1vbi5wcm90bxINa2FnZW50LmFwaS52MSJdChBTdHJ1Y3R1cmVkT2JqZWN0EhMKC2FwaV92ZXJzaW9uGAEgASgJEgwKBGtpbmQYAiABKAkSJgoFdmFsdWUYAyABKAsyFy5nb29nbGUucHJvdG9idWYuU3RydWN0IrABChFSZXNvdXJjZVJlZmVyZW5jZRI9CgluYW1lc3BhY2UYASABKAlCKrpIJ3IlEAEYPzIfXlthLXowLTldKFstYS16MC05XSpbYS16MC05XSk/JBJcCgRuYW1lGAIgASgJQk66SEtySRABGP0BMkJeW2EtejAtOV0oWy1hLXowLTldKlthLXowLTldKT8oWy5dW2EtejAtOV0oWy1hLXowLTldKlthLXowLTldKT8pKiQiOwoLUGFnZVJlcXVlc3QSGAoFbGltaXQYASABKAVCCbpIBhoEGGQoABISCgpwYWdlX3Rva2VuGAIgASgJIicKDFBhZ2VSZXNwb25zZRIXCg9uZXh0X3BhZ2VfdG9rZW4YASABKAki7AEKCVdvcmtzcGFjZRIbCgRyZXBvGAEgASgJQg26SApyCBABGIAQiAEBEjsKA3JlZhgCIAEoCUIuukgrcikY/wEyJF4oPzokfFtBLVphLXowLTlfXVtBLVphLXowLTkuXy8tXSopJBI+CgZicmFuY2gYAyABKAlCLrpIK3IpGP8BMiReKD86JHxbQS1aYS16MC05X11bQS1aYS16MC05Ll8vLV0qKSQSGQoFZGVwdGgYBCABKAVCCrpIBxoFGOgHKAASKgoPc2VydmljZV9jb21tYW5kGAUgAygJQhG6SA6SAQsQQCIHcgUQARiAIEI9WjtnaXRodWIuY29tL2thZ2VudC1kZXYva2FnZW50L2dvL2FwaS9nZW4va2FnZW50L2FwaS92MTthcGl2MWIGcHJvdG8z", [file_buf_validate_validate, file_google_protobuf_struct]);
+  fileDesc("ChprYWdlbnQvYXBpL3YxL2NvbW1vbi5wcm90bxINa2FnZW50LmFwaS52MSJdChBTdHJ1Y3R1cmVkT2JqZWN0EhMKC2FwaV92ZXJzaW9uGAEgASgJEgwKBGtpbmQYAiABKAkSJgoFdmFsdWUYAyABKAsyFy5nb29nbGUucHJvdG9idWYuU3RydWN0IrABChFSZXNvdXJjZVJlZmVyZW5jZRI9CgluYW1lc3BhY2UYASABKAlCKrpIJ3IlEAEYPzIfXlthLXowLTldKFstYS16MC05XSpbYS16MC05XSk/JBJcCgRuYW1lGAIgASgJQk66SEtySRABGP0BMkJeW2EtejAtOV0oWy1hLXowLTldKlthLXowLTldKT8oWy5dW2EtejAtOV0oWy1hLXowLTldKlthLXowLTldKT8pKiQiOwoLUGFnZVJlcXVlc3QSGAoFbGltaXQYASABKAVCCbpIBhoEGGQoABISCgpwYWdlX3Rva2VuGAIgASgJIicKDFBhZ2VSZXNwb25zZRIXCg9uZXh0X3BhZ2VfdG9rZW4YASABKAki7wEKCERvdGZpbGVzElIKA3VybBgBIAEoCUJFukhCckAYgBAyO15odHRwcz86Ly9bQS1aYS16MC05Li1dKyg6WzAtOV17MSw1fSk/L1tBLVphLXowLTkuX34vJTotXSokEiwKBmRpZ2VzdBgCIAEoCUIcukgZchcyFV5zaGEyNTY6W2EtZjAtOV17NjR9JBIcCgpyZXBvc2l0b3J5GAMgASgJQgi6SAVyAxiMARIrCgZjb21taXQYBCABKAlCG7pIGHIWMhReKD86JHxbYS1mMC05XXs0MH0pJBIWCgRwYXRoGAUgASgJQgi6SAVyAxj/ASLsAQoJV29ya3NwYWNlEhsKBHJlcG8YASABKAlCDbpICnIIEAEYgBCIAQESOwoDcmVmGAIgASgJQi66SCtyKRj/ATIkXig/OiR8W0EtWmEtejAtOV9dW0EtWmEtejAtOS5fLy1dKikkEj4KBmJyYW5jaBgDIAEoCUIuukgrcikY/wEyJF4oPzokfFtBLVphLXowLTlfXVtBLVphLXowLTkuXy8tXSopJBIZCgVkZXB0aBgEIAEoBUIKukgHGgUY6AcoABIqCg9zZXJ2aWNlX2NvbW1hbmQYBSADKAlCEbpIDpIBCxBAIgdyBRABGIAgQj1aO2dpdGh1Yi5jb20va2FnZW50LWRldi9rYWdlbnQvZ28vYXBpL2dlbi9rYWdlbnQvYXBpL3YxO2FwaXYxYgZwcm90bzM", [file_buf_validate_validate, file_google_protobuf_struct]);
 
 /**
  * @generated from message kagent.api.v1.StructuredObject
@@ -103,6 +103,55 @@ export const PageResponseSchema: GenMessage<PageResponse> = /*@__PURE__*/
   messageDesc(file_kagent_api_v1_common, 3);
 
 /**
+ * Dotfiles names a bundle of agent user-level files: owner instructions
+ * (AGENTS.md, CLAUDE.md), skills, subagents and commands. The bundle is an
+ * uncompressed tar of regular files, fetched with an HTTP GET from url through
+ * the egress gateway, which injects the Session credential bound to url's
+ * origin. The runtime verifies digest, lays the files out read-only in the
+ * CLI's user configuration directory before the first turn, and lays them out
+ * again at every start of the runtime. It executes nothing from the bundle.
+ *
+ * @generated from message kagent.api.v1.Dotfiles
+ */
+export type Dotfiles = Message<"kagent.api.v1.Dotfiles"> & {
+  /**
+   * @generated from field: string url = 1;
+   */
+  url: string;
+
+  /**
+   * sha256 of the bundle bytes, "sha256:<hex>".
+   *
+   * @generated from field: string digest = 2;
+   */
+  digest: string;
+
+  /**
+   * Provenance for audit only; the runtime does not interpret it.
+   *
+   * @generated from field: string repository = 3;
+   */
+  repository: string;
+
+  /**
+   * @generated from field: string commit = 4;
+   */
+  commit: string;
+
+  /**
+   * @generated from field: string path = 5;
+   */
+  path: string;
+};
+
+/**
+ * Describes the message kagent.api.v1.Dotfiles.
+ * Use `create(DotfilesSchema)` to create a new message.
+ */
+export const DotfilesSchema: GenMessage<Dotfiles> = /*@__PURE__*/
+  messageDesc(file_kagent_api_v1_common, 4);
+
+/**
  * Workspace asks the runtime to check out a Git repository before the first turn.
  * The repository host must be one of the Agent's Git origins; the runtime never
  * receives credentials, since the egress gateway injects them.
@@ -156,5 +205,5 @@ export type Workspace = Message<"kagent.api.v1.Workspace"> & {
  * Use `create(WorkspaceSchema)` to create a new message.
  */
 export const WorkspaceSchema: GenMessage<Workspace> = /*@__PURE__*/
-  messageDesc(file_kagent_api_v1_common, 4);
+  messageDesc(file_kagent_api_v1_common, 5);
 

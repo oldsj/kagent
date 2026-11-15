@@ -105,18 +105,30 @@ class TaskStoreServiceGetWorkspaceRequest(_message.Message):
     def __init__(self, session_id: _Optional[str] = ...) -> None: ...
 
 class TaskStoreServiceGetWorkspaceResponse(_message.Message):
-    __slots__ = ("workspace", "preparation_required", "preparation_ready", "preparation", "fresh_conversation")
+    __slots__ = ("workspace", "preparation_required", "preparation_ready", "preparation", "fresh_conversation", "dotfiles")
     WORKSPACE_FIELD_NUMBER: _ClassVar[int]
     PREPARATION_REQUIRED_FIELD_NUMBER: _ClassVar[int]
     PREPARATION_READY_FIELD_NUMBER: _ClassVar[int]
     PREPARATION_FIELD_NUMBER: _ClassVar[int]
     FRESH_CONVERSATION_FIELD_NUMBER: _ClassVar[int]
+    DOTFILES_FIELD_NUMBER: _ClassVar[int]
     workspace: _common_pb2.Workspace
     preparation_required: bool
     preparation_ready: bool
     preparation: WorkspacePreparation
     fresh_conversation: bool
-    def __init__(self, workspace: _Optional[_Union[_common_pb2.Workspace, _Mapping]] = ..., preparation_required: _Optional[bool] = ..., preparation_ready: _Optional[bool] = ..., preparation: _Optional[_Union[WorkspacePreparation, _Mapping]] = ..., fresh_conversation: _Optional[bool] = ...) -> None: ...
+    dotfiles: DotfilesDelivery
+    def __init__(self, workspace: _Optional[_Union[_common_pb2.Workspace, _Mapping]] = ..., preparation_required: _Optional[bool] = ..., preparation_ready: _Optional[bool] = ..., preparation: _Optional[_Union[WorkspacePreparation, _Mapping]] = ..., fresh_conversation: _Optional[bool] = ..., dotfiles: _Optional[_Union[DotfilesDelivery, _Mapping]] = ...) -> None: ...
+
+class DotfilesDelivery(_message.Message):
+    __slots__ = ("url", "digest", "header")
+    URL_FIELD_NUMBER: _ClassVar[int]
+    DIGEST_FIELD_NUMBER: _ClassVar[int]
+    HEADER_FIELD_NUMBER: _ClassVar[int]
+    url: str
+    digest: str
+    header: str
+    def __init__(self, url: _Optional[str] = ..., digest: _Optional[str] = ..., header: _Optional[str] = ...) -> None: ...
 
 class WorkspacePreparation(_message.Message):
     __slots__ = ("session_id", "context_id", "create_request_id", "action_id", "request_digest", "execution_id", "challenge_id", "sequence", "generation_id", "atespace", "actor_name", "actor_uid", "prepared_revision", "workspace", "development_image", "platform", "policy_identity", "payload_image", "provider", "schema", "cli_version", "profile", "setup_digest", "config_digest", "mcp_digest")

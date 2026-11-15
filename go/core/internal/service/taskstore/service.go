@@ -17,6 +17,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 
+	"github.com/kagent-dev/kagent/go/api/dotfiles"
 	apiv1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1"
 	runtimev1 "github.com/kagent-dev/kagent/go/api/gen/kagent/runtime/v1"
 	"github.com/kagent-dev/kagent/go/core/internal/database"
@@ -216,6 +217,13 @@ func (s *Service) GetWorkspace(ctx context.Context, input *runtimev1.TaskStoreSe
 		return nil, err
 	}
 	response := &runtimev1.TaskStoreServiceGetWorkspaceResponse{Workspace: session.GetWorkspace(), FreshConversation: session.GetFreshConversation()}
+	if d := session.GetDotfiles(); d != nil {
+		// The credential's header, never its value: the gateway injects the value
+		// for the url's origin when the runtime sends the header with a placeholder.
+		if c, err := dotfiles.Credential(d, session.GetCredentials()); err == nil {
+			response.Dotfiles = &runtimev1.DotfilesDelivery{Url: d.GetUrl(), Digest: d.GetDigest(), Header: c.GetHeader()}
+		}
+	}
 	preparation, err := s.store.IssueWorkspacePreparation(ctx, session, actorUID)
 	if err != nil {
 		return nil, storageError(err)

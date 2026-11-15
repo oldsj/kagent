@@ -22,6 +22,7 @@ import (
 	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	"github.com/kagent-dev/kagent/go/harness/claude/config"
 	"github.com/kagent-dev/kagent/go/harness/claude/executor"
+	"github.com/kagent-dev/kagent/go/harness/runtime/dotfiles"
 	"github.com/kagent-dev/kagent/go/harness/runtime/service"
 	"github.com/kagent-dev/kagent/go/harness/runtime/workspace"
 	"github.com/kagent-dev/kagent/go/pkg/logging"
@@ -109,7 +110,7 @@ func run(ctx context.Context, check bool, getenv func(string) string, environmen
 		}
 		defer controller.Close()
 	}
-	execCfg := executor.Config{ConfigJSON: configJSON, DataDir: dataDir, Environment: environment, Workspace: source, Conversation: workspace.ConversationOf(source)}
+	execCfg := executor.Config{ConfigJSON: configJSON, DataDir: dataDir, Environment: environment, Workspace: source, Conversation: workspace.ConversationOf(source), Dotfiles: dotfiles.Of(source)}
 	if !check {
 		execCfg.ClientAddr = executor.ClientAddr
 		if controller != nil {

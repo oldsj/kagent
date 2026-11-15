@@ -127,6 +127,17 @@ message TaskStoreServiceGetWorkspaceResponse {
   // True for a fork created with a fresh conversation: before its first turn the
   // runtime discards native conversation state restored from the checkpoint.
   bool fresh_conversation = 5;
+  // Unset when the Session has no dotfiles bundle.
+  DotfilesDelivery dotfiles = 6;
+}
+
+// DotfilesDelivery tells the runtime how to fetch the Session's dotfiles
+// bundle: GET url with header set to a placeholder value, which the egress
+// gateway replaces with the Session credential bound to url's origin.
+message DotfilesDelivery {
+  string url = 1;
+  string digest = 2;
+  string header = 3;
 }
 
 // WorkspacePreparation is one assigned preparation action for this runtime.

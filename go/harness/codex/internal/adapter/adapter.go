@@ -400,7 +400,9 @@ func reconcileGeneratedDir(directory string, keep map[string]struct{}) error {
 		if info.Mode()&os.ModeSymlink != 0 {
 			return fmt.Errorf("generated path %q is a symlink", path)
 		}
-		if err := os.RemoveAll(path); err != nil {
+		// A dotfiles skill is laid out read-only; the dotfiles layer lays it out
+		// again before the next turn.
+		if err := utils.RemoveTree(path); err != nil {
 			return err
 		}
 	}

@@ -55,6 +55,7 @@ func marshalSession(session *apiv1.Session) ([]byte, error) {
 func sameSessionRequest(session, request *apiv1.Session) bool {
 	return proto.Equal(session.GetAgent().GetRef(), request.GetAgent().GetRef()) && proto.Equal(session.GetWorkspace(), request.GetWorkspace()) &&
 		proto.Equal(session.GetDevelopmentEnvironment(), request.GetDevelopmentEnvironment()) &&
+		proto.Equal(session.GetDotfiles(), request.GetDotfiles()) &&
 		proto.Equal(&apiv1.Session{Credentials: session.GetCredentials()}, &apiv1.Session{Credentials: request.GetCredentials()})
 }
 
