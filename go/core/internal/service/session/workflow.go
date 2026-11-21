@@ -17,6 +17,7 @@ import (
 type workflowStore interface {
 	GetSessionGeneration(context.Context, string) (*database.SessionGeneration, error)
 	BeginCrashedSessionRecovery(context.Context, *database.SessionGeneration, database.SessionTaskSnapshot) (*database.SessionOperation, error)
+	ListPendingCrashRecoveries(context.Context, int) ([]string, error)
 	ClaimSessionQuiescence(context.Context) (*database.SessionQuiescence, error)
 	HasPendingSessionQuiescence(context.Context) (bool, error)
 	FinishSessionQuiescence(context.Context, *database.SessionQuiescence, *database.SessionTaskSnapshot) error

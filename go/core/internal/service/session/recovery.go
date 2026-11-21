@@ -65,8 +65,8 @@ func (w *ActorWorkflow) observeCrash(ctx context.Context, session *apiv1.Session
 }
 
 // Revert restores a confirmed crashed runtime without replaying its interrupted turn.
-// Nothing retries an admitted recovery in the background; the caller retries until
-// it succeeds. A runtime that is not crashed, including after a revert whose
+// A caller may retry it until it succeeds, and the workflow also retries an
+// admitted recovery in the background with backoff (retryCrashRecoveries). A runtime that is not crashed, including after a revert whose
 // response was lost, is returned unchanged.
 func (w *ActorWorkflow) Revert(ctx context.Context, session *apiv1.Session) (*apiv1.Session, error) {
 	if database.CrashRecoveryAdmitted(session) {

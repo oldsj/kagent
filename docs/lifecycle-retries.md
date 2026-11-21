@@ -48,10 +48,13 @@ It preserves durable terminal results and returns the Session to READY with its 
 It discards runtime changes since that snapshot and does not replay input.
 A runtime without a snapshot restarts from its initial state.
 
-Retry an interrupted revert against the same Session ID; nothing retries it in the background.
+Retry an interrupted revert against the same Session ID.
+The control plane also retries an admitted recovery in the background, starting after 15 seconds and doubling the delay up to 10 minutes,
+so a recovery that failed while Substrate could not reach the Actor's node finishes without a caller.
+It stops retrying a recovery that can never succeed because the recorded Actor is missing or was replaced; delete that Session.
 Pending recovery retains its operation across API restarts, and a retry joins it.
 While recovery is pending, `GetSession` reports state `FAILED`, operation `REVERT`, and failure reason `RuntimeCrashed`.
-Interactions fail because a lifecycle operation is in progress. Call `RevertSession` again to finish the recovery.
+Interactions fail because a lifecycle operation is in progress. Call `RevertSession` again to finish the recovery sooner.
 A retry after a revert whose response was lost returns the recovered Session.
 Checkpoint creation returns `ABORTED` until it finishes.
 A revert that observed the crash before another lifecycle operation began also returns `ABORTED`.

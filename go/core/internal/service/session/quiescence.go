@@ -36,8 +36,10 @@ func (w *ActorWorkflow) wakeQuiescence() {
 // Start suspends idle sessions to VOLUMES independently of task publication.
 // Startup and periodic recovery scans discover work missed by local signals.
 // Workers drain claims with bounded concurrency; task reads never wait for them.
+// Another worker retries admitted crash recoveries whose revert failed.
 func (w *ActorWorkflow) Start(ctx context.Context) error {
 	var workers sync.WaitGroup
+	workers.Go(func() { w.runCrashRecoveryRetries(ctx, max(w.recoveryInterval, crashRecoveryRetryMin)) })
 	for range 4 {
 		workers.Go(func() {
 			timer := time.NewTimer(w.recoveryInterval)

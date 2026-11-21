@@ -62,6 +62,22 @@ func (c *Client) GetSessionGeneration(ctx context.Context, id string) (*SessionG
 	return generation, nil
 }
 
+// ListPendingCrashRecoveries returns up to limit Sessions whose admitted crash
+// recovery is unfinished and held by no live attempt: no executor, or one whose
+// lease has passed. The session workflow retries these in the background.
+func (c *Client) ListPendingCrashRecoveries(ctx context.Context, limit int) ([]string, error) {
+	ids, err := queryMany(ctx, c.db, `
+		SELECT id::text FROM runtime_instance
+		WHERE kind = 'agent' AND operation = 'RUNTIME_OPERATION_REVERT' AND state = 'RUNTIME_STATE_FAILED'
+		  AND (executor_id IS NULL OR executor_expires_at <= clock_timestamp())
+		ORDER BY id LIMIT $1
+	`, pgx.RowTo[string], limit)
+	if err != nil {
+		return nil, fmt.Errorf("list pending crash recoveries: %w", err)
+	}
+	return ids, nil
+}
+
 // BeginCrashedSessionRecovery admits recovery of a confirmed crash and preserves
 // durable results. generation must be read before the crash was observed: a
 // concurrent revert keeps the Actor UID and returns to READY, so only a newer

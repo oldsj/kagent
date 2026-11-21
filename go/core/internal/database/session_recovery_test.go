@@ -1,7 +1,9 @@
 package database
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/google/uuid"
@@ -326,4 +328,42 @@ func TestRevertCanOnlyJoinAnAdmittedRecovery(t *testing.T) {
 	joined, err := client.BeginSessionOperation(t.Context(), session.Id, apiv1.RuntimeOperation_RUNTIME_OPERATION_REVERT, false)
 	require.NoError(t, err)
 	require.Equal(t, admitted.ID, joined.ID)
+}
+
+func TestListPendingCrashRecoveries(t *testing.T) {
+	t.Run("Given admitted crash recoveries in every attempt state, when pending recoveries are listed, assert that only unheld unfinished ones are returned", func(t *testing.T) {
+		client := NewClient(setupTestDB(t), "public")
+		sessionFixture(t, client, t.Context(), "team-a", "revision", "assistant", "kagent")
+		admit := func() (*SessionOperation, string) {
+			session, _ := waitingTaskFixture(t, client)
+			operation, err := client.BeginCrashedSessionRecovery(t.Context(), observedGeneration(t, client, session.Id, "actor-"+session.Id), SessionTaskSnapshot{})
+			require.NoError(t, err)
+			return operation, session.Id
+		}
+		claim := func(ctx context.Context, sessionID string, operation *SessionOperation) uuid.UUID {
+			executor := uuid.New()
+			claimed, err := client.ClaimSessionOperation(ctx, sessionID, operation.ID, executor)
+			require.NoError(t, err)
+			require.True(t, claimed)
+			return executor
+		}
+		_, unclaimed := admit()
+		released, releasedID := admit()
+		require.NoError(t, client.ReleaseRuntimeOperation(t.Context(), releasedID, released.ID, claim(t.Context(), releasedID, released)))
+		held, heldID := admit()
+		live, cancel := context.WithTimeout(t.Context(), time.Hour)
+		defer cancel()
+		claim(live, heldID, held)
+		recovered, _ := waitingTaskFixture(t, client)
+		completeCrashedRecovery(t, client, recovered.Id, "actor-"+recovered.Id)
+		waitingTaskFixture(t, client) // a READY Session with no recovery
+
+		ids, err := client.ListPendingCrashRecoveries(t.Context(), 10)
+
+		require.NoError(t, err)
+		require.ElementsMatch(t, []string{unclaimed, releasedID}, ids)
+		limited, err := client.ListPendingCrashRecoveries(t.Context(), 1)
+		require.NoError(t, err)
+		require.Len(t, limited, 1)
+	})
 }

@@ -367,10 +367,21 @@ Session READY but refuse all input forever.
 Execution reverts the same Actor to its last durable snapshot without replaying
 input. A runtime without a durable snapshot returns to its initial state.
 An interrupted revert continues from REVERTING; a lost response can be reconciled
-from SUSPENDED. Apart from the idle worker's single attempt, nothing retries a
-recovery in the background. An admitted recovery survives API restarts as a
-durable REVERT operation, and the client continues it by retrying
-RevertSession, as with Create and Delete. While it is pending, `GetSession`
+from SUSPENDED. An admitted recovery survives API restarts as a durable REVERT
+operation. A client can continue it by retrying RevertSession, as with Create
+and Delete, and the session workflow also retries it in the background. Each
+API replica scans for admitted recoveries that no live attempt holds and joins
+each one as RevertSession does, backing off per Session from 15 seconds to 10
+minutes. The retry can only join an admitted recovery, never admit one, so it
+reverts only an Actor whose crash Substrate confirmed; the operation claim keeps
+replicas and clients from issuing the same attempt twice. Backoff is in memory,
+so a restarted replica retries each pending recovery once immediately. A
+recovery whose recorded Actor is missing or was replaced fails with
+FailedPrecondition and is not retried; only deleting the Session ends it. The
+background retry matters when the first revert fails because the Actor's node
+is unreachable, for example while it restarts: Substrate resolves the node's
+current atelet endpoint on each call, so a later attempt reaches it once the
+node returns. While it is pending, `GetSession`
 reports FAILED/REVERT with failure reason `RuntimeCrashed`, and sends are
 refused with ErrorInfo reason `KAGENT_SESSION_CRASHED`.
 
