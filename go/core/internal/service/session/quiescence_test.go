@@ -45,6 +45,11 @@ func (s *idleQuiescenceStore) ClaimSessionActivityQuiescence(context.Context) (*
 	return nil, database.ErrNotFound
 }
 
+// ListPendingCrashRecoveries reports none, so Start's recovery retrier stays idle.
+func (s *idleQuiescenceStore) ListPendingCrashRecoveries(context.Context, int) ([]string, error) {
+	return nil, nil
+}
+
 func (s *idleQuiescenceStore) HasPendingSessionQuiescence(context.Context) (bool, error) {
 	s.pendingChecks.Add(1)
 	if s.beforeIdle != nil {
