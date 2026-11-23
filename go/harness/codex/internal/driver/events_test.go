@@ -268,6 +268,125 @@ func TestTerminalClosesOpenToolsAsUnfinished(t *testing.T) {
 	}
 }
 
+// The two items are the shapes Codex 0.161.0 sends for a hosted search: the start has no query
+// yet, and the completion carries it with the action.
+const (
+	webSearchStarted   = `{"jsonrpc":"2.0","method":"item/started","params":{"threadId":"thread","turnId":"turn","item":{"type":"webSearch","id":"ws_1","query":"","action":{"type":"other"},"results":null}}}`
+	webSearchCompleted = `{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"thread","turnId":"turn","item":{"type":"webSearch","id":"ws_1","query":"latest PostgreSQL 17 minor release","action":{"type":"search","query":"latest PostgreSQL 17 minor release","queries":null},"results":null}}}`
+)
+
+func translateAll(t *testing.T, translator *eventTranslator, sink *recordingSink, messages ...string) {
+	t.Helper()
+	for _, raw := range messages {
+		var message rpcMessage
+		if err := json.Unmarshal([]byte(raw), &message); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := translator.translate(message, sink); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestWebSearchIsOneCallNamingTheQuery(t *testing.T) {
+	sink := &recordingSink{}
+	translator := newEventTranslator("thread", "turn")
+	translator.modelCalls["thread"] = callTime{start: translator.now()}
+
+	// The start publishes nothing: Codex has not said what it is searching for yet.
+	translateAll(t, translator, sink, webSearchStarted)
+	if len(sink.calls) != 0 || len(sink.results) != 0 {
+		t.Fatalf("after the start: calls %#v, results %#v, want none", sink.calls, sink.results)
+	}
+	// The search runs inside the model's response, so the model call stays open.
+	if call := translator.modelCalls["thread"]; !call.end.IsZero() {
+		t.Fatalf("model call ended at %v, want it open", call.end)
+	}
+
+	translateAll(t, translator, sink, webSearchCompleted)
+	if len(sink.calls) != 1 || len(sink.results) != 1 {
+		t.Fatalf("calls %#v, results %#v, want one of each", sink.calls, sink.results)
+	}
+	call, result := sink.calls[0], sink.results[0]
+	if call.ID != "ws_1" || call.Name != "WebSearch" || call.Arguments["query"] != "latest PostgreSQL 17 minor release" {
+		t.Fatalf("call = %#v, want WebSearch ws_1 with the query", call)
+	}
+	action, ok := call.Arguments["action"].(map[string]any)
+	if !ok || action["type"] != "search" {
+		t.Fatalf("action = %#v, want the search action", call.Arguments["action"])
+	}
+	if call.MCPServer != "" || call.MCPTool != "" {
+		t.Fatalf("call = %#v, want no MCP server or tool", call)
+	}
+	if result.ID != "ws_1" || result.Name != "WebSearch" || result.IsError || result.Status != runtime.ToolRan {
+		t.Fatalf("result = %#v, want WebSearch ws_1 ran", result)
+	}
+	if len(translator.tools) != 0 {
+		t.Fatalf("open tools = %#v, want none", translator.tools)
+	}
+}
+
+func TestWebSearchKeepsItsResults(t *testing.T) {
+	sink := &recordingSink{}
+	translator := newEventTranslator("thread", "turn")
+	translateAll(t, translator, sink, webSearchStarted,
+		`{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"thread","turnId":"turn","item":{"type":"webSearch","id":"ws_1","query":"q","action":{"type":"search","query":"q","queries":null},"results":[{"type":"text_result","url":"https://example.com/a","title":"A"}]}}}`)
+	result, ok := sink.results[0].Result.(map[string]any)
+	if !ok {
+		t.Fatalf("result = %#v, want a map", sink.results[0].Result)
+	}
+	results, ok := result["results"].([]any)
+	if !ok || len(results) != 1 {
+		t.Fatalf("results = %#v, want the one result Codex sent", result["results"])
+	}
+}
+
+func TestWebSearchWithoutAStartIsStillPublished(t *testing.T) {
+	sink := &recordingSink{}
+	translateAll(t, newEventTranslator("thread", "turn"), sink, webSearchCompleted)
+	if len(sink.calls) != 1 || len(sink.results) != 1 || sink.calls[0].Name != "WebSearch" {
+		t.Fatalf("calls %#v, results %#v, want one WebSearch call and result", sink.calls, sink.results)
+	}
+}
+
+func TestUnfinishedWebSearchIsPublishedWhenTheTurnEnds(t *testing.T) {
+	sink := &recordingSink{}
+	translateAll(t, newEventTranslator("thread", "turn"), sink, webSearchStarted,
+		`{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thread","turn":{"id":"turn","status":"interrupted"}}}`)
+	if len(sink.calls) != 1 || sink.calls[0].ID != "ws_1" || sink.calls[0].Name != "WebSearch" {
+		t.Fatalf("calls = %#v, want the held WebSearch call", sink.calls)
+	}
+	if len(sink.results) != 1 || sink.results[0].ID != "ws_1" || sink.results[0].Status != runtime.ToolUnfinished || !sink.results[0].IsError {
+		t.Fatalf("results = %#v, want one unfinished error result", sink.results)
+	}
+}
+
+func TestSubagentWebSearchNamesTheAgentCallThatStartedIt(t *testing.T) {
+	sink := &recordingSink{}
+	translator := newEventTranslator("parent", "turn")
+	translator.spawnedBy["child"] = "agent-1"
+	translateAll(t, translator, sink,
+		`{"jsonrpc":"2.0","method":"item/started","params":{"threadId":"child","turnId":"child-turn","item":{"type":"webSearch","id":"ws_2","query":"","action":null}}}`,
+		`{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"child","turnId":"child-turn","item":{"type":"webSearch","id":"ws_2","query":"https://example.com/a","action":{"type":"openPage","url":"https://example.com/a"}}}}`)
+	if len(sink.calls) != 1 || len(sink.results) != 1 {
+		t.Fatalf("calls %#v, results %#v, want one of each", sink.calls, sink.results)
+	}
+	if call := sink.calls[0]; call.Name != "WebSearch" || call.ParentToolID != "agent-1" || call.Arguments["query"] != "https://example.com/a" {
+		t.Fatalf("call = %#v, want WebSearch under agent-1 naming the page", call)
+	}
+}
+
+func TestAToolReusingAHeldWebSearchIDReplacesIt(t *testing.T) {
+	sink := &recordingSink{}
+	translateAll(t, newEventTranslator("thread", "turn"), sink, webSearchStarted,
+		`{"jsonrpc":"2.0","method":"item/started","params":{"threadId":"thread","turnId":"turn","item":{"type":"commandExecution","id":"ws_1","command":"pwd","cwd":"/w","status":"inProgress"}}}`,
+		webSearchCompleted,
+		`{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"thread","turnId":"turn","item":{"type":"commandExecution","id":"ws_1","command":"pwd","cwd":"/w","exitCode":0,"status":"completed"}}}`)
+	if len(sink.calls) != 1 || sink.calls[0].Name != "command_execution" || len(sink.results) != 1 || sink.results[0].Name != "command_execution" {
+		t.Fatalf("calls %#v, results %#v, want only the command", sink.calls, sink.results)
+	}
+}
+
 func TestUsageReadsTheTokenBreakdown(t *testing.T) {
 	sink := &recordingSink{}
 	translator := newEventTranslator("thread", "turn")
