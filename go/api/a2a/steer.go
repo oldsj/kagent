@@ -23,6 +23,15 @@ const (
 	// SendNotAcceptedReason is the ErrorInfo reason of input that was not
 	// accepted and left no record.
 	SendNotAcceptedReason = "KAGENT_SEND_NOT_ACCEPTED"
+	// SendNotAcceptedCauseMetadataKey names, in a not-accepted send's error
+	// details, its cause when kagent knows it. Its absence means the cause is
+	// unknown, not that there is none.
+	SendNotAcceptedCauseMetadataKey = "cause"
+	// SendNotAcceptedRuntimeCapacity is the cause of a send refused because no
+	// worker had room to start the Session's runtime. Retrying the same message
+	// is still safe, but it succeeds only once capacity frees, so callers wait
+	// the error's retryAfterMs instead of retrying at once.
+	SendNotAcceptedRuntimeCapacity = "runtime_capacity"
 	// SessionCrashedReason is the ErrorInfo reason of input refused because
 	// the Session's runtime crashed and has not been reverted yet.
 	SessionCrashedReason = "KAGENT_SESSION_CRASHED"

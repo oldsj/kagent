@@ -14,7 +14,6 @@ import (
 
 	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	apiv1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1"
-	sessionsvc "github.com/kagent-dev/kagent/go/core/internal/service/session"
 	"github.com/kagent-dev/kagent/go/pkg/logging"
 )
 
@@ -211,15 +210,19 @@ func (g *Gateway) sendStreamingMessage(ctx context.Context, agent types.Namespac
 }
 
 // finishSend releases the attempt even after the caller disconnects. A failed
-// actor call is retryable only if persistence proves the input was not accepted.
+// actor call is retryable only if persistence proves the input was not accepted;
+// the service then names the cause when it can tell one.
 func (g *Gateway) finishSend(ctx context.Context, agent types.NamespacedName, message *a2atype.Message, id uuid.UUID, sendErr error) error {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	ctx = context.WithoutCancel(ctx)
+	revokeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	revoked, err := g.interactions.RevokeSend(ctx, agent, message, id)
+	revoked, err := g.interactions.RevokeSend(revokeCtx, agent, message, id)
 	if err != nil {
 		logging.FromContext(ctx).ErrorContext(ctx, "release runtime dispatch", "session_id", message.ContextID, "error", err)
 	} else if revoked && sendErr != nil && a2atype.ErrorReason(sendErr) == a2atype.ErrorReason(a2atype.ErrInternalError) {
-		return sessionsvc.ErrSendNotAccepted
+		causeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		return g.interactions.NotAcceptedSend(causeCtx, agent, message)
 	}
 	return sendErr
 }

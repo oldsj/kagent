@@ -19,8 +19,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/proto"
 
@@ -55,6 +57,8 @@ type gatewayTestStore struct {
 	initialID        string
 	listedIDs        []string
 	revoked          bool
+	wakeErr          error
+	wakeCalls        int
 	session          *apiv1.Session
 	revision         *database.RuntimeRevision
 	err              error
@@ -809,6 +813,50 @@ func TestGatewayReportsOnlyRevokedAttemptsAsNotAccepted(t *testing.T) {
 			t.Fatalf("retried a transport failure: %d sends", runtime.sendCalls)
 		}
 	}
+}
+
+func TestGatewayNamesRuntimeCapacityForAnUnacceptedSend(t *testing.T) {
+	lost := a2atype.NewError(a2atype.ErrInternalError, "upstream unavailable")
+	noRoom := status.Error(codes.ResourceExhausted, "no worker has room for the actor")
+	scenarios := []struct {
+		name    string
+		wakeErr error
+		cause   string
+		retry   string
+	}{
+		{"Given no worker has room for the Session's runtime, when a send is revoked unaccepted, assert that it is not accepted for runtime capacity with a long retry hint", noRoom, apia2a.SendNotAcceptedRuntimeCapacity, "30000"},
+		{"Given the Session's runtime wakes, when a send is revoked unaccepted, assert that it is not accepted with no cause", nil, "", "100"},
+		{"Given waking the Session's runtime fails for another reason, when a send is revoked unaccepted, assert that it is not accepted with no cause", status.Error(codes.Unavailable, "control plane down"), "", "100"},
+	}
+	for _, scenario := range scenarios {
+		t.Run(scenario.name, func(t *testing.T) {
+			store := &gatewayTestStore{session: gatewayTestSession(), revoked: true, taskErr: database.ErrNotFound, wakeErr: scenario.wakeErr}
+			runtime := &gatewayTestRuntime{onSend: func() error { return lost }}
+			gateway := newTestGateway(store, &gatewayTestAuthorizer{}, &gatewayTestDialer{client: gatewayTestClient(t, runtime)}, gatewayTestURL)
+
+			_, err := gateway.SendMessage(gatewayTestContext(), gatewayTestRequest())
+
+			var protocolError *a2atype.Error
+			require.ErrorAs(t, err, &protocolError)
+			meta := protocolError.ErrorInfo().Value["metadata"].(map[string]string)
+			require.Equal(t, apia2a.SendNotAcceptedReason, meta["reason"], "retrying must stay safe")
+			require.Equal(t, scenario.cause, meta[apia2a.SendNotAcceptedCauseMetadataKey])
+			require.Equal(t, scenario.retry, meta["retryAfterMs"])
+			require.Equal(t, 1, store.wakeCalls)
+			require.Equal(t, 1, runtime.sendCalls, "the gateway must not retry the send itself")
+		})
+	}
+
+	t.Run("Given an unrevoked failed send, when the caller sends, assert that no cause is probed and the error stays ambiguous", func(t *testing.T) {
+		store := &gatewayTestStore{session: gatewayTestSession(), taskErr: database.ErrNotFound, wakeErr: noRoom}
+		runtime := &gatewayTestRuntime{onSend: func() error { return lost }}
+		gateway := newTestGateway(store, &gatewayTestAuthorizer{}, &gatewayTestDialer{client: gatewayTestClient(t, runtime)}, gatewayTestURL)
+
+		_, err := gateway.SendMessage(gatewayTestContext(), gatewayTestRequest())
+
+		require.ErrorIs(t, err, a2atype.ErrInternalError)
+		require.Zero(t, store.wakeCalls)
+	})
 }
 
 func TestGatewayDoesNotRecoverAnUnacceptedInput(t *testing.T) {
