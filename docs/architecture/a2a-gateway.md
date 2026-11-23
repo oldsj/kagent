@@ -132,6 +132,12 @@ A rejected send carries A2A `ErrorInfo.metadata.reason=KAGENT_SEND_NOT_ACCEPTED`
 (and `retryAfterMs=100`) only if no dispatch occurred, or the unused attempt was
 atomically revoked and its input was never persisted. Clients may retry that
 response with the same message. They must not blindly retry transport errors.
+When the runtime refused the input, the interaction service asks Substrate to wake
+the Session's Actor through the control API: ingress reports a full worker pool
+only as an unavailable runtime. If no worker has room, the refusal adds
+`metadata.cause=runtime_capacity` and `retryAfterMs=30000`, and the gateway logs
+it with the Session ID. The reason stays `KAGENT_SEND_NOT_ACCEPTED`, so retrying
+is still safe; it succeeds once another runtime idles and frees room.
 Persistence and revocation serialize on the session; an ambiguous outcome stays
 an error, and previously accepted input is recovered only from its own saved task.
 Uncertain issued work remains claimed; it cannot safely be reassigned just because

@@ -11,6 +11,8 @@ import (
 
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/google/uuid"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
 
@@ -305,6 +307,40 @@ func (s *InteractionService) reserveDispatch(ctx context.Context, sessionID, ini
 // occurred, or an unused dispatch was revoked before the runtime persisted it.
 var ErrSendNotAccepted = a2atype.NewError(a2atype.ErrUnsupportedOperation, "input was not accepted; retry after the session becomes available").
 	WithErrorInfoMeta(map[string]string{"reason": apia2a.SendNotAcceptedReason, "retryAfterMs": "100"})
+
+// ErrRuntimeCapacity is ErrSendNotAccepted when no worker had room to start the
+// Session's runtime. It keeps the same reason, so retrying stays safe, and adds
+// the cause and a longer retry hint: capacity frees only as other runtimes idle.
+var ErrRuntimeCapacity = a2atype.NewError(a2atype.ErrUnsupportedOperation, "input was not accepted: no worker has room for the Session's runtime; retry after capacity frees").
+	WithErrorInfoMeta(map[string]string{
+		"reason": apia2a.SendNotAcceptedReason, apia2a.SendNotAcceptedCauseMetadataKey: apia2a.SendNotAcceptedRuntimeCapacity,
+		"retryAfterMs": "30000",
+	})
+
+// NotAcceptedSend explains an input the runtime never received. Substrate
+// ingress wakes a suspended Actor on the first request but reports only an
+// unavailable runtime when no worker has room for it. Waking the Actor the same
+// way through the control API returns the real cause, and resumes it if room
+// has since freed, so the caller's retry finds it running.
+func (s *InteractionService) NotAcceptedSend(ctx context.Context, agent types.NamespacedName, message *a2atype.Message) error {
+	if s.sessions == nil {
+		return ErrSendNotAccepted
+	}
+	waker, ok := s.sessions.workflow.(runtimeWaker)
+	if !ok {
+		return ErrSendNotAccepted
+	}
+	session, err := s.messageSession(ctx, agent, message)
+	if err != nil {
+		return ErrSendNotAccepted
+	}
+	if err := waker.WakeRuntime(ctx, session); status.Code(err) == codes.ResourceExhausted {
+		logging.FromContext(ctx).WarnContext(ctx, "send not accepted: no worker has room for the Session's runtime",
+			"session_id", session.GetId(), "agent", agent.String(), "error", err)
+		return ErrRuntimeCapacity
+	}
+	return ErrSendNotAccepted
+}
 
 // ErrSessionCrashed refuses input to a Session whose runtime Actor crashed.
 // Recovery reverts it to its last snapshot; RevertSession continues a recovery

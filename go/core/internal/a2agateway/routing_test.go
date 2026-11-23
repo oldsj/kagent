@@ -43,14 +43,24 @@ func (s gatewayTestAgents) Get(ctx context.Context, ref types.NamespacedName) (*
 	return &v1alpha3.Agent{ObjectMeta: metav1.ObjectMeta{Namespace: ref.Namespace, Name: ref.Name}, Status: v1alpha3.AgentStatus{LatestSuccessfulRevision: "revision-1"}}, nil
 }
 
-type gatewayTestWorkflow struct{ *sessionsvc.ActorWorkflow }
+type gatewayTestWorkflow struct {
+	*sessionsvc.ActorWorkflow
+	store *gatewayTestStore
+}
+
+// WakeRuntime stands in for Substrate's ResumeActor, which a not-accepted send
+// uses to learn why the runtime did not take the input.
+func (w gatewayTestWorkflow) WakeRuntime(context.Context, *apiv1.Session) error {
+	w.store.wakeCalls++
+	return w.store.wakeErr
+}
 
 func (gatewayTestWorkflow) Create(_ context.Context, session *apiv1.Session) (*apiv1.Session, error) {
 	return session, nil
 }
 
 func newTestSessions(store *gatewayTestStore, authorizer auth.Authorizer) *sessionsvc.Service {
-	return sessionsvc.NewService(store, authorizer, gatewayTestWorkflow{})
+	return sessionsvc.NewService(store, authorizer, gatewayTestWorkflow{store: store})
 }
 
 func newTestGateway(store *gatewayTestStore, authorizer auth.Authorizer, dialer *gatewayTestDialer, url string) a2asrv.RequestHandler {
