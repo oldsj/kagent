@@ -5,14 +5,20 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/kagent-dev/kagent/go/harness/codex/config"
+	"github.com/kagent-dev/kagent/go/harness/runtime"
 )
 
 // codexCLIEnvName selects a real Codex executable for the opt-in test that
@@ -174,4 +180,138 @@ func callCodexThread(t *testing.T, executable, durable, workspaceDir, method str
 	write(map[string]any{"jsonrpc": "2.0", "method": "initialized", "params": map[string]any{}})
 	write(map[string]any{"jsonrpc": "2.0", "id": 2, "method": method, "params": params})
 	return read(2)
+}
+
+// TestPinnedCodexKeepsConfigAcrossTurns is the regression test for the
+// second-turn failure of prepared Codex workspaces: every turn checks that
+// config.toml is unchanged, and the first thread/start used to append a
+// [projects] trust table, so every later turn failed "Workspace preparation is
+// incomplete." It drives the real Codex App Server through the production
+// driver for three turns against a local fake Responses API: a new thread, then
+// two resumes, with the per-turn model and effort override Mainloop sends, as
+// one long-lived actor runs them. After each turn the check every prepared turn
+// runs must pass. Both provider shapes Mainloop uses are covered: an API key and
+// a ChatGPT subscription.
+func TestPinnedCodexKeepsConfigAcrossTurns(t *testing.T) {
+	executable := os.Getenv(codexCLIEnvName)
+	if executable == "" {
+		t.Skipf("%s is not set", codexCLIEnvName)
+	}
+	server := fakeResponsesAPI(t)
+	for _, test := range []struct {
+		name     string
+		provider config.Provider
+	}{
+		{name: "OpenAI", provider: config.Provider{Name: "openai", BaseURL: server.URL + "/v1"}},
+		{name: "ChatGPT", provider: config.Provider{Name: "chatgpt", BaseURL: server.URL + "/v1", AccountID: "acct-test", ResponsesTransport: "https"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			// Given a prepared Git workspace whose actor started once
+			durable := filepath.Join(t.TempDir(), "data")
+			workspaceDir := filepath.Join(durable, "workspace")
+			if err := os.MkdirAll(workspaceDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if output, err := exec.Command("git", "init", "-q", workspaceDir).CombinedOutput(); err != nil {
+				t.Fatalf("git init: %v\n%s", err, output)
+			}
+			cfg := config.Production("gpt-5.2-codex", "work carefully")
+			cfg.CodexExecutable, cfg.StrictVersion = executable, false
+			cfg.Provider = test.provider
+			raw, err := json.Marshal(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			input := Input{ConfigJSON: raw, Workspace: workspaceDir, DurableDir: durable, Environment: append(os.Environ(), "OPENAI_API_KEY=test")}
+			driver, err := New(t.Context(), input)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// When it runs a new thread and two resumes, the first two with a per-turn model and effort
+			thread := ""
+			for i, turn := range []runtime.Turn{
+				{Prompt: "first", Model: "gpt-5.2-codex", Effort: "high"},
+				{Prompt: "second", Model: "gpt-5.2-codex", Effort: "low"},
+				{Prompt: "third"},
+			} {
+				turn.ContinuationID = thread
+				sink := &threadSink{}
+				ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+				outcome, err := driver.Run(ctx, turn, sink)
+				cancel()
+				if err != nil || outcome.Failure != nil || sink.thread == "" {
+					t.Fatalf("turn %d: %+v, %v (thread %q)", i+1, outcome, err, sink.thread)
+				}
+				if thread != "" && sink.thread != thread {
+					t.Fatalf("turn %d resumed thread %q, want %q", i+1, sink.thread, thread)
+				}
+				thread = sink.thread
+
+				// Then config.toml passes the check the next turn runs
+				if err := checkInstalledConfig(input); err != nil {
+					contents, _ := os.ReadFile(filepath.Join(durable, "codex", "config.toml"))
+					t.Fatalf("after turn %d: %v; config.toml is now:\n%s", i+1, err, contents)
+				}
+			}
+			if n := server.Requests(); n < 3 {
+				t.Fatalf("the fake Responses API saw %d turns, want at least 3", n)
+			}
+		})
+	}
+}
+
+// threadSink records the native thread a turn ran on.
+type threadSink struct{ thread string }
+
+func (s *threadSink) SessionStarted(e runtime.SessionStarted) error {
+	s.thread = e.ContinuationID
+	return nil
+}
+func (*threadSink) TextDelta(runtime.TextDelta) error   { return nil }
+func (*threadSink) ToolCall(runtime.ToolCall) error     { return nil }
+func (*threadSink) ToolResult(runtime.ToolResult) error { return nil }
+func (*threadSink) ModelCall(runtime.ModelCall)         {}
+
+// responsesAPI is a local stand-in for the Responses API: every turn gets one
+// assistant message, so a turn completes without a model or credentials.
+type responsesAPI struct {
+	*httptest.Server
+	requests atomic.Int32
+}
+
+func (s *responsesAPI) Requests() int { return int(s.requests.Load()) }
+
+func fakeResponsesAPI(t *testing.T) *responsesAPI {
+	t.Helper()
+	api := &responsesAPI{}
+	api.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		if r.URL.Path != "/v1/responses" {
+			// Model listing and anything else: nothing to offer.
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"models":[],"data":[]}`))
+			return
+		}
+		id := fmt.Sprintf("resp_%d", api.requests.Add(1))
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, event := range []map[string]any{
+			{"type": "response.created", "response": map[string]any{"id": id}},
+			{"type": "response.output_item.done", "item": map[string]any{
+				"type": "message", "role": "assistant", "id": "msg_" + id,
+				"content": []map[string]any{{"type": "output_text", "text": "done"}},
+			}},
+			{"type": "response.completed", "response": map[string]any{"id": id, "usage": map[string]any{
+				"input_tokens": 1, "input_tokens_details": nil, "output_tokens": 1, "output_tokens_details": nil, "total_tokens": 2,
+			}}},
+		} {
+			data, err := json.Marshal(event)
+			if err != nil {
+				panic(err)
+			}
+			_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event["type"], data)
+		}
+	}))
+	t.Cleanup(api.Close)
+	return api
 }

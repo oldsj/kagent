@@ -35,15 +35,8 @@ func (s *SetupInstaller) Setup(ctx context.Context, input workspace.Preparation,
 		if err := workspace.CheckSetup(s.Input.ConfigJSON, stateDir, input, true); err != nil {
 			return nil, "", err
 		}
-		cfg, err := config.Parse(s.Input.ConfigJSON)
-		if err != nil {
+		if err := checkInstalledConfig(s.Input); err != nil {
 			return nil, "", err
-		}
-		cfg, _ = withNativeTelemetry(cfg, s.Input)
-		expected, err := renderInputConfig(cfg, s.Input)
-		actual, readErr := os.ReadFile(filepath.Join(s.Input.DurableDir, "codex", "config.toml"))
-		if err != nil || readErr != nil || !bytes.Equal(expected, actual) {
-			return nil, "", errors.New("installed Codex configuration differs")
 		}
 		return nil, SetupHook, nil
 	}
@@ -67,4 +60,22 @@ func (s *SetupInstaller) Setup(ctx context.Context, input workspace.Preparation,
 		return nil, "", err
 	}
 	return runner, SetupHook, nil
+}
+
+// checkInstalledConfig reports whether config.toml still holds exactly the
+// bytes New renders for input. Every turn of a prepared workspace checks it,
+// so anything that rewrites the file (Codex itself included) fails the next
+// turn with "Workspace preparation is incomplete."
+func checkInstalledConfig(input Input) error {
+	cfg, err := config.Parse(input.ConfigJSON)
+	if err != nil {
+		return err
+	}
+	cfg, _ = withNativeTelemetry(cfg, input)
+	expected, err := renderInputConfig(cfg, input)
+	actual, readErr := os.ReadFile(filepath.Join(input.DurableDir, "codex", "config.toml"))
+	if err != nil || readErr != nil || !bytes.Equal(expected, actual) {
+		return errors.New("installed Codex configuration differs")
+	}
+	return nil
 }

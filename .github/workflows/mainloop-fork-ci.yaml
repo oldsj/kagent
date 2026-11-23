@@ -69,6 +69,7 @@ jobs:
             'Runtime tests use isolated testcontainers PostgreSQL and fake Actor/gateway/native effects.' \
             'Catalog tests run against envtest (a local kube-apiserver and etcd), not a cluster.' \
             'Deferred: TestPinnedCodexAcceptsGeneratedConfiguration launches the real Codex CLI/app-server.' \
+            'The pinned-codex job runs the real Codex App Server against a local fake Responses API.' \
             'No provider credentials, native agents, cluster operations, image publication or rollout.' \
             | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Build everything
@@ -96,6 +97,49 @@ jobs:
         run: >-
           go test -count=1 -skip '^TestPinnedCodexAcceptsGeneratedConfiguration$'
           ./harness/claude/... ./harness/codex/... ./harness/runtime/... ./harness/internal/utils
+
+  pinned-codex:
+    name: Pinned Codex keeps its configuration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+        working-directory: go
+    env:
+      SOURCE_SHA: ${{ github.sha }}
+      KUBECONFIG: /dev/null
+    steps:
+      - name: Checkout tested source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go/go.mod
+          cache: false
+      # The release the harness image installs (runtime-lock.json), checked against its pinned
+      # checksum. No credentials: the tests answer Codex from a local fake Responses API.
+      - name: Install the pinned Codex CLI
+        run: |
+          lock=harness/runtime/payload/runtime-lock.json
+          version=$(jq -r .codex.version "$lock")
+          checksum=$(jq -r .codex.checksums.amd64 "$lock")
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/codex.tar.gz" \
+            "https://github.com/openai/codex/releases/download/rust-v${version}/codex-package-x86_64-unknown-linux-musl.tar.gz"
+          echo "${checksum}  $RUNNER_TEMP/codex.tar.gz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/codex"
+          tar -xzf "$RUNNER_TEMP/codex.tar.gz" -C "$RUNNER_TEMP/codex"
+          executable=$(find "$RUNNER_TEMP/codex" -type f -name codex -perm -u+x | head -n1)
+          "$executable" --version
+          echo "KAGENT_TEST_CODEX_CLI=$executable" >> "$GITHUB_ENV"
+      - name: Test that Codex leaves the rendered config.toml unchanged across turns
+        run: >-
+          go test -count=1 -v
+          -run '^TestPinnedCodex(LeavesTrustedWorkspaceUnchanged|KeepsConfigAcrossTurns)$'
+          ./harness/codex/internal/adapter
 
   helm-unit-tests:
     name: Helm chart unit tests
