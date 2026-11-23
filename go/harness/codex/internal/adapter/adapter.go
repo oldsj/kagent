@@ -92,6 +92,11 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 	if err := utils.ReplacePrivateFile(filepath.Join(codexHome, "config.toml"), configTOML); err != nil {
 		return nil, fmt.Errorf("materialize Codex configuration: %w", err)
 	}
+	// What this harness wrote, so a later harness's restart check can tell an
+	// unchanged file from a changed one when it renders other bytes.
+	if err := utils.ReplacePrivateFile(configRecordPath(input), []byte(configDigest(configTOML)+"\n")); err != nil {
+		return nil, fmt.Errorf("record Codex configuration: %w", err)
+	}
 	if cfg.Provider.Name == "chatgpt" {
 		authJSON, err := placeholderAuth(cfg.Provider.AccountID, time.Now().UTC())
 		if err != nil {

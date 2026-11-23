@@ -3,9 +3,12 @@ package adapter
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 
 	apiworkspace "github.com/kagent-dev/kagent/go/api/workspace"
 	"github.com/kagent-dev/kagent/go/harness/codex/config"
@@ -22,6 +25,12 @@ const SetupHook = "developer_instruction"
 type SetupInstaller struct {
 	Input Input
 	Store *continuation.Store
+	// Restart marks the check a harness process makes of a workspace an earlier
+	// process prepared, before New rewrites config.toml. That earlier process
+	// may have been another harness version, or had another environment, and
+	// rendered other bytes; so a restart checks that the file is unchanged
+	// since a harness wrote it, not that this harness would render the same.
+	Restart bool
 }
 
 // Setup installs input's profile once, or, with observe set, checks that the
@@ -35,7 +44,11 @@ func (s *SetupInstaller) Setup(ctx context.Context, input workspace.Preparation,
 		if err := workspace.CheckSetup(s.Input.ConfigJSON, stateDir, input, true); err != nil {
 			return nil, "", err
 		}
-		if err := checkInstalledConfig(s.Input); err != nil {
+		check := checkInstalledConfig
+		if s.Restart {
+			check = checkWrittenConfig
+		}
+		if err := check(s.Input); err != nil {
 			return nil, "", err
 		}
 		return nil, SetupHook, nil
@@ -75,6 +88,31 @@ func checkInstalledConfig(input Input) error {
 	expected, err := renderInputConfig(cfg, input)
 	actual, readErr := os.ReadFile(filepath.Join(input.DurableDir, "codex", "config.toml"))
 	if err != nil || readErr != nil || !bytes.Equal(expected, actual) {
+		return errors.New("installed Codex configuration differs")
+	}
+	return nil
+}
+
+// configRecordPath holds the SHA-256 of the config.toml New last wrote.
+func configRecordPath(input Input) string {
+	return filepath.Join(input.DurableDir, ".kagent", "codex-config.sha256")
+}
+
+func configDigest(contents []byte) string {
+	sum := sha256.Sum256(contents)
+	return hex.EncodeToString(sum[:])
+}
+
+// checkWrittenConfig reports whether config.toml still holds the bytes a
+// harness last wrote, by the digest New recorded with them. A workspace whose
+// harness recorded none is checked against this harness's render, as before.
+func checkWrittenConfig(input Input) error {
+	record, err := os.ReadFile(configRecordPath(input))
+	if errors.Is(err, os.ErrNotExist) {
+		return checkInstalledConfig(input)
+	}
+	actual, readErr := os.ReadFile(filepath.Join(input.DurableDir, "codex", "config.toml"))
+	if err != nil || readErr != nil || strings.TrimSpace(string(record)) != configDigest(actual) {
 		return errors.New("installed Codex configuration differs")
 	}
 	return nil

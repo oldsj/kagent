@@ -53,8 +53,10 @@ func New(ctx context.Context, cfg Config) (a2asrv.AgentExecutor, error) {
 	}
 	if restored != nil {
 		input.SetupProfile, restored.Provider = restored.Profile, "codex"
-		// Verify before normal startup materialization can replace a changed file.
-		if _, _, err := (&adapter.SetupInstaller{Input: input}).Setup(ctx, *restored, true); err != nil {
+		// Verify before normal startup materialization can replace a changed
+		// file. The file may be another harness version's render, so this asks
+		// whether it changed since it was written, not whether it matches ours.
+		if _, _, err := (&adapter.SetupInstaller{Input: input, Restart: true}).Setup(ctx, *restored, true); err != nil {
 			return nil, err
 		}
 	}
