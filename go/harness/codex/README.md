@@ -25,8 +25,9 @@ harness.
 - OpenAI through a Secret-backed API key, the Responses API, and an optional
   absolute HTTP(S) base URL.
 - Amazon Bedrock through `AWS_BEARER_TOKEN_BEDROCK` in a Secret.
-- Streaming text, command and file activity, direct Streamable HTTP MCP (with
-  allowed-tools selection), and native Shared agents.
+- Streaming text, command and file activity, web searches (one `WebSearch`
+  tool call per search, published when Codex reports the query), direct
+  Streamable HTTP MCP (with allowed-tools selection), and native Shared agents.
 - Per-server MCP tool approval with durable DATA-only restart and cancellation.
 - Native ask-user questions in default mode
 - Standalone and plugin-selected skills without plugin hooks, commands,

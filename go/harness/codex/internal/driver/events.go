@@ -62,7 +62,13 @@ type activeTool struct {
 	parentToolID    string
 	arguments       any
 	approvalMatched bool
+	// deferred marks a tool whose call is published when it completes. See webSearch.
+	deferred bool
 }
+
+// webSearchTool is the name Claude Code gives the same tool, so a transcript reads alike for
+// both harnesses.
+const webSearchTool = "WebSearch"
 
 // turnError decodes Codex's structured error category and its message. The
 // message is upstream text that can carry signed URLs, account identifiers or
@@ -416,12 +422,18 @@ func (t *eventTranslator) translateItem(completed bool, raw json.RawMessage, thr
 		Prompt            string   `json:"prompt"`
 		Status            string   `json:"status"`
 		ReceiverThreadIDs []string `json:"receiverThreadIds"`
+		Query             string   `json:"query"`
+		Action            any      `json:"action"`
+		Results           any      `json:"results"`
 	}
 	if err := json.Unmarshal(raw, &item); err != nil {
 		return fmt.Errorf("decode Codex thread item: %w", err)
 	}
 	if item.ID == "" {
 		return nil
+	}
+	if item.Type == "webSearch" {
+		return t.webSearch(completed, item.ID, item.Query, item.Action, item.Results, thread, parentToolID, sink)
 	}
 	name, mcpServer, mcpTool := "", "", ""
 	var arguments map[string]any
@@ -457,7 +469,10 @@ func (t *eventTranslator) translateItem(completed bool, raw json.RawMessage, thr
 		return nil
 	}
 	if !completed {
-		if existing, exists := t.tools[item.ID]; exists {
+		if existing, exists := t.tools[item.ID]; exists && existing.deferred {
+			// A held web search published nothing, so the tool that reused its ID replaces it.
+			delete(t.tools, item.ID)
+		} else if exists {
 			// A main tool wins over a subagent tool that reused its ID.
 			if parentToolID != "" || existing.parentToolID == "" {
 				return fmt.Errorf("codex tool item %q started more than once", item.ID)
@@ -493,6 +508,39 @@ func (t *eventTranslator) translateItem(completed bool, raw json.RawMessage, thr
 	return sink.ToolResult(runtime.ToolResult{ID: item.ID, Name: name, Result: result, IsError: item.Status == "failed", Status: status})
 }
 
+// webSearch publishes a Codex web search as one tool call and its result, both when the item
+// completes. Codex starts the item with an empty query and fills it in at completion, so a call
+// published at the start would not say what was searched for. The search runs inside the model's
+// response, so it does not end the open model call as a local tool does.
+func (t *eventTranslator) webSearch(completed bool, id, query string, action, results any, thread, parentToolID string, sink runtime.EventSink) error {
+	started, exists := t.tools[id]
+	if !completed {
+		// The search only shows activity, so an ID already in use drops it and does not fail the turn.
+		if !exists {
+			t.tools[id] = activeTool{name: webSearchTool, thread: thread, parentToolID: parentToolID, deferred: true}
+		}
+		return nil
+	}
+	if exists {
+		if !started.deferred || started.thread != thread {
+			return nil
+		}
+		delete(t.tools, id)
+	}
+	arguments := map[string]any{"query": bounded(query)}
+	if action != nil {
+		arguments["action"] = boundValue(action)
+	}
+	if err := sink.ToolCall(runtime.ToolCall{ID: id, Name: webSearchTool, Arguments: arguments, ParentToolID: parentToolID}); err != nil {
+		return err
+	}
+	result := map[string]any{"status": "completed"}
+	if results != nil {
+		result["results"] = boundValue(results)
+	}
+	return sink.ToolResult(runtime.ToolResult{ID: id, Name: webSearchTool, Result: result, Status: runtime.ToolRan})
+}
+
 func (t *eventTranslator) closeActiveTools(sink runtime.EventSink) error {
 	ids := make([]string, 0, len(t.tools))
 	for id := range t.tools {
@@ -500,6 +548,12 @@ func (t *eventTranslator) closeActiveTools(sink runtime.EventSink) error {
 	}
 	slices.Sort(ids)
 	for _, id := range ids {
+		if tool := t.tools[id]; tool.deferred {
+			// Its call was held for the completion that never came.
+			if err := sink.ToolCall(runtime.ToolCall{ID: id, Name: tool.name, Arguments: map[string]any{}, ParentToolID: tool.parentToolID}); err != nil {
+				return err
+			}
+		}
 		if err := sink.ToolResult(runtime.ToolResult{
 			ID: id, Name: t.tools[id].name, Result: map[string]any{"error": "Codex turn ended before tool completion"}, IsError: true, Status: runtime.ToolUnfinished,
 		}); err != nil {
@@ -514,7 +568,7 @@ func (t *eventTranslator) approvalTool(thread, server, toolName string, argument
 	matchedID := ""
 	for id, tool := range t.tools {
 		// A subagent can make the same call as the main agent. A request without a thread matches any.
-		if tool.approvalMatched || (thread != "" && tool.thread != thread) || tool.server != server || !reflect.DeepEqual(tool.arguments, arguments) {
+		if tool.deferred || tool.approvalMatched || (thread != "" && tool.thread != thread) || tool.server != server || !reflect.DeepEqual(tool.arguments, arguments) {
 			continue
 		}
 		if toolName != "" && tool.name != server+"."+toolName {
