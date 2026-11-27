@@ -29,7 +29,13 @@ harness.
 - [x] Claude Code built-in tools
 - [x] Shared local subagents
 - [x] Standalone skills and plugin-provided skills
-- [x] Direct HTTP and SSE MCP servers with whole-server tool access
+- [x] Direct HTTP and SSE MCP servers, with a binding's `tools` list enforced:
+      the server's discovered tools that the list leaves out are passed to
+      `--disallowedTools` as `mcp__<server>__<tool>`. Until the
+      RemoteMCPServer has a current discovered tool set, a server with a
+      `tools` list is withheld. A tool the server adds after discovery stays
+      callable in a running Session until the Session restarts on the
+      recompiled revision.
 - [x] Human-in-the-loop MCP tool approval across DATA-only restart
 - [x] Native ask-user questions through durable deferred input
 
@@ -281,7 +287,6 @@ describes the transcript-based continuation.
 
 ## Planned / not yet supported
 
-- [ ] Enforced selection of individual tools from an MCP server
 - [ ] Dedicated subagents running in separate Sessions
 - [ ] Skills, MCP tools, and nested subagents on local subagents
 - [ ] Configuring Claude Code permission mode and trust boundary in Harness CRD

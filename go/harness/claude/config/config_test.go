@@ -235,3 +235,28 @@ func TestConfigValidatesSDKRunner(t *testing.T) {
 		})
 	}
 }
+
+func TestEffectiveDisallowedToolsNamesUnselectedMCPTools(t *testing.T) {
+	cfg := Production("claude-test", "help")
+	cfg.DisallowedTools = []string{"Monitor"}
+	cfg.MCPServers = map[string]MCPServer{
+		"tools":    {Type: "http", URL: "https://mcp.example.com/mcp", DisallowedTools: []string{"write.thing", "delete thing"}},
+		"approval": {Type: "http", URL: "https://mcp.example.com/mcp", DisallowedTools: []string{"read_thing"}},
+		"all":      {Type: "http", URL: "https://mcp.example.com/all"},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"Monitor", "mcp__approval__read_thing", "mcp__tools__delete_thing", "mcp__tools__write_thing"}
+	if got := cfg.EffectiveDisallowedTools(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("EffectiveDisallowedTools() = %v, want %v", got, want)
+	}
+	if got := cfg.DisallowedBuiltinTools(); !reflect.DeepEqual(got, []string{"Monitor"}) {
+		t.Fatalf("EffectiveDisallowedTools() changed the built-in list: %v", got)
+	}
+
+	cfg.MCPServers["tools"] = MCPServer{Type: "http", URL: "https://mcp.example.com/mcp", DisallowedTools: []string{" "}}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "empty tool name") {
+		t.Fatalf("Validate() = %v, want an empty tool name error", err)
+	}
+}

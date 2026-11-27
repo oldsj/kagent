@@ -9,6 +9,7 @@ import (
 	"math"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -145,6 +146,10 @@ type MCPServer struct {
 	URL             string            `json:"url"`
 	Headers         map[string]string `json:"headers,omitempty"`
 	RequireApproval bool              `json:"require_approval,omitempty"`
+	// DisallowedTools names the server's MCP tools Claude may not see, as the
+	// server reports them. The compiler sets it to the discovered tools a
+	// binding does not select, since Claude has no per-server allowlist.
+	DisallowedTools []string `json:"disallowed_tools,omitempty"`
 }
 
 // Agent is one compiler-owned local Claude subagent passed through --agents.
@@ -261,6 +266,11 @@ func (c Config) Validate() error {
 				return fmt.Errorf("claude MCP server %q headers require non-empty names and values", name)
 			}
 		}
+		for _, tool := range server.DisallowedTools {
+			if strings.TrimSpace(tool) == "" {
+				return fmt.Errorf("claude MCP server %q disallows an empty tool name", name)
+			}
+		}
 	}
 	return nil
 }
@@ -324,4 +334,28 @@ func (c Config) DisallowedBuiltinTools() []string {
 		return DefaultDisallowedTools()
 	}
 	return c.DisallowedTools
+}
+
+// EffectiveDisallowedTools is every tool name Claude may not use: the
+// built-in tools, then each MCP server's unselected tools under the
+// mcp__<server>__<tool> name Claude gives them.
+func (c Config) EffectiveDisallowedTools() []string {
+	tools := slices.Clone(c.DisallowedBuiltinTools())
+	var mcp []string
+	for name, server := range c.MCPServers {
+		for _, tool := range server.DisallowedTools {
+			mcp = append(mcp, MCPToolName(name, tool))
+		}
+	}
+	slices.Sort(mcp)
+	return append(tools, slices.Compact(mcp)...)
+}
+
+var nonNativeToolNameCharacters = regexp.MustCompile(`[^a-zA-Z0-9_-]`)
+
+// MCPToolName is the name Claude Code gives a server's tool: mcp__<server>__<tool>,
+// with every character other than letters, digits, underscore and hyphen
+// replaced by an underscore.
+func MCPToolName(server, tool string) string {
+	return "mcp__" + nonNativeToolNameCharacters.ReplaceAllString(server, "_") + "__" + nonNativeToolNameCharacters.ReplaceAllString(tool, "_")
 }

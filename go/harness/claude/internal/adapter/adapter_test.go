@@ -149,7 +149,8 @@ func TestNewMaterializesApprovalSettings(t *testing.T) {
 	cfg.StrictVersion = false
 	cfg.MCPServers = map[string]config.MCPServer{
 		"protected": {Type: "http", URL: "https://mcp.example.com/write", RequireApproval: true},
-		"readonly":  {Type: "http", URL: "https://mcp.example.com/read"},
+		// The binding left these out of its tools list.
+		"readonly": {Type: "http", URL: "https://mcp.example.com/read", DisallowedTools: []string{"open.door", "approve"}},
 	}
 	raw, err := json.Marshal(cfg)
 	if err != nil {
@@ -213,7 +214,7 @@ func TestNewMaterializesApprovalSettings(t *testing.T) {
 		"--setting-sources\nuser\n",
 		"--add-dir\n" + runnerWorkspace(t, runner),
 		"--plugin-dir\n" + filepath.Join(ephemeralDir, "workspace-skills"),
-		"--disallowedTools\nScheduleWakeup,Monitor,CronCreate,CronList,CronDelete,RemoteTrigger",
+		"--disallowedTools\nScheduleWakeup,Monitor,CronCreate,CronList,CronDelete,RemoteTrigger,mcp__readonly__approve,mcp__readonly__open_door\n",
 		"--settings\n" + filepath.Join(ephemeralDir, "settings.json"),
 		"--dangerously-skip-permissions",
 		"--permission-prompt-tool\nmcp__" + approvalMCPServerName + "__approve",

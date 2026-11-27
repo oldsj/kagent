@@ -201,7 +201,7 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 		StrictVersion: cfg.StrictVersion, Workspace: input.Workspace, Model: cfg.Model,
 		AppendSystemPromptFile: systemPromptPath, AgentsJSON: agentsJSON, MCPConfigPath: mcpConfigPath,
 		SettingsPath: settingsPath, PermissionPromptTool: permissionPromptTool, ApprovalBroker: approvalBroker,
-		PluginDirs: pluginDirs, DisallowedTools: cfg.DisallowedBuiltinTools(), Environment: environment,
+		PluginDirs: pluginDirs, DisallowedTools: cfg.EffectiveDisallowedTools(), Environment: environment,
 		MaxEventBytes: cfg.MaxEventBytes, MaxStderrBytes: cfg.MaxStderrBytes,
 		InterruptGrace: cfg.InterruptGrace(), AwaitTelemetry: awaitTelemetry,
 		PostResultGrace: cfg.PostResultGrace(), TurnTimeout: cfg.TurnTimeout(),
