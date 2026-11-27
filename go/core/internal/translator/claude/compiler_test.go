@@ -401,8 +401,8 @@ func TestCompileWholeServerMCPSelectionWarnings(t *testing.T) {
 	if len(revision.Warnings) != 0 {
 		t.Fatalf("partial selection warnings = %v", revision.Warnings)
 	}
-	if tools := compiledServers(t, revision.ConfigJSON)["tools"].DisallowedTools; !reflect.DeepEqual(tools, []string{"two"}) {
-		t.Fatalf("partial selection disallows %v, want [two]", tools)
+	if got := compiledServers(t, revision.ConfigJSON)["tools"]; !reflect.DeepEqual(got.DisallowedTools, []string{"two"}) || !reflect.DeepEqual(got.Tools, []string{"one"}) {
+		t.Fatalf("partial selection compiled server = %#v, want tools [one] and disallowed [two]", got)
 	}
 
 	// A selected tool the server doesn't offer is reported, and the rest still holds.
@@ -418,21 +418,22 @@ func TestCompileWholeServerMCPSelectionWarnings(t *testing.T) {
 		t.Fatalf("missing selection disallows %v, want [two]", tools)
 	}
 
-	// Without current discovery the selection can't be enforced, so the server is withheld.
+	// Without current discovery (or with it disabled) the selection still
+	// reaches the harness, which enforces it at call time.
 	input.Root.MCPTools[0].Binding.Tools = []string{"one"}
 	server.Status.ObservedGeneration = 0
 	revision, err = NewCompiler(krt.TestingDummyContext{}, reader, testRuntimeDefaults()).Compile(context.Background(), input)
 	if err != nil {
 		t.Fatalf("stale discovery Compile() error = %v", err)
 	}
-	if len(revision.Warnings) != 1 || !strings.Contains(revision.Warnings[0], "withholding the server") {
+	if len(revision.Warnings) != 0 {
 		t.Fatalf("stale discovery warnings = %v", revision.Warnings)
 	}
-	if servers := compiledServers(t, revision.ConfigJSON); len(servers) != 0 {
-		t.Fatalf("stale discovery compiled servers %v", servers)
+	if got := compiledServers(t, revision.ConfigJSON)["tools"]; !reflect.DeepEqual(got.Tools, []string{"one"}) || len(got.DisallowedTools) != 0 {
+		t.Fatalf("stale discovery compiled server = %#v", got)
 	}
-	if slices.Contains(revision.EgressDestinations, "https://mcp.example.com:443") {
-		t.Fatalf("stale discovery kept the withheld server's egress: %v", revision.EgressDestinations)
+	if !slices.Contains(revision.EgressDestinations, "https://mcp.example.com:443") {
+		t.Fatalf("stale discovery dropped the server's egress: %v", revision.EgressDestinations)
 	}
 
 	server.Status.ObservedGeneration = server.Generation

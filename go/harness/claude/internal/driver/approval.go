@@ -34,6 +34,44 @@ type ApprovalBroker struct {
 	// deferNew reports whether a protected call that has no saved input yet
 	// may be deferred. Nil defers every one. It is set before the first turn.
 	deferNew func() bool
+	// selections maps an MCP server with a tool selection to the native
+	// names of the tools it allows. It is set before the first turn.
+	selections map[string]map[string]struct{}
+}
+
+// RestrictTools makes the hook deny every tool of a listed MCP server that is
+// not among its allowed native names (mcp__<server>__<tool>).
+func (b *ApprovalBroker) RestrictTools(selections map[string][]string) error {
+	restricted := make(map[string]map[string]struct{}, len(selections))
+	for server, tools := range selections {
+		if strings.TrimSpace(server) == "" || strings.Contains(server, "__") {
+			return fmt.Errorf("restricted Claude MCP server name %q is invalid", server)
+		}
+		allowed := make(map[string]struct{}, len(tools))
+		for _, tool := range tools {
+			allowed[tool] = struct{}{}
+		}
+		restricted[server] = allowed
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.selections = restricted
+	return nil
+}
+
+// unselected reports whether name is an MCP tool its server's selection leaves
+// out. It parses the name as Claude Code does: mcp__<server>__<tool>.
+func (b *ApprovalBroker) unselected(name string) bool {
+	parts := strings.SplitN(name, "__", 3)
+	if len(parts) != 3 || parts[0] != "mcp" {
+		return false
+	}
+	allowed, restricted := b.selections[parts[1]]
+	if !restricted {
+		return false
+	}
+	_, ok := allowed[name]
+	return !ok
 }
 
 // DeferNewCallsWhen limits deferral of a new protected call to when allowed
@@ -243,6 +281,10 @@ func (b *ApprovalBroker) resolveHook(r *http.Request, output *hookOutput) error 
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.unselected(input.ToolName) {
+		output.Specific.Reason = fmt.Sprintf("%s is not among the tools this Agent's binding selects from its MCP server.", input.ToolName)
+		return nil
+	}
 	record, err := loadDeferred(b.directory, int(b.maxBody))
 	if err != nil {
 		return err

@@ -260,3 +260,22 @@ func TestEffectiveDisallowedToolsNamesUnselectedMCPTools(t *testing.T) {
 		t.Fatalf("Validate() = %v, want an empty tool name error", err)
 	}
 }
+
+func TestMCPToolSelectionsUseNativeNames(t *testing.T) {
+	cfg := Production("claude-test", "help")
+	cfg.MCPServers = map[string]MCPServer{
+		"opencozy":          {Type: "http", URL: "https://mcp.example.com/mcp", Tools: []string{"list_tvs", "close.tvs", "list_tvs"}},
+		"opencozy-approval": {Type: "http", URL: "https://mcp.example.com/mcp", RequireApproval: true},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string][]string{"opencozy": {"mcp__opencozy__close_tvs", "mcp__opencozy__list_tvs"}}
+	if got := cfg.MCPToolSelections(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("MCPToolSelections() = %v, want %v", got, want)
+	}
+	cfg.MCPServers["opencozy"] = MCPServer{Type: "http", URL: "https://mcp.example.com/mcp", Tools: []string{""}}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "selects an empty tool name") {
+		t.Fatalf("Validate() = %v, want an empty tool name error", err)
+	}
+}

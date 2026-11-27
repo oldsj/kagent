@@ -54,7 +54,7 @@ func (c *Compiler) compileMCP(
 			return mcpCompilation{}, translator.NewValidationError("RemoteMCPServer %q is bound more than once", server.Name)
 		}
 
-		disallowed, withheld, warning := mcpToolSelection(tool.Binding.Tools, server)
+		selected, disallowed, warning := mcpToolSelection(tool.Binding.Tools, server)
 		if warning != "" {
 			result.warnings = append(result.warnings, warning)
 		}
@@ -77,12 +77,9 @@ func (c *Compiler) compileMCP(
 			headers = translator.MCPActorJWTHeaders(headers)
 		}
 
-		if withheld {
-			continue
-		}
 		result.servers[name] = claudeconfig.MCPServer{
 			Type: transport, URL: server.Spec.URL, Headers: headers,
-			RequireApproval: tool.Binding.RequireApproval, DisallowedTools: disallowed,
+			RequireApproval: tool.Binding.RequireApproval, Tools: selected, DisallowedTools: disallowed,
 		}
 		result.environment = append(result.environment, headerEnvironment...)
 		result.egress = append(result.egress, hostname)
@@ -90,24 +87,20 @@ func (c *Compiler) compileMCP(
 	return result, nil
 }
 
-// mcpToolSelection enforces a binding's tools list. Claude has no per-server
-// allowlist, so the discovered tools the binding leaves out become disallowed
-// tools. Without a current discovered set the selection cannot be enforced, so
-// the server is withheld until discovery catches up; the status update that
-// brings it recompiles the Agent.
-func mcpToolSelection(selectedTools []string, server *v1alpha3.RemoteMCPServer) (disallowed []string, withheld bool, warning string) {
+// mcpToolSelection compiles a binding's tools list. The harness enforces the
+// selection at call time, so it holds without discovery and for tools the
+// server adds later. When discovery is current, the discovered tools the
+// binding leaves out are also disallowed, so Claude is not offered them.
+func mcpToolSelection(selectedTools []string, server *v1alpha3.RemoteMCPServer) (selected, disallowed []string, warning string) {
 	if len(selectedTools) == 0 {
-		return nil, false, ""
+		return nil, nil, ""
 	}
-	selected := append([]string(nil), selectedTools...)
+	selected = append([]string(nil), selectedTools...)
 	slices.Sort(selected)
 	selected = slices.Compact(selected)
 	discovered, current := currentDiscoveredToolNames(server)
 	if !current {
-		return nil, true, fmt.Sprintf(
-			"Claude RemoteMCPServer %q has no current discovered tool set to enforce selected tools %v against; withholding the server until discovery completes",
-			server.Name, selected,
-		)
+		return selected, nil, ""
 	}
 	for _, name := range discovered {
 		if !slices.Contains(selected, name) {
@@ -123,7 +116,7 @@ func mcpToolSelection(selectedTools []string, server *v1alpha3.RemoteMCPServer) 
 	if len(missing) != 0 {
 		warning = fmt.Sprintf("Claude RemoteMCPServer %q does not offer selected tools %v", server.Name, missing)
 	}
-	return disallowed, false, warning
+	return selected, disallowed, warning
 }
 
 func currentDiscoveredToolNames(server *v1alpha3.RemoteMCPServer) ([]string, bool) {

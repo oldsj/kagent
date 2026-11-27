@@ -415,3 +415,30 @@ func TestApprovalPersistenceErrorsDenyAndLogCause(t *testing.T) {
 		})
 	}
 }
+
+// A binding's tools list holds at call time: the hook denies the server's
+// other tools, whatever the model was offered, and leaves other servers alone.
+func TestApprovalHookDeniesUnselectedMCPTools(t *testing.T) {
+	b := newTestBroker(t)
+	require.NoError(t, b.RestrictTools(map[string][]string{
+		"tools":     {"mcp__tools__read_thing"},
+		"protected": {"mcp__protected__write"},
+	}))
+	call := func(name string) hookOutput {
+		return postHook(t, b, hookInput{SessionID: "session", Event: "PreToolUse", ToolID: "call-" + name, ToolName: name, Input: map[string]any{}})
+	}
+
+	denied := call("mcp__tools__approve")
+	require.Equal(t, "deny", denied.Specific.Decision)
+	require.Contains(t, denied.Specific.Reason, "not among the tools")
+	require.Equal(t, "deny", call("mcp__tools__read_thing_extra").Specific.Decision)
+	// An unselected tool of a protected server is denied, not deferred to a card.
+	require.Equal(t, "deny", call("mcp__protected__delete").Specific.Decision)
+
+	require.Empty(t, call("mcp__tools__read_thing").Specific.Decision)
+	require.Equal(t, "defer", call("mcp__protected__write").Specific.Decision)
+	require.Empty(t, call("mcp__other__anything").Specific.Decision)
+	require.Empty(t, call("Bash").Specific.Decision)
+
+	require.Error(t, b.RestrictTools(map[string][]string{"a__b": nil}))
+}

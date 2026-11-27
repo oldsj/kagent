@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -150,7 +151,7 @@ func TestNewMaterializesApprovalSettings(t *testing.T) {
 	cfg.MCPServers = map[string]config.MCPServer{
 		"protected": {Type: "http", URL: "https://mcp.example.com/write", RequireApproval: true},
 		// The binding left these out of its tools list.
-		"readonly": {Type: "http", URL: "https://mcp.example.com/read", DisallowedTools: []string{"open.door", "approve"}},
+		"readonly": {Type: "http", URL: "https://mcp.example.com/read", Tools: []string{"read_thing"}, DisallowedTools: []string{"open.door", "approve"}},
 	}
 	raw, err := json.Marshal(cfg)
 	if err != nil {
@@ -175,11 +176,48 @@ func TestNewMaterializesApprovalSettings(t *testing.T) {
 		Hooks struct {
 			PreToolUse []struct {
 				Matcher string `json:"matcher"`
+				Hooks   []struct {
+					URL     string            `json:"url"`
+					Headers map[string]string `json:"headers"`
+				} `json:"hooks"`
 			} `json:"PreToolUse"`
 		} `json:"hooks"`
 	}
 	if err := json.Unmarshal(settings, &approvalSettings); err != nil {
 		t.Fatal(err)
+	}
+	// The PreToolUse hook enforces the readonly binding's tools list.
+	hookDecision := func(tool string) string {
+		t.Helper()
+		hook := approvalSettings.Hooks.PreToolUse[0].Hooks[0]
+		body := fmt.Sprintf(`{"session_id":"s","hook_event_name":"PreToolUse","tool_use_id":"call-%s","tool_name":%q,"tool_input":{}}`, tool, tool)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, hook.URL, strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for name, value := range hook.Headers {
+			req.Header.Set(name, value)
+		}
+		response, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		var output struct {
+			Specific struct {
+				Decision string `json:"permissionDecision"`
+			} `json:"hookSpecificOutput"`
+		}
+		if err := json.NewDecoder(response.Body).Decode(&output); err != nil {
+			t.Fatal(err)
+		}
+		return output.Specific.Decision
+	}
+	if got := hookDecision("mcp__readonly__approve"); got != "deny" {
+		t.Fatalf("unselected readonly tool decision = %q, want deny", got)
+	}
+	if got := hookDecision("mcp__readonly__read_thing"); got != "" {
+		t.Fatalf("selected readonly tool decision = %q, want none", got)
 	}
 	if !slices.Equal(approvalSettings.Permissions.Ask, []string{"AskUserQuestion", "mcp__protected__*"}) || len(approvalSettings.Hooks.PreToolUse) != 1 || approvalSettings.Hooks.PreToolUse[0].Matcher != "*" {
 		t.Fatalf("invalid durable approval settings: %s", settings)

@@ -162,6 +162,10 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 	if err != nil {
 		return nil, fmt.Errorf("start Claude approval broker: %w", err)
 	}
+	if err := approvalBroker.RestrictTools(cfg.MCPToolSelections()); err != nil {
+		_ = approvalBroker.Close()
+		return nil, err
+	}
 	settingsJSON, settingsErr := approvalBroker.SettingsJSON()
 	if settingsErr != nil {
 		_ = approvalBroker.Close()
