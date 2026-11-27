@@ -186,6 +186,24 @@ over stdio; it opens no listener.
   `default` or `acceptEdits`); any other value fails the runtime's start. After
   a bootstrap installs a user home it uses that home with user and project
   setting sources; the user's own hooks run beside the harness's.
+- **Locked permission mode.** `KAGENT_CLAUDE_PERMISSION_MODE_LOCKED=true` pins
+  the Session to `KAGENT_CLAUDE_PERMISSION_MODE`, which it must name, and which
+  may not be `bypassPermissions`. Both profiles start in that mode. The mode
+  control is refused, on the client port and from the harness, by Go and by the
+  bridge; an override set before the lock is dropped at the next start; an
+  "always" answer cannot carry a `setMode` update; and the `--settings` layer
+  sets `permissions.disableBypassPermissionsMode: "disable"`. Should Claude
+  still report `bypassPermissions`, the bridge is stopped. The process driver
+  cannot hold a lock, so a locked Harness without `KAGENT_CLAUDE_DRIVER=sdk`
+  fails the runtime's start. The client's `meta` carries
+  `permissionModeLocked`.
+- **Permission denials.** A call Claude's permission check refuses without a
+  prompt (an auto-mode classifier block, a deny rule) arrives as
+  `system/permission_denied`. Its A2A tool result is published declined, with
+  `response.permissionDenied: {by, reason}` (`by` is Claude's
+  `decision_reason_type`, such as `classifier`). A call auto mode escalates
+  instead, including after its repeated-block fallback, reaches `canUseTool`
+  and becomes an `input-required` approval as before.
 - **Activity.** The driver reports busy/idle changes (clients attached, a turn,
   SDK background tasks) to the control plane through `ReportActivity`, and never
   reports before serving a Session. A prompt waiting for a human is not activity

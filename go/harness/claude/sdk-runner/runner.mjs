@@ -67,11 +67,21 @@ export function sdkOptions(spec, canUseTool) {
   return options;
 }
 
+// permissionUpdates is what an "always" answer applies. On a locked Harness a
+// suggestion that changes the permission mode (ExitPlanMode offers one) is
+// dropped; the rule updates still apply.
+export function permissionUpdates(suggestions, lockedMode) {
+  if (!lockedMode) return suggestions;
+  return suggestions.filter((update) => update?.type !== 'setMode');
+}
+
 // createRunner wires one query to the Go parent. send writes one event line.
 export function createRunner({ query, send }) {
   const input = messageQueue();
   const perms = new Map(); // id -> { input, suggestions, resolve }
   let q = null;
+  // The Harness's locked permission mode, or undefined (spec.lockedPermissionMode).
+  let lockedMode;
 
   function canUseTool(toolName, toolInput, opts) {
     const id = randomUUID();
@@ -92,6 +102,7 @@ export function createRunner({ query, send }) {
   }
 
   async function start(spec) {
+    lockedMode = spec.lockedPermissionMode || undefined;
     q = query({ prompt: input, options: sdkOptions(spec, canUseTool) });
     q.initializationResult().then(async (init) => {
       let models = init.models;
@@ -118,7 +129,11 @@ export function createRunner({ query, send }) {
         case 'model': await q.setModel(op.model || undefined); return ack({ model: op.model });
         // An empty effort clears the override: null returns to the model's default.
         case 'effort': await q.applyFlagSettings({ effortLevel: op.effort || null }); return ack({ effort: op.effort });
-        case 'mode': await q.setPermissionMode(op.mode); return ack({ mode: op.mode });
+        case 'mode':
+          // Go refuses this first; the bridge refuses it too.
+          if (lockedMode) return ack({ error: `the permission mode is locked to ${lockedMode}` });
+          await q.setPermissionMode(op.mode);
+          return ack({ mode: op.mode });
         case 'perm': {
           const p = perms.get(op.id);
           if (!p) return;
@@ -126,7 +141,7 @@ export function createRunner({ query, send }) {
           p.resolve(op.behavior === 'allow'
             // updatedInput replaces the input Claude asked about; an
             // AskUserQuestion call receives its answers this way.
-            ? { behavior: 'allow', updatedInput: op.updatedInput ?? p.input, ...(op.always && p.suggestions ? { updatedPermissions: p.suggestions } : {}) }
+            ? { behavior: 'allow', updatedInput: op.updatedInput ?? p.input, ...(op.always && p.suggestions ? { updatedPermissions: permissionUpdates(p.suggestions, lockedMode) } : {}) }
             : { behavior: 'deny', message: op.message || 'The user declined this tool call.' });
           return;
         }

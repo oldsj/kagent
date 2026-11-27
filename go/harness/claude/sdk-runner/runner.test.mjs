@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createRunner, sdkOptions } from './runner.mjs';
+import { createRunner, permissionUpdates, sdkOptions } from './runner.mjs';
 
 // fakeQuery records options and echoes each user message as a result, the way
 // the CLI binds results to the uuids it consumed.
@@ -11,8 +11,9 @@ function fakeQuery(calls) {
     const it = (async function* () {
       yield { type: 'system', subtype: 'init', session_id: 'sess-1' };
       for await (const msg of prompt) {
-        if (msg.message.content === 'ask') {
-          const decision = await options.canUseTool('Bash', { command: 'touch x' }, { suggestions: [{ type: 'addRules' }], signal: new AbortController().signal });
+        if (msg.message.content === 'ask' || msg.message.content === 'exit plan') {
+          const suggestions = msg.message.content === 'ask' ? [{ type: 'addRules' }] : [{ type: 'setMode', mode: 'bypassPermissions', destination: 'session' }, { type: 'addRules' }];
+          const decision = await options.canUseTool('Bash', { command: 'touch x' }, { suggestions, signal: new AbortController().signal });
           yield { type: 'assistant', decision };
         }
         yield { type: 'result', subtype: 'success', user_message_uuids: [msg.uuid] };
@@ -74,6 +75,32 @@ test('relays turns, controls and permission answers', async () => {
   runner.close();
   await tick();
   assert.equal(out.at(-1).k, 'ended');
+});
+
+test('a locked permission mode refuses mode changes and mode-changing answers', async () => {
+  const calls = {};
+  const out = [];
+  const runner = createRunner({ query: fakeQuery(calls), send: (o) => out.push(o) });
+  await runner.handle({ op: 'start', options: { cwd: '/w', executable: '/usr/local/bin/claude', permissionMode: 'auto', lockedPermissionMode: 'auto' } });
+  await runner.handle({ op: 'mode', ref: 'r1', mode: 'bypassPermissions' });
+  assert.deepEqual(calls.controls, [], 'no mode change reaches Claude');
+  assert.match(out.find((o) => o.k === 'ack' && o.ref === 'r1').error, /locked/);
+  assert.equal(calls.options.allowDangerouslySkipPermissions, undefined);
+
+  await runner.handle({ op: 'user', uuid: 'u1', text: 'exit plan' });
+  await tick();
+  const perm = out.find((o) => o.k === 'perm');
+  await runner.handle({ op: 'perm', id: perm.id, behavior: 'allow', always: true });
+  await tick();
+  const decided = out.find((o) => o.m?.type === 'assistant').m.decision;
+  assert.deepEqual(decided.updatedPermissions, [{ type: 'addRules' }], 'the setMode suggestion is dropped');
+  runner.close();
+});
+
+test('permissionUpdates keeps every suggestion when the mode is not locked', () => {
+  const suggestions = [{ type: 'setMode', mode: 'acceptEdits' }, { type: 'addRules' }];
+  assert.deepEqual(permissionUpdates(suggestions, undefined), suggestions);
+  assert.deepEqual(permissionUpdates(suggestions, 'auto'), [{ type: 'addRules' }]);
 });
 
 test('first operation must be start', async () => {

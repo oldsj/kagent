@@ -26,30 +26,98 @@ import (
 const approvalServerName = "kagent_hitl"
 
 // PermissionModeEnvName sets the managed profile's initial Claude permission
-// mode from the Harness environment. A client may still change the mode on the
-// client port once the conversation runs.
+// mode from the Harness environment. Unless the mode is locked, a client may
+// still change it on the client port once the conversation runs.
 const PermissionModeEnvName = "KAGENT_CLAUDE_PERMISSION_MODE"
+
+// PermissionModeLockedEnvName, set to "true", pins the Session to the
+// Harness's permission mode: the mode control is refused, no override applies
+// on a restart, Claude may not enter bypassPermissions, and a permission
+// answer cannot change the mode. Only the SDK driver can enforce it.
+const PermissionModeLockedEnvName = "KAGENT_CLAUDE_PERMISSION_MODE_LOCKED"
 
 // managedPermissionModes are the modes a Harness may start the managed profile
 // in. plan is not one: an agent that only plans cannot complete a task.
 var managedPermissionModes = []string{"bypassPermissions", "auto", "default", "acceptEdits"}
 
-// ManagedPermissionMode is the permission mode the managed profile starts in:
-// the Harness's PermissionModeEnvName, or bypassPermissions when it is unset.
-func ManagedPermissionMode(environment []string) (string, error) {
-	mode := ""
+// PermissionPolicy is the Harness's permission mode and whether it is locked.
+type PermissionPolicy struct {
+	Mode   string
+	Locked bool
+}
+
+// LockedMode is the mode a locked policy pins, or "" when it is not locked.
+func (p PermissionPolicy) LockedMode() string {
+	if p.Locked {
+		return p.Mode
+	}
+	return ""
+}
+
+// ManagedPermissionPolicy reads the Harness environment. The mode defaults to
+// bypassPermissions when unset. A locked policy names its mode explicitly and
+// never bypassPermissions, which a lock exists to keep out.
+func ManagedPermissionPolicy(environment []string) (PermissionPolicy, error) {
+	mode, locked := "", ""
 	for _, item := range environment {
-		if name, value, ok := strings.Cut(item, "="); ok && name == PermissionModeEnvName {
-			mode = value
+		if name, value, ok := strings.Cut(item, "="); ok {
+			switch name {
+			case PermissionModeEnvName:
+				mode = value
+			case PermissionModeLockedEnvName:
+				locked = value
+			}
 		}
 	}
+	policy := PermissionPolicy{Mode: mode}
+	switch locked {
+	case "", "false":
+	case "true":
+		policy.Locked = true
+	default:
+		return PermissionPolicy{}, fmt.Errorf("%s must be \"true\" or \"false\", got %q", PermissionModeLockedEnvName, locked)
+	}
 	if mode == "" {
-		return managedPermissionModes[0], nil
+		if policy.Locked {
+			return PermissionPolicy{}, fmt.Errorf("%s requires %s", PermissionModeLockedEnvName, PermissionModeEnvName)
+		}
+		policy.Mode = managedPermissionModes[0]
+		return policy, nil
 	}
 	if !slices.Contains(managedPermissionModes, mode) {
-		return "", fmt.Errorf("%s must be one of %s, got %q", PermissionModeEnvName, strings.Join(managedPermissionModes, ", "), mode)
+		return PermissionPolicy{}, fmt.Errorf("%s must be one of %s, got %q", PermissionModeEnvName, strings.Join(managedPermissionModes, ", "), mode)
 	}
-	return mode, nil
+	if policy.Locked && mode == "bypassPermissions" {
+		return PermissionPolicy{}, fmt.Errorf("%s cannot lock bypassPermissions", PermissionModeLockedEnvName)
+	}
+	return policy, nil
+}
+
+// ManagedPermissionMode is the permission mode the managed profile starts in.
+func ManagedPermissionMode(environment []string) (string, error) {
+	policy, err := ManagedPermissionPolicy(environment)
+	return policy.Mode, err
+}
+
+// lockSettings adds what a locked policy needs to the --settings layer, which
+// outranks user and project settings: Claude refuses to enter
+// bypassPermissions, whatever asks it to.
+func lockSettings(settings string) (string, error) {
+	var layer map[string]any
+	if err := json.Unmarshal([]byte(settings), &layer); err != nil {
+		return "", fmt.Errorf("decode Claude SDK runner settings: %w", err)
+	}
+	permissions, _ := layer["permissions"].(map[string]any)
+	if permissions == nil {
+		permissions = map[string]any{}
+	}
+	permissions["disableBypassPermissionsMode"] = "disable"
+	layer["permissions"] = permissions
+	encoded, err := json.Marshal(layer)
+	if err != nil {
+		return "", fmt.Errorf("encode Claude SDK runner settings: %w", err)
+	}
+	return string(encoded), nil
 }
 
 // SDKSpec compiles the Agent SDK bridge's start operation from the same
@@ -98,6 +166,10 @@ func (d *ProcessDriver) SDKSpec(profile sdkrunner.Profile, home string) (sdkrunn
 			spec.MCPServers = mcp.MCPServers
 		}
 	}
+	policy, err := ManagedPermissionPolicy(d.config.Environment)
+	if err != nil {
+		return sdkrunner.Spec{}, err
+	}
 	switch profile {
 	case sdkrunner.ProfileManaged:
 		// Harness-owned user scope only, as for the process driver.
@@ -108,9 +180,7 @@ func (d *ProcessDriver) SDKSpec(profile sdkrunner.Profile, home string) (sdkrunn
 		}
 		spec.Settings = settings
 		spec.StrictMCPConfig = true
-		if spec.PermissionMode, err = ManagedPermissionMode(d.config.Environment); err != nil {
-			return sdkrunner.Spec{}, err
-		}
+		spec.PermissionMode = policy.Mode
 	case sdkrunner.ProfileUser:
 		// The user's own Claude home: their settings, hooks, skills, plugins.
 		// Provider, credentials, proxy and CA stay owned by kagent through
@@ -118,7 +188,12 @@ func (d *ProcessDriver) SDKSpec(profile sdkrunner.Profile, home string) (sdkrunn
 		delete(env, claudeconfig.ClaudeConfigDirEnvName)
 		env["HOME"] = home
 		spec.SettingSources = []string{"user", "project"}
+		// A locked Harness pins its mode here too; otherwise the user profile
+		// runs auto.
 		spec.PermissionMode = "auto"
+		if policy.Locked {
+			spec.PermissionMode = policy.Mode
+		}
 		// The harness hooks and ask rules stay; the user's own hooks run too.
 		settings, err := d.sdkSettingsJSON(false)
 		if err != nil {
@@ -127,6 +202,12 @@ func (d *ProcessDriver) SDKSpec(profile sdkrunner.Profile, home string) (sdkrunn
 		spec.Settings = settings
 	default:
 		return sdkrunner.Spec{}, fmt.Errorf("unknown sdk runner profile %q", profile)
+	}
+	if policy.Locked {
+		if spec.Settings, err = lockSettings(spec.Settings); err != nil {
+			return sdkrunner.Spec{}, err
+		}
+		spec.LockedPermissionMode = policy.Mode
 	}
 	return spec, nil
 }

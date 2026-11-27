@@ -51,6 +51,22 @@ type Config struct {
 // New validates the configuration and Claude installation, then returns the
 // executor and the resource to close on shutdown.
 func New(ctx context.Context, cfg Config) (a2asrv.AgentExecutor, io.Closer, error) {
+	// The driver and permission policy come from the environment alone, so a
+	// wrong setting fails here, before anything is restored or launched, and
+	// not only when the bridge first starts.
+	mode, err := selectedDriver(cfg.Environment)
+	if err != nil {
+		return nil, nil, err
+	}
+	policy, err := driver.ManagedPermissionPolicy(cfg.Environment)
+	if err != nil {
+		return nil, nil, err
+	}
+	if policy.Locked && mode != modeSDK {
+		// The process driver runs every turn with --dangerously-skip-permissions
+		// and has no mode to lock.
+		return nil, nil, fmt.Errorf("%s requires %s=%s: the process driver cannot hold a locked permission mode", driver.PermissionModeLockedEnvName, DriverEnvName, modeSDK)
+	}
 	stateDir := cfg.DataDir + "/.kagent"
 	// A setup installed by an earlier process is restored, so its standing
 	// context survives a restart without another preparation.
@@ -97,22 +113,12 @@ func New(ctx context.Context, cfg Config) (a2asrv.AgentExecutor, io.Closer, erro
 		_ = runner.Close()
 		return nil, nil, err
 	}
-	mode, err := selectedDriver(cfg.Environment)
-	if err != nil {
-		_ = runner.Close()
-		return nil, nil, err
-	}
 	var turns runtimea2a.Runner = runner
 	// runnerCloser owns the current driver. Preparation can replace it, so
 	// with Git it becomes the setup installer, which closes whichever is current.
 	var runnerCloser io.Closer = runner
 	var sdk *sdkWiring
 	if mode == modeSDK {
-		// A wrong mode would otherwise fail only when the bridge first starts.
-		if _, err := driver.ManagedPermissionMode(cfg.Environment); err != nil {
-			_ = runner.Close()
-			return nil, nil, err
-		}
 		bridge := imageSDKRunner
 		if parsed.SDKRunner != nil {
 			bridge = *parsed.SDKRunner

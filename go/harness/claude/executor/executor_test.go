@@ -36,6 +36,14 @@ func TestNewRejectsBadInput(t *testing.T) {
 		{name: "relative data dir", cfg: Config{ConfigJSON: fmt.Appendf(nil, `{"version":%d,"claude_executable":"claude","model":"m","max_event_bytes":100,"max_stderr_bytes":100,"interrupt_grace_millis":100}`, config.Version), DataDir: "relative/dir"}, wantErr: "absolute path"},
 		{name: "malformed config", cfg: Config{ConfigJSON: []byte(`{"version":`), DataDir: t.TempDir()}, wantErr: "decode config"},
 		{name: "unknown config field", cfg: Config{ConfigJSON: []byte(`{"nope":1}`), DataDir: t.TempDir()}, wantErr: "decode config"},
+		{name: "locked permission mode on the process driver", cfg: Config{
+			ConfigJSON: fmt.Appendf(nil, `{"version":%d,"claude_executable":"claude","model":"m","max_event_bytes":100,"max_stderr_bytes":100,"interrupt_grace_millis":100}`, config.Version), DataDir: t.TempDir(),
+			Environment: []string{"KAGENT_CLAUDE_PERMISSION_MODE=auto", "KAGENT_CLAUDE_PERMISSION_MODE_LOCKED=true"},
+		}, wantErr: "the process driver cannot hold a locked permission mode"},
+		{name: "invalid lock", cfg: Config{
+			ConfigJSON: fmt.Appendf(nil, `{"version":%d,"claude_executable":"claude","model":"m","max_event_bytes":100,"max_stderr_bytes":100,"interrupt_grace_millis":100}`, config.Version), DataDir: t.TempDir(),
+			Environment: []string{"KAGENT_CLAUDE_DRIVER=sdk", "KAGENT_CLAUDE_PERMISSION_MODE=bypassPermissions", "KAGENT_CLAUDE_PERMISSION_MODE_LOCKED=true"},
+		}, wantErr: "cannot lock bypassPermissions"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

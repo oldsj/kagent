@@ -34,6 +34,13 @@ type fixture struct {
 
 func newFixture(t *testing.T, handle func(*sdkrunnertest.Bridge, sdkrunnertest.Op)) *fixture {
 	t.Helper()
+	spec := sdkrunner.Spec{Cwd: "/data/workspace", Executable: "/usr/local/bin/claude", Model: "opus"}
+	return newSpecFixture(t, &spec, handle)
+}
+
+// newSpecFixture compiles every bridge start from *spec, as it is then.
+func newSpecFixture(t *testing.T, spec *sdkrunner.Spec, handle func(*sdkrunnertest.Bridge, sdkrunnertest.Op)) *fixture {
+	t.Helper()
 	f := &fixture{
 		launcher: sdkrunnertest.NewLauncher(handle), continuation: &sdkrunnertest.Continuation{},
 		activity: &sdkrunnertest.Activity{}, dir: t.TempDir(),
@@ -42,7 +49,7 @@ func newFixture(t *testing.T, handle func(*sdkrunnertest.Bridge, sdkrunnertest.O
 		Launcher: f.launcher,
 		Spec: func(p sdkrunner.Profile) (sdkrunner.Spec, error) {
 			f.profiles = append(f.profiles, p)
-			return sdkrunner.Spec{Cwd: "/data/workspace", Executable: "/usr/local/bin/claude", Model: "opus"}, nil
+			return *spec, nil
 		},
 		Prepare:      func(context.Context) error { f.prepared++; return nil },
 		Continuation: f.continuation, Activity: f.activity, Dir: f.dir, StopGrace: time.Second,

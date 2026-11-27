@@ -80,7 +80,13 @@ type Meta struct {
 	Models         json.RawMessage `json:"models,omitempty"`
 	Account        json.RawMessage `json:"account,omitempty"`
 	Profile        Profile         `json:"profile"`
+	// PermissionModeLocked says the Harness pins PermissionMode: a client's
+	// mode control is refused.
+	PermissionModeLocked bool `json:"permissionModeLocked,omitempty"`
 }
+
+// ErrPermissionModeLocked refuses a mode change on a locked Harness.
+var ErrPermissionModeLocked = errors.New("the permission mode is locked by the Harness")
 
 // Perm is one permission request awaiting an answer.
 type Perm struct {
@@ -113,8 +119,10 @@ type Session struct {
 	state     string
 	meta      Meta
 	overrides overrides
-	perms     map[string]*Perm
-	permOrder []string
+	// lockedMode is the last start's locked permission mode, or "".
+	lockedMode string
+	perms      map[string]*Perm
+	permOrder  []string
 	// outstanding maps each unconsumed user message to the A2A message ID it
 	// carries; a client's own message carries none.
 	outstanding map[string]string
@@ -235,7 +243,12 @@ func (s *Session) launch(ctx context.Context) (Process, error) {
 	if s.overrides.effort != "" {
 		spec.Effort = s.overrides.effort
 	}
-	if s.overrides.mode != "" {
+	s.lockedMode = spec.LockedPermissionMode
+	s.meta.PermissionModeLocked = s.lockedMode != ""
+	if s.lockedMode != "" {
+		// A lock outlives any override set before it.
+		s.overrides.mode = ""
+	} else if s.overrides.mode != "" {
 		spec.PermissionMode = s.overrides.mode
 	}
 	s.meta.Profile = profile
@@ -406,6 +419,15 @@ func (s *Session) Control(ctx context.Context, what, value, ref string) error {
 	}
 	if err := s.Start(ctx); err != nil {
 		return err
+	}
+	if what == "mode" {
+		s.mu.Lock()
+		locked := s.lockedMode
+		s.mu.Unlock()
+		if locked != "" {
+			s.cfg.Logger.WarnContext(ctx, "refused a permission mode change on a locked Harness", "mode", value, "locked", locked)
+			return ErrPermissionModeLocked
+		}
 	}
 	return s.write(op)
 }
@@ -654,7 +676,10 @@ func (s *Session) handle(line []byte) {
 		case "effort":
 			s.overrides.effort, s.meta.Effort, fields["effort"] = event.Effort, event.Effort, event.Effort
 		case "mode":
-			s.overrides.mode, s.meta.PermissionMode, fields["mode"] = event.Mode, event.Mode, event.Mode
+			if s.lockedMode == "" {
+				s.overrides.mode = event.Mode
+			}
+			s.meta.PermissionMode, fields["mode"] = event.Mode, event.Mode
 		}
 		s.emitLocked("ctl", fields)
 		if event.What != "interrupt" {
@@ -670,6 +695,20 @@ func (s *Session) handle(line []byte) {
 	s.updateActivity()
 }
 
+// checkLockLocked fails closed when Claude reports bypassPermissions on a
+// locked Harness. The settings layer forbids it, so this is a backstop: the
+// bridge is stopped, and the next demand starts it again in the locked mode.
+// Other drift (plan mode, auto's own fallback to prompting) is stricter, and
+// is left alone.
+func (s *Session) checkLockLocked(mode string) {
+	if s.lockedMode == "" || mode != "bypassPermissions" {
+		return
+	}
+	s.cfg.Logger.Error("Claude entered bypassPermissions on a locked Harness; stopping the SDK runner", "locked", s.lockedMode)
+	s.emitLocked("err", map[string]any{"text": "Claude entered bypassPermissions on a locked Harness; the session was stopped."})
+	go func() { _ = s.Stop() }()
+}
+
 func (s *Session) handleSDKLocked(m json.RawMessage) {
 	var envelope sdkEnvelope
 	if err := json.Unmarshal(m, &envelope); err != nil {
@@ -679,6 +718,7 @@ func (s *Session) handleSDKLocked(m json.RawMessage) {
 	case envelope.Type == "system" && envelope.Subtype == "init":
 		s.meta.SessionID, s.meta.Model, s.meta.PermissionMode = envelope.SessionID, envelope.Model, envelope.PermissionMode
 		s.meta.Cwd, s.meta.Version, s.meta.SlashCommands = envelope.Cwd, envelope.Version, envelope.SlashCommandsJSON
+		s.checkLockLocked(envelope.PermissionMode)
 		if envelope.SessionID != "" {
 			if err := s.cfg.Continuation.Bind(envelope.SessionID); err != nil {
 				s.cfg.Logger.Error("bind sdk runner continuation", "error", err)
@@ -688,6 +728,7 @@ func (s *Session) handleSDKLocked(m json.RawMessage) {
 		s.emitLocked("meta", map[string]any{"meta": s.meta})
 	case envelope.Type == "system" && envelope.Subtype == "status" && envelope.PermissionMode != "":
 		s.meta.PermissionMode = envelope.PermissionMode
+		s.checkLockLocked(envelope.PermissionMode)
 	case envelope.Type == "system" && envelope.Subtype == "session_state_changed":
 		s.sdkState = envelope.State
 	case envelope.Type == "system" && envelope.Subtype == "background_tasks_changed":
