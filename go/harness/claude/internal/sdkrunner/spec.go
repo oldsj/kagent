@@ -30,15 +30,19 @@ const (
 // Spec is the bridge's start operation. Go compiles it from the same adapter
 // output the process driver uses; the bridge maps it onto SDK options.
 type Spec struct {
-	Cwd                   string                     `json:"cwd"`
-	Executable            string                     `json:"executable"`
-	Env                   map[string]string          `json:"env"`
-	Model                 string                     `json:"model,omitempty"`
-	Effort                string                     `json:"effort,omitempty"`
-	Resume                string                     `json:"resume,omitempty"`
-	SettingSources        []string                   `json:"settingSources"`
-	Settings              string                     `json:"settings,omitempty"`
-	PermissionMode        string                     `json:"permissionMode,omitempty"`
+	Cwd            string            `json:"cwd"`
+	Executable     string            `json:"executable"`
+	Env            map[string]string `json:"env"`
+	Model          string            `json:"model,omitempty"`
+	Effort         string            `json:"effort,omitempty"`
+	Resume         string            `json:"resume,omitempty"`
+	SettingSources []string          `json:"settingSources"`
+	Settings       string            `json:"settings,omitempty"`
+	PermissionMode string            `json:"permissionMode,omitempty"`
+	// LockedPermissionMode, when set, is PermissionMode pinned for the
+	// Session's life: the bridge refuses a mode change and strips mode changes
+	// from permission answers.
+	LockedPermissionMode  string                     `json:"lockedPermissionMode,omitempty"`
 	StrictMCPConfig       bool                       `json:"strictMcpConfig,omitempty"`
 	MCPServers            map[string]json.RawMessage `json:"mcpServers,omitempty"`
 	DisallowedTools       []string                   `json:"disallowedTools,omitempty"`
@@ -66,6 +70,9 @@ func EnvMap(environment []string) map[string]string {
 func (s Spec) validate() error {
 	if s.Cwd == "" || s.Executable == "" {
 		return fmt.Errorf("sdk runner spec requires cwd and executable")
+	}
+	if s.LockedPermissionMode != "" && s.LockedPermissionMode != s.PermissionMode {
+		return fmt.Errorf("sdk runner spec locks permission mode %q but starts in %q", s.LockedPermissionMode, s.PermissionMode)
 	}
 	return nil
 }

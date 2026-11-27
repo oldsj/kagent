@@ -106,13 +106,20 @@ func New(ctx context.Context, cfg Config) (a2asrv.AgentExecutor, io.Closer, erro
 	// runnerCloser owns the current driver. Preparation can replace it, so
 	// with Git it becomes the setup installer, which closes whichever is current.
 	var runnerCloser io.Closer = runner
+	// A wrong mode would otherwise fail only when the bridge first starts.
+	policy, err := driver.ManagedPermissionPolicy(cfg.Environment)
+	if err != nil {
+		_ = runner.Close()
+		return nil, nil, err
+	}
+	if policy.Locked && mode != modeSDK {
+		// The process driver runs every turn with --dangerously-skip-permissions
+		// and has no mode to lock.
+		_ = runner.Close()
+		return nil, nil, fmt.Errorf("%s requires %s=%s: the process driver cannot hold a locked permission mode", driver.PermissionModeLockedEnvName, DriverEnvName, modeSDK)
+	}
 	var sdk *sdkWiring
 	if mode == modeSDK {
-		// A wrong mode would otherwise fail only when the bridge first starts.
-		if _, err := driver.ManagedPermissionMode(cfg.Environment); err != nil {
-			_ = runner.Close()
-			return nil, nil, err
-		}
 		bridge := imageSDKRunner
 		if parsed.SDKRunner != nil {
 			bridge = *parsed.SDKRunner

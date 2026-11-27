@@ -102,6 +102,18 @@ type ToolResult struct {
 	Result  any
 	IsError bool
 	Status  ToolStatus
+	// Denial says why the runtime's permission check refused the call, for a
+	// ToolDeclined result it decided without asking anyone.
+	Denial *PermissionDenial
+}
+
+// PermissionDenial is a runtime's own refusal of a tool call: an auto-mode
+// classifier block, a deny rule, or a mode that does not allow the call.
+type PermissionDenial struct {
+	// By names the deciding check, such as "classifier", "rule" or "mode".
+	By string
+	// Reason is the check's own explanation, when it gave one.
+	Reason string
 }
 
 // ToolStatus says whether a tool call ran. The zero value means it ran and returned a result.

@@ -700,6 +700,13 @@ func toolResultPart(event runtime.ToolResult) (*a2atype.Part, error) {
 	if event.IsError {
 		response["isError"] = true
 	}
+	if event.Denial != nil {
+		denial := map[string]any{"by": event.Denial.By}
+		if event.Denial.Reason != "" {
+			denial["reason"] = event.Denial.Reason
+		}
+		response["permissionDenied"] = denial
+	}
 	return apia2a.NewToolResultPart(event.ID, event.Name, response), nil
 }
 

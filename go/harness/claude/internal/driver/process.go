@@ -604,9 +604,13 @@ func emitEvent(event Event, sink runtime.EventSink, deferred bool) (*runtime.Out
 			call.MCPServer, call.MCPTool = splitMCPName(event.ToolName)
 			return nil, sink.ToolCall(call)
 		case "completed":
-			return nil, sink.ToolResult(runtime.ToolResult{
+			result := runtime.ToolResult{
 				ID: event.ToolID, Name: event.ToolName, Result: event.ToolResult, IsError: event.ToolError,
-			})
+			}
+			if event.ToolDenial != nil {
+				result.Status, result.Denial, result.IsError = runtime.ToolDeclined, event.ToolDenial, true
+			}
+			return nil, sink.ToolResult(result)
 		default:
 			return nil, fmt.Errorf("claude tool activity has unsupported phase %q", event.ToolPhase)
 		}

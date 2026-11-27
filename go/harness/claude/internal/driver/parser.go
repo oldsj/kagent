@@ -22,12 +22,14 @@ import (
 )
 
 type parser struct {
-	emitted               map[string]string
-	currentMessageID      string
-	activeBlock           *contentBlockRef
-	tools                 map[string]string
-	emittedToolCalls      map[string]struct{}
-	emittedResults        map[string]struct{}
+	emitted          map[string]string
+	currentMessageID string
+	activeBlock      *contentBlockRef
+	tools            map[string]string
+	emittedToolCalls map[string]struct{}
+	emittedResults   map[string]struct{}
+	// denials holds permission_denied frames until their tool_result.
+	denials               map[string]*runtime.PermissionDenial
 	terminal              bool
 	now                   func() time.Time
 	openCall              *runtime.ModelCall
@@ -384,6 +386,9 @@ func (p *parser) parseLine(ctx context.Context, line []byte, emit func(Event) er
 		// Claude Code prints this before each main-thread call, but not before its retries.
 		if envelope.Subtype == "status" && envelope.Status == "requesting" && envelope.ParentToolUseID == "" {
 			p.callStart[""] = p.now()
+		}
+		if envelope.Subtype == "permission_denied" {
+			return p.recordDenial(line)
 		}
 		return p.parseBackgroundTask(envelope.Subtype, line, emit)
 	case "stream_event":
@@ -847,6 +852,32 @@ func (p *parser) parseAssistant(raw json.RawMessage, parent, requestID string, l
 	return nil
 }
 
+// recordDenial keeps Claude's account of a call its permission check refused
+// without a prompt, for the tool_result that follows it. The event is
+// advisory: a denial with no frame is reported as a plain error result.
+func (p *parser) recordDenial(line []byte) error {
+	var denied struct {
+		ToolUseID          string `json:"tool_use_id"`
+		DecisionReasonType string `json:"decision_reason_type"`
+		DecisionReason     string `json:"decision_reason"`
+	}
+	if err := json.Unmarshal(line, &denied); err != nil {
+		return fmt.Errorf("decode Claude permission denial: %w", err)
+	}
+	if denied.ToolUseID == "" {
+		return nil
+	}
+	by := denied.DecisionReasonType
+	if by == "" {
+		by = "other"
+	}
+	if p.denials == nil {
+		p.denials = map[string]*runtime.PermissionDenial{}
+	}
+	p.denials[denied.ToolUseID] = &runtime.PermissionDenial{By: by, Reason: denied.DecisionReason}
+	return nil
+}
+
 func (p *parser) parseUser(ctx context.Context, raw, toolUseResult json.RawMessage, lineTime time.Time, emit func(Event) error) error {
 	var message struct {
 		Content json.RawMessage `json:"content"`
@@ -900,9 +931,11 @@ func (p *parser) parseUser(ctx context.Context, raw, toolUseResult json.RawMessa
 		if err := p.health.tool(content.ToolUseID, name, nil, true, content.IsError, emit); err != nil {
 			return err
 		}
+		denial := p.denials[content.ToolUseID]
+		delete(p.denials, content.ToolUseID)
 		if err := emit(Event{
 			Kind: EventToolActivity, ToolID: content.ToolUseID, ToolName: name,
-			ToolPhase: "completed", ToolResult: result, ToolError: content.IsError,
+			ToolPhase: "completed", ToolResult: result, ToolError: content.IsError, ToolDenial: denial,
 		}); err != nil {
 			return err
 		}

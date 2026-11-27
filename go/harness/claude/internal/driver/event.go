@@ -32,11 +32,14 @@ type Event struct {
 	ParentToolID string
 	ToolResult   any
 	ToolError    bool
-	Metadata     map[string]any
-	SafeMessage  string
-	Deferred     *DeferredTool
-	ModelCall    *runtime.ModelCall
-	Health       runtime.HealthEvent
+	// ToolDenial is set on a completed tool whose call Claude's permission
+	// check refused without a prompt (system/permission_denied).
+	ToolDenial  *runtime.PermissionDenial
+	Metadata    map[string]any
+	SafeMessage string
+	Deferred    *DeferredTool
+	ModelCall   *runtime.ModelCall
+	Health      runtime.HealthEvent
 	// BackgroundTasks is the unreported background task count for
 	// EventBackgroundTasks.
 	BackgroundTasks int
