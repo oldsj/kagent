@@ -29,13 +29,12 @@ harness.
 - [x] Claude Code built-in tools
 - [x] Shared local subagents
 - [x] Standalone skills and plugin-provided skills
-- [x] Direct HTTP and SSE MCP servers, with a binding's `tools` list enforced:
-      the server's discovered tools that the list leaves out are passed to
-      `--disallowedTools` as `mcp__<server>__<tool>`. Until the
-      RemoteMCPServer has a current discovered tool set, a server with a
-      `tools` list is withheld. A tool the server adds after discovery stays
-      callable in a running Session until the Session restarts on the
-      recompiled revision.
+- [x] Direct HTTP and SSE MCP servers, with a binding's `tools` list enforced
+      at call time: the harness's PreToolUse hook denies the server's other
+      tools, with or without tool discovery. When the RemoteMCPServer has a
+      current discovered tool set, the unselected tools are also passed to
+      `--disallowedTools` as `mcp__<server>__<tool>`, so Claude isn't offered
+      them.
 - [x] Human-in-the-loop MCP tool approval across DATA-only restart
 - [x] Native ask-user questions through durable deferred input
 

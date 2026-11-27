@@ -146,9 +146,14 @@ type MCPServer struct {
 	URL             string            `json:"url"`
 	Headers         map[string]string `json:"headers,omitempty"`
 	RequireApproval bool              `json:"require_approval,omitempty"`
+	// Tools is the binding's tool selection, as the server names the tools.
+	// When set, the harness's PreToolUse hook denies every other tool of the
+	// server at call time. Empty exposes every tool.
+	Tools []string `json:"tools,omitempty"`
 	// DisallowedTools names the server's MCP tools Claude may not see, as the
 	// server reports them. The compiler sets it to the discovered tools a
-	// binding does not select, since Claude has no per-server allowlist.
+	// binding does not select, when discovery is current, so the model is not
+	// offered tools the hook would deny.
 	DisallowedTools []string `json:"disallowed_tools,omitempty"`
 }
 
@@ -271,6 +276,11 @@ func (c Config) Validate() error {
 				return fmt.Errorf("claude MCP server %q disallows an empty tool name", name)
 			}
 		}
+		for _, tool := range server.Tools {
+			if strings.TrimSpace(tool) == "" {
+				return fmt.Errorf("claude MCP server %q selects an empty tool name", name)
+			}
+		}
 	}
 	return nil
 }
@@ -349,6 +359,24 @@ func (c Config) EffectiveDisallowedTools() []string {
 	}
 	slices.Sort(mcp)
 	return append(tools, slices.Compact(mcp)...)
+}
+
+// MCPToolSelections maps each server with a tool selection to the native
+// names (mcp__<server>__<tool>) of the tools it allows.
+func (c Config) MCPToolSelections() map[string][]string {
+	selections := map[string][]string{}
+	for name, server := range c.MCPServers {
+		if len(server.Tools) == 0 {
+			continue
+		}
+		allowed := make([]string, 0, len(server.Tools))
+		for _, tool := range server.Tools {
+			allowed = append(allowed, MCPToolName(name, tool))
+		}
+		slices.Sort(allowed)
+		selections[name] = slices.Compact(allowed)
+	}
+	return selections
 }
 
 var nonNativeToolNameCharacters = regexp.MustCompile(`[^a-zA-Z0-9_-]`)
