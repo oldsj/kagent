@@ -648,7 +648,7 @@ a Session row that bypassed create-time validation still cannot reach another ho
 `CreateSessionRequest.dotfiles` (`url`, `digest`, and `repository`, `commit`, `path`
 for provenance) names a bundle of owner-level agent files to lay out in the CLI's
 user configuration directory: `AGENTS.md`, `CLAUDE.md`, `skills/<name>/...`,
-`agents/<name>.md` and `commands/<name>.md`. The bundle is an uncompressed tar of
+`agents/<name>.md`, `commands/<name>.md` and `claude/settings.json`. The bundle is an uncompressed tar of
 regular files. Create rejects a `url` that is not plain HTTP(S) without user info,
 query or fragment, or whose origin carries none of the Session's credentials: that
 credential authorizes the download, so no new grant or egress origin is needed.
@@ -672,6 +672,7 @@ The verified bundle and a manifest of what was written are kept in
 | `skills/<name>/...` | `skills/<name>/...`                                       | `skills/<name>/...`   |
 | `agents/<name>.md`  | `agents/<name>.md`                                        | not mapped            |
 | `commands/<name>.md`| `commands/<name>.md`                                      | not mapped            |
+| `claude/settings.json` | not laid out; merged into the SDK runner's settings (below) | not mapped         |
 
 Files are 0444, or 0555 when the tar marks them executable, and directories inside
 an entry 0555; the configuration directory and the shared `skills`, `agents` and
@@ -681,6 +682,21 @@ entries and lays the bundle out again before its first turn, so edits never pers
 and again before any turn that finds an entry missing (Codex setup re-materializes
 its skills root). A Codex skill the compiler selected wins a name clash. A symlink
 in place of a shared directory is replaced, never written through.
+
+`claude/settings.json` carries the owner's auto mode and permission rules. It is
+never laid out, since the agent could rewrite a file under its configuration
+directory between turns. The Claude SDK runner reads it from the verified bundle
+in harness memory each time the bridge starts, and keeps only these keys:
+`autoMode.environment`, `autoMode.allow`, `autoMode.soft_deny`,
+`autoMode.hard_deny`, `permissions.allow`, `permissions.deny` and
+`permissions.ask`, each a list of non-empty strings. Other keys are dropped and
+logged, and a file that doesn't parse is ignored whole. The kept lists are joined
+under the harness's `--settings` layer, dotfiles entries first. Every other key is
+the harness's, so dotfiles can't set `defaultMode`, hooks or
+`disableBypassPermissionsMode`, or undo a locked mode. The flag scope is one Claude
+Code reads `autoMode` from. The process driver ignores the file: it runs
+`--dangerously-skip-permissions`, where auto mode doesn't apply, and an ask rule
+there would be denied outright by the permission prompt tool.
 
 Dotfiles are context, not a precondition. A failed read, download or verification
 is logged, the turn runs without new dotfiles (keeping any already laid out), and

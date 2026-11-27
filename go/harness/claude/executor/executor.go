@@ -179,6 +179,9 @@ func New(ctx context.Context, cfg Config) (a2asrv.AgentExecutor, io.Closer, erro
 			// The bridge outlives turns and reads its configuration only at
 			// start, so new dotfiles restart it; the conversation resumes.
 			layer.OnChange(sdk.session.StopIfIdle)
+			// The settings come from the verified bundle in memory, never from
+			// a file the agent could rewrite.
+			sdk.dotfilesSettings = func() []byte { return layer.File(dotfiles.ClaudeSettingsPath) }
 		}
 		turns = layer
 	}

@@ -83,6 +83,9 @@ type sdkWiring struct {
 	current *currentDriver
 	// prepare is set once Git preparation is configured.
 	prepare func(context.Context) error
+	// dotfilesSettings returns the Session's dotfiles claude/settings.json
+	// from the verified bundle, or nil. It is set once dotfiles are configured.
+	dotfilesSettings func() []byte
 }
 
 func newSDKWiring(ctx context.Context, cfg Config, bridge config.SDKRunner, base *driver.ProcessDriver, store *continuation.Store, grace time.Duration) (*sdkWiring, error) {
@@ -97,7 +100,12 @@ func newSDKWiring(ctx context.Context, cfg Config, bridge config.SDKRunner, base
 	session, err := sdkrunner.New(sdkrunner.Config{
 		Launcher: sdkrunner.NodeLauncher{Node: bridge.Node, Script: bridge.Script, ICUDataDir: bridge.ICUDataDir, Dir: "/", Env: bridgeEnvironment(cfg.Environment)},
 		Spec: func(profile sdkrunner.Profile) (sdkrunner.Spec, error) {
-			return w.current.get().SDKSpec(profile, filepath.Join(dir, "home"))
+			spec, err := w.current.get().SDKSpec(profile, filepath.Join(dir, "home"))
+			if err != nil || w.dotfilesSettings == nil {
+				return spec, err
+			}
+			spec.Settings = withDotfilesSettings(ctx, spec.Settings, w.dotfilesSettings())
+			return spec, nil
 		},
 		Prepare: func(ctx context.Context) error {
 			if w.prepare == nil {
@@ -174,4 +182,29 @@ func (c closers) Close() error {
 		errs = append(errs, closer.Close())
 	}
 	return errors.Join(errs...)
+}
+
+// withDotfilesSettings adds the allowed keys of the owner's dotfiles
+// claude/settings.json (auto mode rules and permission rules) under the
+// harness's settings layer. A file that does not parse is ignored whole, and
+// the Session runs on the harness's settings alone.
+func withDotfilesSettings(ctx context.Context, layer string, raw []byte) string {
+	if raw == nil {
+		return layer
+	}
+	log := logging.FromContext(ctx)
+	settings, dropped, err := driver.FilterDotfilesSettings(raw)
+	if err != nil {
+		log.WarnContext(ctx, "ignoring the dotfiles Claude settings", "error", err)
+		return layer
+	}
+	if len(dropped) != 0 {
+		log.WarnContext(ctx, "the dotfiles Claude settings name keys the harness does not take", "dropped", dropped)
+	}
+	merged, err := driver.MergeDotfilesSettings(layer, settings)
+	if err != nil {
+		log.WarnContext(ctx, "ignoring the dotfiles Claude settings", "error", err)
+		return layer
+	}
+	return merged
 }
