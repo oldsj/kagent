@@ -380,22 +380,59 @@ func TestCompileWholeServerMCPSelectionWarnings(t *testing.T) {
 		t.Fatalf("omitted selection warnings = %v", revision.Warnings)
 	}
 
+	compiledServers := func(t *testing.T, raw []byte) map[string]claudeconfig.MCPServer {
+		t.Helper()
+		var compiled claudeconfig.Config
+		if err := json.Unmarshal(raw, &compiled); err != nil {
+			t.Fatal(err)
+		}
+		return compiled.MCPServers
+	}
+	if tools := compiledServers(t, revision.ConfigJSON)["tools"].DisallowedTools; len(tools) != 0 {
+		t.Fatalf("omitted selection disallows %v", tools)
+	}
+
+	// A partial selection disallows the discovered tools it leaves out.
 	input.Root.MCPTools[0].Binding.Tools = []string{"one"}
 	revision, err = NewCompiler(krt.TestingDummyContext{}, reader, testRuntimeDefaults()).Compile(context.Background(), input)
 	if err != nil {
 		t.Fatalf("partial selection Compile() error = %v", err)
 	}
-	if len(revision.Warnings) != 1 || !strings.Contains(revision.Warnings[0], "exposing the whole server") {
+	if len(revision.Warnings) != 0 {
 		t.Fatalf("partial selection warnings = %v", revision.Warnings)
 	}
+	if tools := compiledServers(t, revision.ConfigJSON)["tools"].DisallowedTools; !reflect.DeepEqual(tools, []string{"two"}) {
+		t.Fatalf("partial selection disallows %v, want [two]", tools)
+	}
 
+	// A selected tool the server doesn't offer is reported, and the rest still holds.
+	input.Root.MCPTools[0].Binding.Tools = []string{"one", "three"}
+	revision, err = NewCompiler(krt.TestingDummyContext{}, reader, testRuntimeDefaults()).Compile(context.Background(), input)
+	if err != nil {
+		t.Fatalf("missing selection Compile() error = %v", err)
+	}
+	if len(revision.Warnings) != 1 || !strings.Contains(revision.Warnings[0], "does not offer selected tools [three]") {
+		t.Fatalf("missing selection warnings = %v", revision.Warnings)
+	}
+	if tools := compiledServers(t, revision.ConfigJSON)["tools"].DisallowedTools; !reflect.DeepEqual(tools, []string{"two"}) {
+		t.Fatalf("missing selection disallows %v, want [two]", tools)
+	}
+
+	// Without current discovery the selection can't be enforced, so the server is withheld.
+	input.Root.MCPTools[0].Binding.Tools = []string{"one"}
 	server.Status.ObservedGeneration = 0
 	revision, err = NewCompiler(krt.TestingDummyContext{}, reader, testRuntimeDefaults()).Compile(context.Background(), input)
 	if err != nil {
 		t.Fatalf("stale discovery Compile() error = %v", err)
 	}
-	if len(revision.Warnings) != 1 || !strings.Contains(revision.Warnings[0], "no current discovered tool set") {
+	if len(revision.Warnings) != 1 || !strings.Contains(revision.Warnings[0], "withholding the server") {
 		t.Fatalf("stale discovery warnings = %v", revision.Warnings)
+	}
+	if servers := compiledServers(t, revision.ConfigJSON); len(servers) != 0 {
+		t.Fatalf("stale discovery compiled servers %v", servers)
+	}
+	if slices.Contains(revision.EgressDestinations, "https://mcp.example.com:443") {
+		t.Fatalf("stale discovery kept the withheld server's egress: %v", revision.EgressDestinations)
 	}
 
 	server.Status.ObservedGeneration = server.Generation
@@ -439,8 +476,11 @@ func TestCompileWholeServerMCPSelectionWarnings(t *testing.T) {
 	if !compiled.MCPServers["tools"].RequireApproval {
 		t.Fatalf("approval-required MCP server = %#v", compiled.MCPServers["tools"])
 	}
-	if len(revision.Warnings) != 1 || !strings.Contains(revision.Warnings[0], "exposing the whole server") {
+	if len(revision.Warnings) != 0 {
 		t.Fatalf("approval-required partial selection warnings = %v", revision.Warnings)
+	}
+	if !reflect.DeepEqual(compiled.MCPServers["tools"].DisallowedTools, []string{"two"}) {
+		t.Fatalf("approval-required partial selection = %#v", compiled.MCPServers["tools"])
 	}
 }
 

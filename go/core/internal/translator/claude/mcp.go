@@ -54,7 +54,8 @@ func (c *Compiler) compileMCP(
 			return mcpCompilation{}, translator.NewValidationError("RemoteMCPServer %q is bound more than once", server.Name)
 		}
 
-		if warning := mcpSelectionWarning(tool.Binding.Tools, server); warning != "" {
+		disallowed, withheld, warning := mcpToolSelection(tool.Binding.Tools, server)
+		if warning != "" {
 			result.warnings = append(result.warnings, warning)
 		}
 		transport, compatibilityWarning, err := claudeMCPTransport(server)
@@ -76,9 +77,12 @@ func (c *Compiler) compileMCP(
 			headers = translator.MCPActorJWTHeaders(headers)
 		}
 
+		if withheld {
+			continue
+		}
 		result.servers[name] = claudeconfig.MCPServer{
 			Type: transport, URL: server.Spec.URL, Headers: headers,
-			RequireApproval: tool.Binding.RequireApproval,
+			RequireApproval: tool.Binding.RequireApproval, DisallowedTools: disallowed,
 		}
 		result.environment = append(result.environment, headerEnvironment...)
 		result.egress = append(result.egress, hostname)
@@ -86,27 +90,40 @@ func (c *Compiler) compileMCP(
 	return result, nil
 }
 
-func mcpSelectionWarning(selectedTools []string, server *v1alpha3.RemoteMCPServer) string {
+// mcpToolSelection enforces a binding's tools list. Claude has no per-server
+// allowlist, so the discovered tools the binding leaves out become disallowed
+// tools. Without a current discovered set the selection cannot be enforced, so
+// the server is withheld until discovery catches up; the status update that
+// brings it recompiles the Agent.
+func mcpToolSelection(selectedTools []string, server *v1alpha3.RemoteMCPServer) (disallowed []string, withheld bool, warning string) {
 	if len(selectedTools) == 0 {
-		return ""
+		return nil, false, ""
 	}
 	selected := append([]string(nil), selectedTools...)
 	slices.Sort(selected)
 	selected = slices.Compact(selected)
 	discovered, current := currentDiscoveredToolNames(server)
-	if current && slices.Equal(selected, discovered) {
-		return ""
-	}
 	if !current {
-		return fmt.Sprintf(
-			"Claude RemoteMCPServer %q cannot verify selected tools %v because no current discovered tool set is available; exposing the whole server",
+		return nil, true, fmt.Sprintf(
+			"Claude RemoteMCPServer %q has no current discovered tool set to enforce selected tools %v against; withholding the server until discovery completes",
 			server.Name, selected,
 		)
 	}
-	return fmt.Sprintf(
-		"Claude RemoteMCPServer %q does not support partial tool selection: selected %v, discovered %v; exposing the whole server",
-		server.Name, selected, discovered,
-	)
+	for _, name := range discovered {
+		if !slices.Contains(selected, name) {
+			disallowed = append(disallowed, name)
+		}
+	}
+	var missing []string
+	for _, name := range selected {
+		if !slices.Contains(discovered, name) {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) != 0 {
+		warning = fmt.Sprintf("Claude RemoteMCPServer %q does not offer selected tools %v", server.Name, missing)
+	}
+	return disallowed, false, warning
 }
 
 func currentDiscoveredToolNames(server *v1alpha3.RemoteMCPServer) ([]string, bool) {
