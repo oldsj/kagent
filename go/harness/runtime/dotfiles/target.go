@@ -14,17 +14,26 @@ type Target struct {
 	yieldsSkills bool
 }
 
-// Claude lays out every file as it is in the bundle. Claude Code does not read
-// AGENTS.md, so a bundle with AGENTS.md and no CLAUDE.md gets a CLAUDE.md that
-// imports it.
+// ClaudeSettingsPath is the bundle's Claude settings file. It is never laid
+// out: the harness reads it from the verified bundle (Layer.File) and merges
+// its allowed keys into the settings it passes Claude, since a file under the
+// configuration directory is one the agent could rewrite between turns.
+const ClaudeSettingsPath = "claude/settings.json"
+
+// Claude lays out every file as it is in the bundle, except the settings file.
+// Claude Code does not read AGENTS.md, so a bundle with AGENTS.md and no
+// CLAUDE.md gets a CLAUDE.md that imports it.
 func Claude(dir string) Target {
 	return Target{Dir: dir, place: func(files []File) []File {
 		var agents, claude bool
+		var out []File
 		for _, f := range files {
 			agents = agents || f.Path == "AGENTS.md"
 			claude = claude || f.Path == "CLAUDE.md"
+			if f.Path != ClaudeSettingsPath {
+				out = append(out, f)
+			}
 		}
-		out := append([]File(nil), files...)
 		if agents && !claude {
 			out = append(out, File{Path: "CLAUDE.md", Data: []byte("@AGENTS.md\n")})
 		}

@@ -190,6 +190,19 @@ func (l *Layer) ensure(ctx context.Context) (bool, error) {
 }
 
 // keep lays the current bundle out again unless it is intact.
+// File returns a copy of the named file of the bundle the layer holds, verified
+// against its digest when it was loaded, or nil. The agent cannot change it.
+func (l *Layer) File(name string) []byte {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, f := range l.files {
+		if f.Path == name {
+			return append([]byte(nil), f.Data...)
+		}
+	}
+	return nil
+}
+
 func (l *Layer) keep() error {
 	if l.files == nil || (l.laid && intact(l.target.Dir, l.entries)) {
 		return nil

@@ -390,3 +390,46 @@ func TestTheLayoutDoesNotWriteThroughASymlinkedParent(t *testing.T) {
 		t.Fatalf("release skill = %q", got)
 	}
 }
+
+// The Claude settings file is taken from the bundle but never laid out: the
+// harness reads it from the verified bundle, which the agent cannot change.
+func TestClaudeSettingsStayInTheBundle(t *testing.T) {
+	settings := []byte(`{"autoMode":{"environment":["Trusted repo: example/fictional"]}}`)
+	body := bundle(t, append(append([]File(nil), sample...), File{Path: ClaudeSettingsPath, Data: settings}))
+	srv := serve(t, body)
+	data := dataDir(t)
+	l := New(&fakeRunner{}, fakeSource{delivery: delivery(srv, body)}, Claude(filepath.Join(data, "claude")), filepath.Join(data, ".kagent", "dotfiles"))
+	if l.File(ClaudeSettingsPath) != nil {
+		t.Fatal("File() returned settings before any bundle was loaded")
+	}
+	turn(t, l)
+
+	if _, err := os.Lstat(filepath.Join(data, "claude", "claude")); !os.IsNotExist(err) {
+		t.Fatalf("the settings file was laid out: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(data, "claude", "settings.json")); !os.IsNotExist(err) {
+		t.Fatalf("a settings.json was written in the configuration directory: %v", err)
+	}
+	if got := read(t, filepath.Join(data, "claude", "AGENTS.md")); got != string(sample[0].Data) {
+		t.Fatalf("AGENTS.md = %q", got)
+	}
+	got := l.File(ClaudeSettingsPath)
+	if string(got) != string(settings) {
+		t.Fatalf("File() = %q", got)
+	}
+	got[0] = 'x'
+	if string(l.File(ClaudeSettingsPath)) != string(settings) {
+		t.Fatal("File() returned the layer's own buffer")
+	}
+	if l.File("AGENTS.md") == nil || l.File("missing.md") != nil {
+		t.Fatal("File() does not look files up by bundle path")
+	}
+
+	// Codex takes nothing from it.
+	codex := dataDir(t)
+	c := New(&fakeRunner{}, fakeSource{delivery: delivery(srv, body)}, Codex(filepath.Join(codex, "codex")), filepath.Join(codex, ".kagent", "dotfiles"))
+	turn(t, c)
+	if _, err := os.Lstat(filepath.Join(codex, "codex", "claude")); !os.IsNotExist(err) {
+		t.Fatalf("Codex laid out the Claude settings: %v", err)
+	}
+}

@@ -84,8 +84,8 @@ func Unpack(bundle []byte, digest string) ([]File, error) {
 }
 
 // allowed reports whether p is a clean relative path of the shape a bundle
-// holds: AGENTS.md, CLAUDE.md, skills/<name>/..., agents/<name>.md or
-// commands/<name>.md.
+// holds: AGENTS.md, CLAUDE.md, skills/<name>/..., agents/<name>.md,
+// commands/<name>.md or claude/settings.json.
 func allowed(p string) bool {
 	if p == "" || path.IsAbs(p) || path.Clean(p) != p || strings.HasPrefix(p, "../") || p == ".." ||
 		strings.ContainsAny(p, "\\\x00") {
@@ -98,7 +98,7 @@ func allowed(p string) bool {
 	}
 	parts := strings.Split(p, "/")
 	switch {
-	case p == "AGENTS.md" || p == "CLAUDE.md":
+	case p == "AGENTS.md" || p == "CLAUDE.md" || p == ClaudeSettingsPath:
 		return true
 	case parts[0] == "skills":
 		return len(parts) >= 3
